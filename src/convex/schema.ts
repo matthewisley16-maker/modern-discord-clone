@@ -32,12 +32,20 @@ const schema = defineSchema(
       role: v.optional(roleValidator), // role of the user. do not remove
     }).index("email", ["email"]), // index for the email. do not remove or modify
 
-    // add other tables here
-
-    // tableName: defineTable({
-    //   ...
-    //   // table fields
-    // }).index("by_field", ["field"])
+    servers: defineTable({
+      name: v.string(), description: v.string(), ownerId: v.id("users"), inviteCode: v.string(),
+    }).index("by_invite", ["inviteCode"]),
+    memberships: defineTable({ serverId: v.id("servers"), userId: v.id("users") })
+      .index("by_user", ["userId"]).index("by_server", ["serverId"])
+      .index("by_server_user", ["serverId", "userId"]),
+    channels: defineTable({ serverId: v.id("servers"), name: v.string(), description: v.string() })
+      .index("by_server", ["serverId"]),
+    messages: defineTable({ channelId: v.id("channels"), userId: v.id("users"), body: v.string() })
+      .index("by_channel", ["channelId"]),
+    reactions: defineTable({ messageId: v.id("messages"), userId: v.id("users"), emoji: v.string() })
+      .index("by_message", ["messageId"]),
+    profiles: defineTable({ userId: v.id("users"), displayName: v.string() }).index("by_user", ["userId"]),
+    
   },
   {
     schemaValidation: false,

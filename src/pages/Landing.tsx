@@ -1,51 +1,35 @@
-// TODO: REPLACE THIS LANDING PAGE WITH AN ELEGANT, THEMATIC, AND WELL-DESIGNED LANDING PAGE RELEVANT TO THE PROJECT
+import { useState } from "react";
+import { Link } from "react-router";
 import { motion } from "framer-motion";
-import { Loader } from "lucide-react";
-import logo from "@/assets/logo.svg";
+import { ArrowRight, ArrowUpRight, AudioLines, Check, ChevronDown, Compass, Hash, Headphones, Heart, Menu, MessageCircle, Plus, Search, Send, Sparkles, Users, Volume2, X } from "lucide-react";
 
-export default function Landing() {
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.5 }}
-      className="min-h-screen flex flex-col"
-    >
-
-      
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col items-center justify-center">
-        <div className="max-w-5xl mx-auto relative px-4">
-        {/* TODO: landing page goes here; replace with the landing page */}
-        <div className="flex justify-center">
-          <img
-            src={logo}
-            alt="Lock Icon"
-            width={64}
-            height={64}
-            className="rounded-lg mb-8 mt-24"
-          />
-        </div>
-        <div className="flex items-center justify-center text-foreground">
-          <Loader className="h-8 w-8 animate-spin mr-4 shrink-0" />
-          <span className="text-base">
-            <a
-              href="https://freebuff.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary underline hover:text-primary/80 transition-colors font-medium"
-            >
-              freebuff.com
-            </a>
-            {" "}is generating your project...
-          </span>
-        </div>
-        <p className="text-center text-muted-foreground py-6 text-sm mt-2">
-          Check progress on your project page.
-        </p>
-        
-        </div>
-      </div>
-    </motion.div>
-  );
+export function GatherMark({ small = false }: { small?: boolean }) {
+  return <span className={`gather-mark ${small ? "small" : ""}`}><AudioLines strokeWidth={2.7} /><span>gather<span className="brand-period">.</span></span></span>;
 }
+const initialMessages = [
+  { name: "Jamie Chen", initials: "JC", color: "peach", time: "10:42 AM", body: "Hey everyone! A little something I've been working on ✨", art: true },
+  { name: "Alex Rivera", initials: "AR", color: "lavender", time: "10:44 AM", body: "Oh, this is so good. The colors are everything.", art: false },
+  { name: "Sam Taylor", initials: "ST", color: "sage", time: "10:45 AM", body: "That’s the energy we needed today 🙌", art: false },
+];
+export function ChatPreview() {
+  const [channel, setChannel] = useState("general");
+  const [draft, setDraft] = useState("");
+  const [extra, setExtra] = useState<string[]>([]);
+  const [liked, setLiked] = useState(false);
+  const [search, setSearch] = useState("");
+  return <div className="chat-preview">
+    <aside className="server-rail"><div className="rail-logo"><AudioLines size={23} /></div><div className="rail-rule" /><button className="server-bubble selected" aria-label="The Creative Corner"><span>✳</span></button><Link className="server-bubble peach" to="/auth?returnTo=/dashboard" aria-label="Create your community">◒</Link><Link className="server-bubble lavender" to="/auth?returnTo=/dashboard" aria-label="Find your people">✿</Link><Link className="server-bubble add" to="/auth?returnTo=/dashboard" aria-label="Add a server"><Plus size={21} /></Link><Link className="rail-bottom" to="/auth" aria-label="Explore communities"><Compass size={22} /></Link></aside>
+    <aside className="channel-sidebar"><div className="server-title">The Creative Corner <ChevronDown size={15} /></div><div className="community-banner"><span className="banner-star">✳</span><span>A little space.<br />A lot of possibility.</span></div><div className="channel-category">YOUR CHANNELS <Plus size={13} /></div>{["general", "introductions", "inspiration", "share-your-work", "off-topic"].map(c => <button key={c} onClick={() => setChannel(c)} className={`channel-item ${channel === c ? "active" : ""}`}><Hash size={17} />{c}{c === "inspiration" && <span className="channel-count">3</span>}</button>)}<div className="channel-category voice-label">VOICE LOUNGE</div><Link className="channel-item" to="/auth"><Volume2 size={17} />The hangout</Link><div className="voice-people"><span className="mini-avatar peach">JC</span><span className="mini-avatar lavender">AR</span><span className="mini-avatar sage">ST</span><span className="voice-count">+2</span></div><div className="sidebar-footer"><span className="avatar sage">YO</span><div><strong>Your space awaits</strong><small>Make yourself at home</small></div><Headphones size={16} /></div></aside>
+    <section className="preview-conversation"><header className="conversation-header"><Hash size={22} /><strong>{channel}</strong><span className="header-divider" /><span className="channel-description">A little space for big conversations.</span><div className="conversation-tools"><Users size={18} /><div className="preview-search"><Search size={13} /><input aria-label="Search sample messages" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search" /></div></div></header><div className="preview-messages"><div className="channel-welcome"><span className="welcome-hash"><Hash size={27} /></span><h3>Good things start with a hello<span>.</span></h3><p>This is the beginning of #{channel}. Make it yours.</p></div><div className="date-divider"><span />Today<span /></div>{(channel === "general" ? initialMessages : [{ name: "Jamie Chen", initials: "JC", color: "peach", time: "10:42 AM", body: `Welcome to #${channel}! A place to share ideas and connect.`, art: false }]).filter(m => `${m.name} ${m.body}`.toLowerCase().includes(search.toLowerCase())).map(m => <div className="preview-message" key={m.name}><span className={`avatar ${m.color}`}>{m.initials}</span><div className="message-content"><div className="message-byline"><strong>{m.name}</strong><span>{m.time}</span>{m.name === "Jamie Chen" && <b>CREATOR</b>}</div><p>{m.body}</p>{m.art && <><div className="art-card"><div className="art-topline">PERSONAL EXPLORATION — 001 <ArrowUpRight size={15} /></div><div className="art-headline">Stay curious.<br />Make things.</div><div className="art-flower">✳</div><div className="art-bottom">A reminder for the everyday creative.</div></div><div className="reaction-row"><button onClick={() => setLiked(!liked)} className={liked ? "reacted" : ""}>🙌 {liked ? 7 : 6}</button><button onClick={() => setLiked(!liked)}>❤️ {liked ? 5 : 4}</button></div></>}</div></div>)}{extra.filter(m => m.toLowerCase().includes(search.toLowerCase())).map((m, i) => <div className="preview-message" key={i}><span className="avatar sage">YO</span><div className="message-content"><div className="message-byline"><strong>You</strong><span>Just now</span><b>DEMO</b></div><p>{m}</p></div></div>)}</div><form className="preview-composer" onSubmit={e => { e.preventDefault(); if (draft.trim()) { setExtra([...extra, draft.trim()]); setDraft(""); } }}><Plus size={19} /><input aria-label="Try a sample message" value={draft} onChange={e => setDraft(e.target.value)} placeholder={`Message #${channel}`} /><button aria-label="Send sample message"><Send size={17} /></button></form><div className="demo-note"><span className="status-dot" />Interactive preview · fictional community</div></section>
+    <aside className="preview-members"><div className="member-heading">THE GOOD COMPANY <span>5</span></div>{[{ name: "Jamie Chen", color: "peach", initials: "JC", status: "Making something new" }, { name: "Alex Rivera", color: "lavender", initials: "AR", status: "In the zone 🎧" }, { name: "Sam Taylor", color: "sage", initials: "ST", status: "Here for the good vibes" }, { name: "Morgan Lee", color: "sand", initials: "ML", status: "Taking it slow" }, { name: "Riley Park", color: "blue", initials: "RP", status: "Probably sketching" }].map(m => <div className="member-item" key={m.name}><span className={`avatar ${m.color}`}>{m.initials}<i /></span><div><strong>{m.name}</strong><small>{m.status}</small></div></div>)}<div className="invite-card"><span>More friends.<br />More possibilities.</span><Link to="/auth?returnTo=/dashboard">Invite your people <ArrowUpRight size={14} /></Link></div></aside>
+  </div>;
+}
+export default function Landing() {
+  const [menu, setMenu] = useState(false);
+  return <div className="gather-landing"><nav className="landing-nav"><Link to="/" aria-label="Gather home"><GatherMark /></Link><div className={`nav-links ${menu ? "mobile-open" : ""}`}><a href="#experience">The experience</a><a href="#why-gather">Why Gather</a><a href="#community">For communities <ArrowUpRight size={12} /></a></div><div className="nav-actions"><Link to="/auth" className="login-link">Log in</Link><Link to="/auth?returnTo=/dashboard" className="button-dark nav-cta">Open Gather <ArrowUpRight size={15} /></Link><button className="mobile-menu" aria-label="Toggle navigation" onClick={() => setMenu(!menu)}>{menu ? <X /> : <Menu />}</button></div></nav>
+    <main><motion.section className="landing-hero" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .65 }}><div className="hero-copy"><div className="eyebrow"><span className="status-dot" />A PLACE TO BELONG</div><h1>Your people.<br />Your place<span className="teal-period">.</span></h1><p>A space for the everyday and the extraordinary.<br className="desktop-break" /> Talk, share, and find your kind of people.</p><div className="hero-actions"><Link className="button-teal" to="/auth?returnTo=/dashboard">Find your people <ArrowUpRight size={18} /></Link><a className="hero-secondary" href="#experience">Take a look around <ArrowRight size={16} /></a></div><div className="hero-footnote"><span className="tiny-avatars"><span className="peach">J</span><span className="lavender">A</span><span className="sage">S</span></span><span>Good conversations. Great company. <Heart size={12} /></span></div></div><div className="hero-aside"><div className="orbit-word">a little closer, wherever you are</div><div className="hero-flower">✳</div><div className="floating-note note-one"><span className="status-dot" />Your kind of corner of the internet.</div><div className="floating-note note-two"><MessageCircle size={16} />Less scrolling. More connecting.</div><span className="hero-spark">✧</span></div></motion.section>
+    <section id="experience" className="experience-section"><div className="preview-caption"><span><span className="status-dot" />THIS IS WHAT BELONGING LOOKS LIKE</span><span>Built for conversations, not algorithms <ArrowDownIcon /></span></div><ChatPreview /><div className="under-preview"><span><Check size={14} />Free to get started</span><span><Check size={14} />No noisy feeds</span><span><Check size={14} />Just your people</span></div></section>
+    <section id="why-gather" className="features-section"><div className="section-heading"><div><span className="eyebrow">LESS NOISE. MORE CONNECTION.</span><h2>A space that feels like you.</h2></div><p>Big ideas, little check-ins, and everything in between.<br />There’s room for it all here.</p></div><div className="feature-grid">{[{ icon: MessageCircle, n: "01", title: "Keep the conversation going", text: "Give every interest its own channel. Share a thought, react to a message, and pick up right where you left off." }, { icon: Users, n: "02", title: "Build your little corner", text: "Start a server for your friends, your project, or your next big idea. Invite your people and make it your own." }, { icon: Sparkles, n: "03", title: "Come as you are", text: "Choose your name, find your rhythm, and settle in. A quieter, more thoughtful space to connect." }].map(f => <article className="feature-card" key={f.n}><div className="feature-top"><f.icon size={23} /><span>{f.n}</span></div><h3>{f.title}</h3><p>{f.text}</p></article>)}</div></section>
+    <section id="community" className="community-cta"><div className="cta-flower">✳</div><div><span className="eyebrow">THE BEST PART IS WHO’S HERE</span><h2>Make room for your people.</h2><p>Your next great conversation starts with a hello.</p></div><Link className="button-dark" to="/auth?returnTo=/dashboard">Create your space <ArrowUpRight size={17} /></Link></section></main><footer className="landing-footer"><Link to="/"><GatherMark small /></Link><span>A little closer. A little more connected.</span><span>© {new Date().getFullYear()} Gather · An independent community app</span></footer></div>;
+}
+function ArrowDownIcon() { return <span className="caption-arrow">↙</span>; }

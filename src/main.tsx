@@ -126,7 +126,7 @@ createRoot(document.getElementById("root")!).render(
               <Route
                 path="/dashboard"
                 element={
-                  <RequireAuth>
+                  <RequireAuth redirectImmediately>
                     <Dashboard />
                   </RequireAuth>
                 }

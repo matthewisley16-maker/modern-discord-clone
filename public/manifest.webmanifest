@@ -1,11 +1,11 @@
 {
-  "name": "freebuff.com application",
-  "short_name": "freebuff.com",
-  "description": "freebuff.com application",
+  "name": "Gather — Your people. Your place.",
+  "short_name": "Gather",
+  "description": "Your little corner of the internet. Create a community and keep the conversation going.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#000000",
+  "background_color": "#f9faf7",
+  "theme_color": "#267765",
   "icons": [
     {
       "src": "/logo.svg",

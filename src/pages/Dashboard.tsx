@@ -1,55 +1,72 @@
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { useAuth } from "@/hooks/use-auth";
-import { LayoutDashboard, LogOut } from "lucide-react";
-import { useNavigate } from "react-router";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { toast } from "sonner";
+import { AudioLines, ArrowUpRight, ChevronDown, Copy, Hash, LogOut, Menu, MessageCircle, Plus, Search, Send, Settings, Smile, Trash2, Users, X } from "lucide-react";
+import { GatherMark } from "./Landing";
 
+type Modal = "create" | "join" | "channel" | "profile" | "invite" | null;
 export default function Dashboard() {
-  const { user, signOut } = useAuth();
-  const navigate = useNavigate();
-
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/");
-  };
-
-  return (
-    <main className="min-h-screen bg-background px-6 py-10 text-foreground">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">
-              Authenticated workspace
-            </p>
-            <h1 className="mt-1 text-3xl font-bold tracking-tight">
-              Welcome{user?.name ? `, ${user.name}` : ""}
-            </h1>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="cursor-pointer gap-2 self-start"
-            onClick={handleSignOut}
-          >
-            <LogOut className="size-4" />
-            Sign out
-          </Button>
-        </header>
-
-        <Card className="border-border/70 shadow-none">
-          <CardHeader>
-            <div className="mb-3 flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <LayoutDashboard className="size-5" />
-            </div>
-            <CardTitle>Your dashboard is ready</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm leading-6 text-muted-foreground">
-            Replace this starter content with the product&apos;s authenticated
-            experience. The route is protected and sign-in returns here by
-            default.
-          </CardContent>
-        </Card>
-      </div>
-    </main>
-  );
+  const { signOut } = useAuth();
+  const workspace = useQuery(api.chat.workspace);
+  const [selectedServer, setSelectedServer] = useState<Id<"servers"> | null>(null);
+  const serverId = selectedServer ?? workspace?.servers[0]?._id;
+  const details = useQuery(api.chat.serverDetails, serverId ? { serverId } : "skip");
+  const [selectedChannel, setSelectedChannel] = useState<Id<"channels"> | null>(null);
+  const channel = details?.channels.find(c => c._id === selectedChannel) ?? details?.channels[0];
+  const messages = useQuery(api.chat.messages, channel ? { channelId: channel._id } : "skip");
+  const createServer = useMutation(api.chat.createServer);
+  const joinServer = useMutation(api.chat.joinServer);
+  const createChannel = useMutation(api.chat.createChannel);
+  const sendMessage = useMutation(api.chat.sendMessage);
+  const deleteMessage = useMutation(api.chat.deleteMessage);
+  const toggleReaction = useMutation(api.chat.toggleReaction);
+  const updateProfile = useMutation(api.chat.updateProfile);
+  const [modal, setModal] = useState<Modal>(null);
+  const [value, setValue] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [mobileNav, setMobileNav] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(true);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const bottom = useRef<HTMLDivElement>(null);
+  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, channel?._id]);
+  function openModal(next: Modal) { setValue(next === "profile" ? workspace?.displayName ?? "" : ""); setDescription(""); setModal(next); }
+  async function handleModal(e: React.FormEvent) {
+    e.preventDefault(); setBusy(true);
+    try {
+      if (modal === "create") { const id = await createServer({ name: value, description }); setSelectedServer(id); setSelectedChannel(null); }
+      if (modal === "join") { const id = await joinServer({ code: value }); setSelectedServer(id); setSelectedChannel(null); }
+      if (modal === "channel" && serverId) { const id = await createChannel({ serverId, name: value }); setSelectedChannel(id); }
+      if (modal === "profile") await updateProfile({ name: value });
+      setModal(null); toast.success(modal === "join" ? "Welcome to your community!" : "All set!");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Something went wrong."); }
+    finally { setBusy(false); }
+  }
+  async function send(e: React.FormEvent) {
+    e.preventDefault(); if (!channel || !draft.trim() || sending) return;
+    const body = draft; setSending(true);
+    try { await sendMessage({ channelId: channel._id, body }); setDraft(""); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Message could not be sent."); }
+    finally { setSending(false); }
+  }
+  async function act(operation: Promise<unknown>) { try { await operation; } catch (error) { toast.error(error instanceof Error ? error.message : "Action failed."); } }
+  const initials = (name: string) => name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
+  const visibleMessages = messages?.filter(m => `${m.body} ${m.author}`.toLowerCase().includes(search.toLowerCase()));
+  return <div className="workspace-shell"><aside className="server-rail workspace-rail"><Link className="rail-logo" to="/" aria-label="Gather home"><AudioLines size={25} /></Link><div className="rail-rule" />{workspace?.servers.map(s => <button title={s.name} aria-label={s.name} key={s._id} onClick={() => { setSelectedServer(s._id); setSelectedChannel(null); setSearch(""); setDraft(""); }} className={`server-bubble ${s._id === serverId ? "selected" : "sage"}`}>{initials(s.name)}</button>)}<button title="Create server" aria-label="Create server" onClick={() => openModal("create")} className="server-bubble add"><Plus /></button><button title="Join server" aria-label="Join server" onClick={() => openModal("join")} className="server-bubble add"><ArrowUpRight /></button><button className="rail-bottom" title="Sign out" aria-label="Sign out" onClick={() => act(signOut())}><LogOut size={20} /></button></aside>
+    <aside className={`channel-sidebar workspace-sidebar ${mobileNav ? "is-open" : ""}`}><div className="server-title"><span>{details?.server?.name ?? "Your communities"}</span><button aria-label="Close channels" className="mobile-close" onClick={() => setMobileNav(false)}><X size={18} /></button><ChevronDown size={16} /></div><div className="community-banner"><span className="banner-star">✳</span><span>{details?.server?.description || "A little space.\nA lot of possibility."}</span></div><div className="channel-category">TEXT CHANNELS{details?.server?.ownerId === workspace?.userId && serverId && <button aria-label="Create channel" onClick={() => openModal("channel")}><Plus size={15} /></button>}</div>{details?.channels.map(c => <button className={`channel-item ${channel?._id === c._id ? "active" : ""}`} key={c._id} onClick={() => { setSelectedChannel(c._id); setSearch(""); setDraft(""); setMobileNav(false); }}><Hash size={18} />{c.name}</button>)}{serverId && <button className="invite-sidebar" onClick={() => openModal("invite")}><Users size={16} /> Invite your people <Plus size={15} /></button>}<div className="sidebar-help"><span>YOUR LITTLE CORNER</span><p>Good conversations start with a hello. Make someone’s day.</p><span className="help-flower">✳</span></div><div className="sidebar-footer"><span className="avatar sage">{initials(workspace?.displayName ?? "You")}</span><div><strong>{workspace?.displayName ?? "Loading…"}</strong><small>Your personal space</small></div><button aria-label="Edit profile" onClick={() => openModal("profile")}><Settings size={18} /></button></div></aside>
+    <main className="workspace-main"><header className="conversation-header"><button className="mobile-menu" aria-label="Open channels" onClick={() => setMobileNav(true)}><Menu size={20} /></button><Hash size={22} /><strong>{channel?.name ?? "Welcome to Gather"}</strong><span className="header-divider" /><span className="channel-description">{channel?.description ?? "Your people. Your place."}</span><div className="conversation-tools"><button aria-label="Toggle member list" onClick={() => setMembersOpen(!membersOpen)}><Users size={19} /></button><div className="preview-search"><Search size={14} /><input aria-label="Search messages" placeholder="Search messages" value={search} onChange={e => setSearch(e.target.value)} /></div></div></header>
+      {!workspace ? <div className="workspace-empty"><AudioLines className="animate-pulse" /><p>Getting your space ready…</p></div> : !serverId ? <div className="workspace-empty"><GatherMark /><div className="empty-flower">✳</div><span className="eyebrow">A LITTLE CLOSER, STARTING HERE</span><h1>Your people.<br />Your place.</h1><p>Create a server for your friends, your project, or your next big idea.<br />Already have an invitation? There’s a place waiting for you.</p><div className="hero-actions"><button className="button-teal" onClick={() => openModal("create")}><Plus size={18} />Create a server</button><button className="button-outline" onClick={() => openModal("join")}>Join with an invite <ArrowUpRight size={17} /></button></div></div> : <><div className="workspace-messages"><div className="channel-welcome"><span className="welcome-hash"><Hash size={28} /></span><h3>Welcome to #{channel?.name}<span>.</span></h3><p>{channel?.description} Say hello and make yourself at home.</p></div><div className="date-divider"><span />The conversation<span /></div>{messages === undefined && <p className="chat-loading">Loading messages…</p>}{messages?.length === 0 && <div className="no-messages"><MessageCircle size={30} /><h3>A fresh start.</h3><p>Be the first to say hello. No sample users or messages here—just your community.</p></div>}{search && visibleMessages?.length === 0 && <p className="chat-loading">No messages match “{search}”.</p>}{visibleMessages?.map(m => <article className="preview-message real-message" key={m._id}><span className={`avatar ${m.userId === workspace.userId ? "sage" : "peach"}`}>{initials(m.author)}</span><div className="message-content"><div className="message-byline"><strong>{m.author}</strong><span>{new Date(m._creationTime).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>{m.userId === workspace.userId && <b>YOU</b>}</div><p className="real-message-body">{m.body}</p><div className="reaction-row">{[...new Set(m.reactions.map(r => r.emoji))].map(emoji => <button className={m.reactions.some(r => r.emoji === emoji && r.userId === workspace.userId) ? "reacted" : ""} key={emoji} onClick={() => act(toggleReaction({ messageId: m._id, emoji }))}>{emoji} {m.reactions.filter(r => r.emoji === emoji).length}</button>)}</div></div><div className="message-actions"><button title="React with a heart" aria-label="React with a heart" onClick={() => act(toggleReaction({ messageId: m._id, emoji: "❤️" }))}><Smile size={16} /></button><button title="React with applause" aria-label="React with applause" onClick={() => act(toggleReaction({ messageId: m._id, emoji: "🙌" }))}>🙌</button>{m.userId === workspace.userId && <button title="Delete your message" aria-label="Delete your message" onClick={() => act(deleteMessage({ messageId: m._id }))}><Trash2 size={15} /></button>}</div></article>)}<div ref={bottom} /></div><div className="workspace-composer-wrap">{emojiOpen && <div className="emoji-picker">{["😊", "🙌", "❤️", "✨", "🔥", "👍", "🎉", "👋"].map(emoji => <button key={emoji} onClick={() => { setDraft(draft + emoji); setEmojiOpen(false); }}>{emoji}</button>)}</div>}<form className="preview-composer" onSubmit={send}><button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => setEmojiOpen(!emojiOpen)}><Smile size={20} /></button><input disabled={sending || !channel} maxLength={4000} aria-label="Message" value={draft} onChange={e => setDraft(e.target.value)} placeholder={`Message #${channel?.name ?? "general"}`} /><button disabled={sending || !draft.trim() || !channel} aria-label="Send message"><Send size={18} /></button></form><div className="composer-note">Enter to send · Be kind. Be yourself. <span>{draft.length ? `${draft.length}/4000` : "Live conversations, powered by Gather"}</span></div></div></>}
+    </main>{membersOpen && serverId && <aside className="preview-members workspace-members"><div className="member-heading">YOUR COMMUNITY <span>{details?.members.length ?? "—"}</span></div>{details?.members.map(m => <div className="member-item" key={m.userId}><span className={`avatar ${m.userId === workspace?.userId ? "sage" : "peach"}`}>{initials(m.name)}</span><div><strong>{m.name}</strong><small>{m.userId === details.server?.ownerId ? "Server owner" : "Community member"}</small></div></div>)}<div className="invite-card"><span>More friends.<br />More possibilities.</span><button onClick={() => openModal("invite")}>Invite your people <ArrowUpRight size={14} /></button></div><div className="workspace-limits">Text chat is live.<br />Voice, video, and attachments are not included in this version.</div></aside>}
+    <Dialog open={modal !== null} onOpenChange={open => { if (!open && !busy) setModal(null); }}><DialogContent className="gather-dialog"><DialogHeader><DialogTitle>{modal === "create" ? "Make a little space." : modal === "join" ? "Find your people." : modal === "channel" ? "Start a new conversation." : modal === "profile" ? "Make yourself at home." : "Good company is better together."}</DialogTitle><DialogDescription>{modal === "create" ? "A server is a home for your community. Give it a name that feels like you." : modal === "join" ? "Paste the invite code shared by your community." : modal === "channel" ? "Only server owners can add text channels." : modal === "profile" ? "Choose the display name your community will see." : "Share this invite code with friends. They can sign in and use Join with an invite."}</DialogDescription></DialogHeader>{modal === "invite" ? <div className="invite-modal"><code>{details?.server?.inviteCode}</code><Button onClick={async () => { try { await navigator.clipboard.writeText(details?.server?.inviteCode ?? ""); toast.success("Invite code copied!"); } catch { toast.error("Couldn't copy. Select and copy the code manually."); } }}><Copy size={15} />Copy invite code</Button></div> : <form onSubmit={handleModal} className="modal-form"><label htmlFor="modal-name">{modal === "join" ? "Invite code" : modal === "profile" ? "Display name" : modal === "channel" ? "Channel name" : "Server name"}</label><Input id="modal-name" autoFocus required value={value} disabled={busy} onChange={e => setValue(e.target.value)} maxLength={modal === "join" ? 100 : modal === "create" ? 50 : 40} placeholder={modal === "create" ? "The Creative Corner" : modal === "channel" ? "share-your-work" : modal === "profile" ? "Your name" : "Paste your invitation"} />{modal === "create" && <><label htmlFor="server-description">A little about your space (optional)</label><Input id="server-description" value={description} onChange={e => setDescription(e.target.value)} maxLength={200} placeholder="For big ideas and good company." /></>}<Button type="submit" disabled={busy || !value.trim()}>{busy ? "One moment…" : modal === "create" ? "Create server" : modal === "join" ? "Join server" : modal === "channel" ? "Create channel" : "Save profile"}<ArrowUpRight size={16} /></Button></form>}</DialogContent></Dialog>
+  </div>;
 }
