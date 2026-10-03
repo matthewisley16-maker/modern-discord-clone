@@ -176,6 +176,9 @@ export const updateSettings = mutation({
     tags: v.optional(v.array(v.string())),
     category: v.optional(v.string()),
     slowModeSeconds: v.optional(v.number()),
+    iconStorageId: v.optional(v.id("_storage")),
+    bannerStorageId: v.optional(v.id("_storage")),
+    clearIcon: v.optional(v.boolean()),
   },
   handler: async (ctx, { serverId, ...patch }) => {
     const userId = await currentUserId(ctx);
@@ -193,6 +196,9 @@ export const updateSettings = mutation({
     if (patch.tags !== undefined) clean.tags = patch.tags.slice(0, 6);
     if (patch.category !== undefined) clean.category = patch.category;
     if (patch.slowModeSeconds !== undefined) clean.slowModeSeconds = Math.max(0, Math.min(300, patch.slowModeSeconds));
+    if (patch.iconStorageId !== undefined) clean.iconStorageId = patch.iconStorageId;
+    if (patch.bannerStorageId !== undefined) clean.bannerStorageId = patch.bannerStorageId;
+    if (patch.clearIcon) clean.iconStorageId = undefined;
     await ctx.db.patch(serverId, clean);
     await audit(ctx, "community.update", userId, `Updated community settings`, "community", serverId);
   },
@@ -205,7 +211,12 @@ export const listMine = query({
     if (!userId) return [];
     const memberships = await ctx.db.query("memberships").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
     const servers = await Promise.all(memberships.map((m) => ctx.db.get(m.serverId)));
-    return servers.filter((s) => s !== null);
+    return Promise.all(
+      servers.filter((s) => s !== null).map(async (s) => ({
+        ...s,
+        iconUrl: s.iconStorageId ? await ctx.storage.getUrl(s.iconStorageId) : null,
+      })),
+    );
   },
 });
 
@@ -226,7 +237,11 @@ export const details = query({
     const permissions = await effectivePermissions(ctx, serverId, userId);
     const myMembership = memberships.find((m) => m.userId === userId);
     return {
-      server,
+      server: {
+        ...server,
+        iconUrl: server.iconStorageId ? await ctx.storage.getUrl(server.iconStorageId) : null,
+        bannerUrl: server.bannerStorageId ? await ctx.storage.getUrl(server.bannerStorageId) : null,
+      },
       channels,
       members,
       roles,
@@ -258,6 +273,7 @@ export const discover = query({
         description: server.description,
         iconColor: server.iconColor ?? "violet",
         bannerColor: server.bannerColor ?? "violet",
+        iconUrl: server.iconStorageId ? await ctx.storage.getUrl(server.iconStorageId) : null,
         memberCount: members.length,
         tags: server.tags ?? [],
         category: server.category ?? "General",

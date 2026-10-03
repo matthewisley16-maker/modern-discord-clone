@@ -190,7 +190,9 @@ export default function Dashboard() {
             className={`fc-rail-server ${communityId === c._id && section === "community" ? "selected" : ""}`}
             title={c.name} aria-label={c.name}
             onClick={() => openCommunity(c._id)}
-          >{initialsOf(c.name)}</button>
+          >{(c as { iconUrl?: string | null }).iconUrl
+            ? <img src={(c as { iconUrl?: string | null }).iconUrl!} alt="" className="fc-rail-img" />
+            : initialsOf(c.name)}</button>
         ))}
         <button className="fc-rail-server add" title="Create a community" aria-label="Create a community" onClick={() => openModal("createCommunity")}><Plus size={20} /></button>
         <button className="fc-rail-server add" title="Join with invite" aria-label="Join with invite" onClick={() => openModal("join")}><Hash size={18} /></button>
@@ -212,7 +214,9 @@ export default function Dashboard() {
               <button className="fc-close-mobile" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={17} /></button>
             </div>
             <div className="fc-sidebar-banner">
-              <span className="fc-sidebar-banner-star">✳</span>
+              {details.server.bannerUrl
+                ? <img src={details.server.bannerUrl} alt="" className="fc-sidebar-banner-img" />
+                : <span className="fc-sidebar-banner-star">✳</span>}
               <span>{details.server.description || "A little space. A lot of possibility."}</span>
             </div>
             <div className="fc-sidebar-section">
@@ -240,6 +244,9 @@ export default function Dashboard() {
                 try { await leaveCommunity({ serverId: communityId! }); toast.success("You left the community."); setCommunityId(null); setSection("home"); }
                 catch (e) { toast.error(e instanceof Error ? e.message : "Could not leave."); }
               }}>Leave community</button>
+            )}
+            {details.isOwner && (
+              <p className="fc-owner-note">You own this community. Transfer or delete it instead of leaving.</p>
             )}
           </>
         ) : (
@@ -395,7 +402,11 @@ export default function Dashboard() {
       )}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {communitySettingsOpen && communityId && (
-        <CommunitySettings serverId={communityId} onClose={() => setCommunitySettingsOpen(false)} />
+        <CommunitySettings
+          serverId={communityId}
+          onClose={() => setCommunitySettingsOpen(false)}
+          onLeft={() => { setCommunitySettingsOpen(false); setCommunityId(null); setSection("home"); }}
+        />
       )}
 
       {inCall && (
