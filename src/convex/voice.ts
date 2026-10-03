@@ -35,6 +35,7 @@ export const createChannelFull = mutation({
     userLimit: v.optional(v.number()),
     isPrivate: v.optional(v.boolean()),
     allowedRoleIds: v.optional(v.array(v.string())),
+    description: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await currentUserId(ctx);
@@ -56,7 +57,7 @@ export const createChannelFull = mutation({
     const id = await ctx.db.insert("channels", {
       serverId: args.serverId,
       name,
-      description: args.type === "voice" ? "Hop in and talk." : "A new conversation starts here.",
+      description: (args.description?.trim().slice(0, 200)) || (args.type === "voice" ? "Hop in and talk." : "A new conversation starts here."),
       type: args.type,
       categoryId: args.categoryId,
       position: existing.length,
@@ -188,6 +189,21 @@ export const createCategory = mutation({
     if (!clean) throw new ConvexError("Category name can't be empty.");
     const existing = await ctx.db.query("channelCategories").withIndex("by_server", (q) => q.eq("serverId", serverId)).collect();
     return ctx.db.insert("channelCategories", { serverId, name: clean, position: existing.length });
+  },
+});
+
+/** Persist a batch category reorder from drag-and-drop. */
+export const reorderCategories = mutation({
+  args: { serverId: v.id("servers"), order: v.array(v.object({ categoryId: v.id("channelCategories"), position: v.number() })) },
+  handler: async (ctx, { serverId, order }) => {
+    const userId = await currentUserId(ctx);
+    await requirePermission(ctx, serverId, userId, "manageChannels");
+    for (const item of order.slice(0, 100)) {
+      const category = await ctx.db.get(item.categoryId);
+      if (!category || category.serverId !== serverId) continue;
+      await ctx.db.patch(item.categoryId, { position: Math.max(0, Math.round(item.position)) });
+    }
+    await audit(ctx, "category.reorder", userId, "Reordered categories", "server", serverId);
   },
 });
 

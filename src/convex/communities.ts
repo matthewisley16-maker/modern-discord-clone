@@ -69,12 +69,18 @@ export const create = mutation({
       iconColor: "violet",
     });
     await ctx.db.insert("memberships", { serverId, userId, role: "owner" });
-    for (const [channelName, type] of [["general", "text"], ["introductions", "text"], ["off-topic", "text"], ["General Voice", "voice"]] as const) {
+    // A real, editable "General" section the owner can rename, reorder or delete.
+    const generalCategoryId = await ctx.db.insert("channelCategories", { serverId, name: "General", position: 0 });
+    const defaults = [["general", "text"], ["introductions", "text"], ["off-topic", "text"], ["General Voice", "voice"]] as const;
+    for (let i = 0; i < defaults.length; i++) {
+      const [channelName, type] = defaults[i];
       await ctx.db.insert("channels", {
         serverId,
         name: channelName,
         description: channelName === "general" ? "A little space for big conversations." : type === "voice" ? "Hop in and talk." : "Make yourself at home.",
         type,
+        categoryId: generalCategoryId,
+        position: i,
       });
     }
     await audit(ctx, "community.create", userId, `Created community "${name}"`, "community", serverId);

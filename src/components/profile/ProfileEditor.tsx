@@ -424,8 +424,7 @@ export default function ProfileEditor({ onClose }: { onClose: () => void }) {
               <h3>Profile privacy</h3>
               <p className="fc-muted">Choose who can see each part of your profile. Avatar, username and basic account info stay visible.</p>
               {(["bio", "pronouns", "badges", "activity", "socialLinks", "widgets", "friendsList", "mutuals", "customStatus"] as const).map((field) => (
-                <label className="fc-select-row" key={field}>
-                  {field.charAt(0).toUpperCase() + field.slice(1).replace(/([A-Z])/g, " $1")}
+                <label className="fc-select-row" key={field}>                    {field === "friendsList" ? "Followers & following lists" : field.charAt(0).toUpperCase() + field.slice(1).replace(/([A-Z])/g, " $1")}
                   <select
                     className="fc-select"
                     value={draft.privacy[field] ?? "everyone"}

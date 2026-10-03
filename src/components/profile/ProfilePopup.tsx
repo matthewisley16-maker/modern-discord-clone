@@ -5,10 +5,11 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "./ProfileAvatar";
 import ProfileEffect from "./ProfileEffect";
+import FollowListModal from "./FollowListModal";
 import { BADGES, nameStyle, plateStyle } from "@/lib/cosmetics";
 import { formatLastSeen } from "@/components/dashboard/ui";
 import { toast } from "sonner";
-import { BellOff, Copy, Flag, MessageCircle, MoreHorizontal, ShieldOff, UserPlus, X } from "lucide-react";
+import { BellOff, Copy, Flag, MessageCircle, MoreHorizontal, ShieldOff, UserCheck, UserPlus, X } from "lucide-react";
 
 export default function ProfilePopup({
   userId,
@@ -30,7 +31,10 @@ export default function ProfilePopup({
   const block = useMutation(api.social.blockUser);
   const report = useMutation(api.social.report);
   const startDirect = useMutation(api.dms.startDirect);
+  const follow = useMutation(api.social.follow);
+  const unfollow = useMutation(api.social.unfollow);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [followList, setFollowList] = useState<"followers" | "following" | "mutuals" | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on Escape and on outside click.
@@ -93,6 +97,16 @@ export default function ProfilePopup({
           <p className="pf-handle">@{profile.username}</p>
         </div>
 
+        {(profile.isMutual || profile.followsYou) && (
+          <p className="pf-follow-tag">{profile.isMutual ? "Mutual Following" : "Follows you"}</p>
+        )}
+
+        <div className="pf-follow-stats">
+          <button onClick={() => setFollowList("followers")}><strong>{profile.followers}</strong><span>Followers</span></button>
+          <button onClick={() => setFollowList("following")}><strong>{profile.following}</strong><span>Following</span></button>
+          {!profile.isSelf && <button onClick={() => setFollowList("mutuals")}><strong>•</strong><span>Mutuals</span></button>}
+        </div>
+
         {profile.customStatus && <p className="pf-status">{profile.customStatus}</p>}
 
         {badges.length > 0 && (
@@ -149,10 +163,17 @@ export default function ProfilePopup({
 
         {!profile.isSelf && (
           <div className="pf-popup-actions">
+            <Button
+              size="sm"
+              variant={profile.isFollowing ? "outline" : "default"}
+              onClick={() => run(profile.isFollowing ? "Unfollowed" : "Following", () => profile.isFollowing ? unfollow({ userId: profile.userId as Id<"users"> }) : follow({ userId: profile.userId as Id<"users"> }))}
+            >
+              <UserCheck className="mr-1 h-4 w-4" /> {profile.isFollowing ? "Following" : profile.followsYou ? "Follow back" : "Follow"}
+            </Button>
             {profile.isFriend ? (
               <Button size="sm" variant="outline" onClick={() => run("Friend removed", () => removeFriend({ userId: profile.userId as Id<"users"> }))}>Remove friend</Button>
             ) : (
-              <Button size="sm" onClick={() => run("Friend request sent", () => sendRequest({ toId: profile.userId as Id<"users"> }))}>
+              <Button size="sm" variant="outline" onClick={() => run("Friend request sent", () => sendRequest({ toId: profile.userId as Id<"users"> }))}>
                 <UserPlus className="mr-1 h-4 w-4" /> Add Friend
               </Button>
             )}
@@ -190,6 +211,16 @@ export default function ProfilePopup({
           </div>
         )}
       </div>
+
+      {followList && (
+        <FollowListModal
+          userId={profile.userId}
+          title={profile.displayName}
+          initialTab={followList}
+          onClose={() => setFollowList(null)}
+          onOpenProfile={(id) => { setFollowList(null); onViewFull(id); }}
+        />
+      )}
     </div>
   );
 }

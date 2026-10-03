@@ -90,13 +90,18 @@ async function buildProfile(ctx: QueryCtx, userId: Id<"users">, viewerId: Id<"us
   }
 
   let isFollowing = false;
+  let followsYou = false;
   let isFriend = false;
   let isBlocked = false;
   if (viewerId) {
     isFollowing = (await ctx.db.query("follows").withIndex("by_pair", (q) => q.eq("followerId", viewerId).eq("followingId", userId)).unique()) !== null;
+    followsYou = (await ctx.db.query("follows").withIndex("by_pair", (q) => q.eq("followerId", userId).eq("followingId", viewerId)).unique()) !== null;
     isFriend = await areFriends(ctx, viewerId, userId);
     isBlocked = await isBlockedEitherWay(ctx, viewerId, userId);
   }
+  const isMutual = isFollowing && followsYou;
+  // Follower/following lists follow the profile's "friendsList" privacy tier.
+  const followListsVisible = canSee("friendsList") || (viewerId === userId);
 
   const badges = (profile?.badgeOrder ?? profile?.badges ?? []).filter((b) => VALID_BADGE.has(b));
 
@@ -136,10 +141,13 @@ async function buildProfile(ctx: QueryCtx, userId: Id<"users">, viewerId: Id<"us
     presence: shownStatus,
     lastSeen,
     relationship,
-    followers: canSee("friendsList") ? followers.length : 0,
-    following: canSee("friendsList") ? following.length : 0,
+    followers: followListsVisible ? followers.length : 0,
+    following: followListsVisible ? following.length : 0,
+    followListsVisible,
     mutualCommunities,
     isFollowing,
+    followsYou,
+    isMutual,
     isFriend,
     isBlocked,
     privacy,

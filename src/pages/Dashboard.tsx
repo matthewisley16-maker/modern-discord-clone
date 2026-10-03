@@ -49,10 +49,14 @@ export default function Dashboard() {
   const createChannelFull = useMutation(api.voice.createChannelFull);
   const createCategory = useMutation(api.voice.createCategory);
   const reorderChannels = useMutation(api.voice.reorderChannels);
+  const updateCategory = useMutation(api.voice.updateCategory);
+  const deleteCategory = useMutation(api.voice.deleteCategory);
+  const reorderCategories = useMutation(api.voice.reorderCategories);
+  const updateChannelFull = useMutation(api.voice.updateChannelFull);
+  const deleteChannelFull = useMutation(api.voice.deleteChannelFull);
   const { play: playMessageSound } = useMessageSound();
   const createCommunity = useMutation(api.communities.create);
   const joinByCode = useMutation(api.communities.joinByCode);
-  const createChannel = useMutation(api.communities.createChannel);
   const leaveCommunity = useMutation(api.communities.leave);
   const markAllRead = useMutation(api.social.markAllNotificationsRead);
   const markRead = useMutation(api.social.markNotificationRead);
@@ -76,6 +80,12 @@ export default function Dashboard() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [dragCategoryId, setDragCategoryId] = useState<string | null>(null);
+  const [catMenuFor, setCatMenuFor] = useState<string | null>(null);
+  const [channelMenuFor, setChannelMenuFor] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ kind: "category" | "channel"; id: string; name: string } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<{ kind: "category" | "channel"; id: string; name: string } | null>(null);
   const [categoryName, setCategoryName] = useState("");
   const [categoryId, setCategoryId] = useState<string>("");
   const [userLimit, setUserLimit] = useState(0);
@@ -89,7 +99,11 @@ export default function Dashboard() {
   const [notifMenuFor, setNotifMenuFor] = useState<string | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
   // The upper-left icon collapses/expands the sidebar (never navigates home).
-  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
+  // The choice is remembered across channel/DM/profile/settings changes and reloads.
+  const [desktopCollapsed, setDesktopCollapsed] = useState(() => {
+    try { return localStorage.getItem("freecord:sidebarCollapsed") === "1"; }
+    catch { return false; }
+  });
   const [modal, setModal] = useState<Modal>(null);
   const [value, setValue] = useState("");
   const [description, setDescription] = useState("");
@@ -110,6 +124,8 @@ export default function Dashboard() {
 
   const details = useQuery(api.communities.details, communityId ? { serverId: communityId } : "skip");
   const channel = details?.channels.find((c) => c._id === channelId) ?? details?.channels.find((c) => c.type !== "voice");
+  // Owner (and managers with manageChannels) can reorganize the sidebar.
+  const canManageChannels = Boolean(details?.permissions.includes("manageChannels"));
 
   // Presence heartbeat so others see us online, and resume any voice session.
   useEffect(() => {
@@ -190,22 +206,19 @@ export default function Dashboard() {
         const id = await joinByCode({ code: value });
         openCommunity(id);
       } else if (modal === "channel" && communityId) {
-        if (channelType === "text") {
-          const id = await createChannel({ serverId: communityId, name: value, type: "text" });
-          setChannelId(id);
-        } else {
-          // Full voice/video channel: category, user limit and privacy are all
-          // validated server-side by createChannelFull.
-          await createChannelFull({
-            serverId: communityId,
-            name: value,
-            type: channelType,
-            ...(categoryId ? { categoryId: categoryId as Id<"channelCategories"> } : {}),
-            userLimit,
-            isPrivate: isPrivateChannel,
-            allowedRoleIds: isPrivateChannel ? allowedRoleIds : [],
-          });
-        }
+        // One code path for text/voice/video: category, topic, limit and privacy
+        // are all validated server-side by createChannelFull.
+        const id = await createChannelFull({
+          serverId: communityId,
+          name: value,
+          type: channelType,
+          ...(categoryId ? { categoryId: categoryId as Id<"channelCategories"> } : {}),
+          ...(channelType === "text" ? { description } : {}),
+          userLimit,
+          isPrivate: isPrivateChannel,
+          allowedRoleIds: isPrivateChannel ? allowedRoleIds : [],
+        });
+        if (channelType === "text") setChannelId(id);
       } else if (modal === "category" && communityId) {
         await createCategory({ serverId: communityId, name: value });
       }
@@ -233,8 +246,11 @@ export default function Dashboard() {
     const channel = p.get("channel");
     const dm = p.get("dm");
     const message = p.get("message");
+    const profile = p.get("profile");
     try {
-      if (dm) {
+      if (profile) {
+        setProfileUserId(profile);
+      } else if (dm) {
         openConversation(dm as Id<"dmConversations">);
       } else if (server) {
         openCommunity(server);
@@ -255,8 +271,15 @@ export default function Dashboard() {
   }
 
   function toggleSidebar() {
-    if (typeof window !== "undefined" && window.innerWidth <= 760) setMobileNav((v) => !v);
-    else setDesktopCollapsed((v) => !v);
+    if (typeof window !== "undefined" && window.innerWidth <= 760) {
+      setMobileNav((v) => !v);
+      return;
+    }
+    setDesktopCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem("freecord:sidebarCollapsed", next ? "1" : "0"); } catch { /* storage may be unavailable */ }
+      return next;
+    });
   }
 
   async function joinVoice(channelId: Id<"channels">, name: string) {
@@ -290,6 +313,48 @@ export default function Dashboard() {
       });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not reorder channels.");
+    }
+  }
+
+  /** Persist a category drag-and-drop reorder. */
+  async function dropCategory(targetId: string) {
+    const id = dragCategoryId;
+    setDragCategoryId(null);
+    if (!id || id === targetId || !communityId || !channelTree) return;
+    const ids = channelTree.categories.map((c) => c._id as string);
+    const from = ids.indexOf(id);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(to, 0, ...ids.splice(from, 1));
+    try {
+      await reorderCategories({ serverId: communityId, order: ids.map((categoryId, i) => ({ categoryId: categoryId as Id<"channelCategories">, position: i })) });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not reorder categories.");
+    }
+  }
+
+  async function submitRename() {
+    if (!renameTarget || !renameValue.trim()) return;
+    const { kind, id } = renameTarget;
+    try {
+      if (kind === "category") await updateCategory({ categoryId: id as Id<"channelCategories">, name: renameValue.trim() });
+      else await updateChannelFull({ channelId: id as Id<"channels">, name: renameValue.trim() });
+      toast.success(kind === "category" ? "Category renamed." : "Channel renamed.");
+      setRenameTarget(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not rename.");
+    }
+  }
+
+  async function confirmDeleteNow() {
+    if (!confirmDelete) return;
+    const { kind, id } = confirmDelete;
+    setConfirmDelete(null);
+    try {
+      if (kind === "category") { await deleteCategory({ categoryId: id as Id<"channelCategories"> }); toast.success("Category deleted — its channels are now uncategorized."); }
+      else { await deleteChannelFull({ channelId: id as Id<"channels"> }); toast.success("Channel deleted."); }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not delete.");
     }
   }
 
@@ -331,6 +396,19 @@ export default function Dashboard() {
             <span className={`fc-channel-limit ${participants.length >= (c.userLimit ?? 0) ? "full" : ""}`}>{participants.length}/{c.userLimit}</span>
           )}
         </button>
+        {canManage && (
+          <button
+            className="fc-channel-tools"
+            aria-label={`Manage ${c.name}`}
+            onClick={(e) => { e.stopPropagation(); setChannelMenuFor(channelMenuFor === c._id ? null : c._id); }}
+          >⋯</button>
+        )}
+        {canManage && channelMenuFor === c._id && (
+          <div className="fc-menu fc-channel-menu" role="menu">
+            <button onClick={() => { setRenameTarget({ kind: "channel", id: c._id, name: c.name }); setRenameValue(c.name); setChannelMenuFor(null); }}>Rename</button>
+            <button className="danger" onClick={() => { setConfirmDelete({ kind: "channel", id: c._id, name: c.name }); setChannelMenuFor(null); }}>Delete channel</button>
+          </div>
+        )}
         {isVoice && participants.length > 0 && (
           <ul className="fc-voice-people">
             {participants.map((p) => (
@@ -449,8 +527,37 @@ export default function Dashboard() {
             {channelTree && (
               <>
                 {channelTree.byCategory.map(({ category, channels }) => (
-                  <div key={category._id} className="fc-cat-group">
-                    <p className="fc-cat-name">{category.name}</p>
+                  <div
+                    key={category._id}
+                    className={`fc-cat-group ${dragOverId === category._id ? "drag-over" : ""}`}
+                    onDragOver={(e) => { if (canManageChannels) { e.preventDefault(); } }}
+                    onDrop={(e) => { if (canManageChannels) { e.preventDefault(); void dropCategory(category._id); } }}
+                  >
+                    <p className="fc-cat-name">
+                      {canManageChannels && (
+                        <span
+                          className="fc-cat-grip"
+                          draggable
+                          onDragStart={() => setDragCategoryId(category._id)}
+                          title="Drag to reorder category"
+                          aria-hidden="true"
+                        >⠿</span>
+                      )}
+                      <span className="fc-cat-label">{category.name}</span>
+                      {canManageChannels && (
+                        <button
+                          className="fc-cat-tools"
+                          aria-label={`Manage ${category.name}`}
+                          onClick={() => setCatMenuFor(catMenuFor === category._id ? null : category._id)}
+                        >⋯</button>
+                      )}
+                    </p>
+                    {canManageChannels && catMenuFor === category._id && (
+                      <div className="fc-menu fc-cat-menu" role="menu">
+                        <button onClick={() => { setRenameTarget({ kind: "category", id: category._id, name: category.name }); setRenameValue(category.name); setCatMenuFor(null); }}>Rename category</button>
+                        <button className="danger" onClick={() => { setConfirmDelete({ kind: "category", id: category._id, name: category.name }); setCatMenuFor(null); }}>Delete category</button>
+                      </div>
+                    )}
                     {channels.map((c) => renderChannelRow(c))}
                   </div>
                 ))}
@@ -695,6 +802,7 @@ export default function Dashboard() {
             userId={fullProfileUserId}
             onBack={() => setFullProfileUserId(null)}
             onMessage={(id) => { openConversation(id as Id<"dmConversations">); setFullProfileUserId(null); }}
+            onOpenProfile={(id) => setFullProfileUserId(id)}
           />
         </div>
       )}
@@ -815,6 +923,12 @@ export default function Dashboard() {
                       </label>
                     ))}
                   </div>
+                  {channelType === "text" && (
+                    <>
+                      <label htmlFor="modal-topic">Topic / description</label>
+                      <Input id="modal-topic" value={description} maxLength={200} onChange={(e) => setDescription(e.target.value)} placeholder="What's this channel for?" />
+                    </>
+                  )}
                   <label htmlFor="modal-category">Category</label>
                   <select id="modal-category" className="fc-select" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
                     <option value="">No category</option>
@@ -867,6 +981,36 @@ export default function Dashboard() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* ---------- Rename category / channel ---------- */}
+      {renameTarget && (
+        <div className="fc-cm-confirm-overlay" onClick={() => setRenameTarget(null)}>
+          <div className="fc-cm-confirm" role="dialog" aria-label="Rename" onClick={(e) => e.stopPropagation()}>
+            <h4>Rename {renameTarget.kind === "category" ? "category" : "channel"}</h4>
+            <label>New name
+              <Input autoFocus value={renameValue} maxLength={40} onChange={(e) => setRenameValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submitRename(); }} />
+            </label>
+            <div className="fc-cm-confirm-actions">
+              <Button variant="ghost" onClick={() => setRenameTarget(null)}>Cancel</Button>
+              <Button onClick={() => void submitRename()} disabled={!renameValue.trim()}>Save</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Delete category / channel confirmation ---------- */}
+      {confirmDelete && (
+        <div className="fc-cm-confirm-overlay" onClick={() => setConfirmDelete(null)}>
+          <div className="fc-cm-confirm" role="alertdialog" aria-label={`Delete ${confirmDelete.name}`} onClick={(e) => e.stopPropagation()}>
+            <h4>Delete &ldquo;{confirmDelete.name}&rdquo;?</h4>
+            <p>{confirmDelete.kind === "category" ? "Its channels will move to Uncategorized. This cannot be undone." : "This cannot be undone."}</p>
+            <div className="fc-cm-confirm-actions">
+              <Button variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+              <Button variant="destructive" onClick={() => void confirmDeleteNow()}>Delete</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

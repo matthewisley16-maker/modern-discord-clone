@@ -162,7 +162,8 @@ export const follow = mutation({
     const existing = await ctx.db.query("follows").withIndex("by_pair", (q) => q.eq("followerId", me).eq("followingId", userId)).unique();
     if (existing) return;
     await ctx.db.insert("follows", { followerId: me, followingId: userId });
-    await notify(ctx, userId, "follow", "New follower", `${await displayNameOf(ctx, me)} started following you.`, "?view=friends", me);
+    // Deep-link straight to the follower's profile rather than the friends page.
+    await notify(ctx, userId, "follow", "New follower", `${await displayNameOf(ctx, me)} started following you.`, `?profile=${me}`, me);
   },
 });
 
@@ -192,6 +193,73 @@ export const listFollowers = query({
     if (!userId) return [];
     const rows = await ctx.db.query("follows").withIndex("by_following", (q) => q.eq("followingId", userId)).collect();
     return Promise.all(rows.map((r) => publicCard(ctx, r.followerId, userId)));
+  },
+});
+
+/** A public card enriched with the viewer's follow relationship to the target. */
+async function relationCard(ctx: Parameters<typeof displayNameOf>[0], targetId: Id<"users">, viewerId?: Id<"users">) {
+  const base = await publicCard(ctx, targetId, viewerId);
+  let isFollowing = false;
+  let followsYou = false;
+  let isBlocked = false;
+  if (viewerId && viewerId !== targetId) {
+    isFollowing = (await ctx.db.query("follows").withIndex("by_pair", (q) => q.eq("followerId", viewerId).eq("followingId", targetId)).unique()) !== null;
+    followsYou = (await ctx.db.query("follows").withIndex("by_pair", (q) => q.eq("followerId", targetId).eq("followingId", viewerId)).unique()) !== null;
+    isBlocked = await isBlockedEitherWay(ctx, viewerId, targetId);
+  }
+  return { ...base, isFollowing, followsYou, isMutual: isFollowing && followsYou, isBlocked, isSelf: viewerId === targetId };
+}
+
+/**
+ * Whether `viewerId` may browse `targetId`'s follower/following lists.
+ * Reuses the profile's existing `friendsList` privacy tier:
+ * everyone / friends / friends+shared communities (friends or followers) / nobody.
+ */
+async function canViewFollowLists(ctx: Parameters<typeof displayNameOf>[0], targetId: Id<"users">, viewerId: Id<"users"> | null) {
+  if (viewerId === targetId) return true;
+  if (!viewerId) return false;
+  if (await isBlockedEitherWay(ctx, viewerId, targetId)) return false;
+  const profile = await profileOf(ctx, targetId);
+  const level = (profile?.privacy?.friendsList as string | undefined) ?? "everyone";
+  if (level === "everyone") return true;
+  if (level === "none") return false;
+  if (await areFriends(ctx, viewerId, targetId)) return true;
+  if (level === "mutual") {
+    // "Friends + shared communities" also covers followers.
+    const follows = await ctx.db.query("follows").withIndex("by_pair", (q) => q.eq("followerId", viewerId).eq("followingId", targetId)).unique();
+    if (follows) return true;
+  }
+  return false;
+}
+
+/**
+ * Followers, following, and mutuals for any user, with real follow state for the
+ * viewer. Returns `visible: false` when the owner's privacy hides the lists.
+ */
+export const followLists = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => {
+    const viewerId = await getAuthUserId(ctx);
+    const visible = await canViewFollowLists(ctx, userId, viewerId);
+    if (!visible) return { visible: false, followers: [], following: [], mutuals: [] };
+
+    const followerRows = await ctx.db.query("follows").withIndex("by_following", (q) => q.eq("followingId", userId)).collect();
+    const followingRows = await ctx.db.query("follows").withIndex("by_follower", (q) => q.eq("followerId", userId)).collect();
+
+    const rank = (p: string) => (p === "offline" ? 1 : 0);
+    const byPresenceThenName = <T extends { presence: string; displayName: string }>(a: T, b: T) =>
+      rank(a.presence) - rank(b.presence) || a.displayName.localeCompare(b.displayName);
+
+    const followers = (await Promise.all(followerRows.map((r) => relationCard(ctx, r.followerId, viewerId ?? undefined)))).sort(byPresenceThenName);
+    const following = (await Promise.all(followingRows.map((r) => relationCard(ctx, r.followingId, viewerId ?? undefined)))).sort(byPresenceThenName);
+
+    // Mutuals = accounts that genuinely follow each other with this user
+    // (this user follows them AND they follow this user).
+    const followerIds = new Set(followerRows.map((r) => r.followerId as string));
+    const mutualIds = followingRows.map((r) => r.followingId).filter((id) => followerIds.has(id as string));
+    const mutuals = (await Promise.all(mutualIds.map((id) => relationCard(ctx, id, viewerId ?? undefined)))).sort(byPresenceThenName);
+
+    return { visible: true, followers, following, mutuals };
   },
 });
 

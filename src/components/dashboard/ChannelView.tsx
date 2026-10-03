@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Avatar, EmptyState } from "./ui";
-import AudioPlayer from "./AudioPlayer";
+import MediaAttachment from "./MediaAttachment";
 import { toast } from "sonner";
 import { CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
 
@@ -267,17 +267,7 @@ export default function ChannelView({
                 <p className="fc-text">{renderMentions(m.body)}</p>
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
-                    {m.attachments.map((a) => {
-                      // Audio plays inline straight from storage — no external tab.
-                      if (isAudio(a.contentType, a.name) && a.url) {
-                        return <AudioPlayer key={a._id} url={a.url} name={a.name} size={a.size} contentType={a.contentType} />;
-                      }
-                      return (
-                        <a key={a._id} href={a.url ?? "#"} target="_blank" rel="noreferrer noopener" className="fc-attachment">
-                          {a.isImage && a.url ? <img src={a.url} alt={a.name} loading="lazy" /> : <span className="fc-file"><FileText size={16} /> {a.name}</span>}
-                        </a>
-                      );
-                    })}
+                    {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}
                   </div>
                 )}
                 <div className="fc-reactions">

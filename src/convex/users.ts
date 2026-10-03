@@ -70,6 +70,8 @@ export const publicProfile = query({
     let mutualCommunities: { _id: string; name: string }[] = [];
     let mutualFriends: { userId: string; name: string }[] = [];
     let isFollowing = false;
+    let followsYou = false;
+    let isMutual = false;
     let isFriend = false;
     let isBlocked = false;
 
@@ -94,6 +96,12 @@ export const publicProfile = query({
           .query("follows")
           .withIndex("by_pair", (q) => q.eq("followerId", viewerId).eq("followingId", userId))
           .unique()) !== null;
+      followsYou =
+        (await ctx.db
+          .query("follows")
+          .withIndex("by_pair", (q) => q.eq("followerId", userId).eq("followingId", viewerId))
+          .unique()) !== null;
+      isMutual = isFollowing && followsYou;
       isFriend = await areFriends(ctx, viewerId, userId);
       isBlocked = await isBlockedEitherWay(ctx, viewerId, userId);
     }
@@ -120,6 +128,8 @@ export const publicProfile = query({
       mutualCommunities,
       mutualFriends,
       isFollowing,
+      followsYou,
+      isMutual,
       isFriend,
       isBlocked,
       publicProfile: settings?.publicProfile !== false,

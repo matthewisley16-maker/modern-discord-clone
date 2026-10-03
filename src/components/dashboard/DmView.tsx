@@ -5,7 +5,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, EmptyState } from "./ui";
-import AudioPlayer from "./AudioPlayer";
+import MediaAttachment from "./MediaAttachment";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
 import { toast } from "sonner";
@@ -269,21 +269,7 @@ export default function DmView({
                 )}
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
-                    {m.attachments.map((a) => {
-                      // Audio plays inline straight from storage — no external tab.
-                      if (isAudio(a.contentType, a.name) && a.url) {
-                        return <AudioPlayer key={a._id} url={a.url} name={a.name} size={a.size} contentType={a.contentType} />;
-                      }
-                      return (
-                        <a key={a._id} href={a.url ?? "#"} target="_blank" rel="noreferrer noopener" className="fc-attachment">
-                          {a.contentType.startsWith("image/") && a.url ? (
-                            <img src={a.url} alt={a.name} loading="lazy" />
-                          ) : (
-                            <span className="fc-file"><FileText size={16} /> {a.name} <Download size={13} /></span>
-                          )}
-                        </a>
-                      );
-                    })}
+                    {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}
                   </div>
                 )}
                 <div className="fc-reactions">

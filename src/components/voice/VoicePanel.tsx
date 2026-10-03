@@ -49,6 +49,9 @@ export default function VoicePanel({
   const [connection, setConnection] = useState<"connecting" | "connected" | "lost">("connecting");
   const [level, setLevel] = useState(0);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  // True once the mic attempt has finished (granted or denied), so peer
+  // connections can still form for camera-only / listen-only participants.
+  const [mediaReady, setMediaReady] = useState(false);
 
   const localStream = useRef<MediaStream | null>(null);
   const peers = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -58,6 +61,8 @@ export default function VoicePanel({
   const speakingRef = useRef(false);
   const lastSpokeRef = useRef(0);
   const audioEls = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const videoEls = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
 
   async function getMic(withVideo: boolean) {
     try {
@@ -81,6 +86,7 @@ export default function VoicePanel({
     (async () => {
       const stream = await getMic(false);
       if (cancelled) { stream?.getTracks().forEach((t) => t.stop()); return; }
+      setMediaReady(true);
       if (!stream) { setConnection("lost"); return; }
       localStream.current = stream;
       setConnection("connected");
@@ -146,8 +152,12 @@ export default function VoicePanel({
   // ---- WebRTC peer connections ----
   function attachRemote(userId: string, stream: MediaStream) {
     setRemoteStreams((prev) => ({ ...prev, [userId]: stream }));
+    // The same MediaStream feeds both the audio sink and the video tile, so a
+    // participant's audio keeps playing whether or not their camera is on.
     const el = audioEls.current.get(userId);
     if (el) { el.srcObject = stream; void el.play().catch(() => {}); }
+    const vel = videoEls.current.get(userId);
+    if (vel) { vel.srcObject = stream; void vel.play().catch(() => {}); }
   }
 
   function createPeer(remoteId: string, initiator: boolean) {
@@ -187,12 +197,17 @@ export default function VoicePanel({
   }
 
   useEffect(() => {
-    if (!details || !localStream.current) return;
+    if (!details || !mediaReady) return;
     for (const p of details.participants) {
       if (p.userId === myUserId) continue;
       if (!peers.current.has(p.userId)) createPeer(p.userId, myUserId < p.userId);
     }
-  }, [details, myUserId]);
+  }, [details, myUserId, mediaReady]);
+
+  // Deafen silences every remote participant without changing their streams.
+  useEffect(() => {
+    audioEls.current.forEach((el) => { el.muted = deafened; });
+  }, [deafened]);
 
   useEffect(() => {
     if (!signals) return;
@@ -231,22 +246,64 @@ export default function VoicePanel({
     await setVoiceFlags({ deafened: next }).catch(() => {});
   }
 
+  /**
+   * Turn the camera on/off without disturbing the microphone or the call.
+   * Video is requested on its own so the existing audio track is never
+   * duplicated, and every peer either gets the new track or drops it.
+   */
   async function toggleVideo() {
     if (videoOn) {
-      localStream.current?.getVideoTracks().forEach((t) => t.stop());
+      for (const track of localStream.current?.getVideoTracks() ?? []) {
+        for (const pc of peers.current.values()) {
+          const sender = pc.getSenders().find((s) => s.track === track);
+          if (sender) pc.removeTrack(sender);
+        }
+        track.stop();
+        localStream.current?.removeTrack(track);
+      }
+      if (localVideoRef.current) localVideoRef.current.srcObject = null;
       setVideoOn(false);
       await setVoiceFlags({ video: false }).catch(() => {});
       return;
     }
-    const stream = await getMic(true);
-    if (!stream) return;
-    localStream.current?.getAudioTracks().forEach((t) => stream.addTrack(t));
-    localStream.current = stream;
+
+    let videoStream: MediaStream | null = null;
+    try {
+      videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    } catch (err) {
+      const name = (err as DOMException)?.name;
+      toast.error(name === "NotAllowedError"
+        ? "Camera permission is required to turn your camera on."
+        : name === "NotFoundError"
+          ? "No camera was found on this device."
+          : "Could not access your camera.");
+      return;
+    }
+    const track = videoStream.getVideoTracks()[0];
+    if (!track) return;
+
+    // Make sure we have a local stream to piggyback on, and show our preview.
+    // If mic access was denied earlier, acquire it here so audio flows too.
+    if (!localStream.current) {
+      const mic = await getMic(false);
+      if (mic) {
+        localStream.current = mic;
+        const micTrack = mic.getAudioTracks()[0];
+        if (micTrack) for (const pc of peers.current.values()) pc.addTrack(micTrack, mic);
+        setMediaReady(true);
+      }
+    }
+    localStream.current?.addTrack(track);
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream.current ?? videoStream;
+      void localVideoRef.current.play().catch(() => {});
+    }
+    if (muted) track.enabled = true; // camera is independent of mic mute
+
     for (const [remoteId, pc] of peers.current) {
-      const track = stream.getVideoTracks()[0];
       const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-      if (sender && track) await sender.replaceTrack(track);
-      else if (track) pc.addTrack(track, stream);
+      if (sender) await sender.replaceTrack(track);
+      else pc.addTrack(track, localStream.current!);
       try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -297,30 +354,59 @@ export default function VoicePanel({
       </header>
 
       <div className="vp-grid">
-        {participants.map((p) => (
-          <button
-            key={p.userId}
-            className={`vp-tile ${p.speaking ? "speaking" : ""} ${p.userId === myUserId ? "self" : ""}`}
-            onClick={() => onOpenProfile(p.userId)}
-          >
-            <span className="vp-avatar-holder">
-              <ProfileAvatar name={p.name} url={p.avatarUrl} size={64} showPresence={false} />
-              {p.speaking && <span className="vp-speaking-ring" aria-hidden="true" />}
-            </span>
-            <span className="vp-name">
-              {p.name}{p.userId === myUserId ? " (you)" : ""}
-            </span>
-            <span className="vp-flags">
-              {p.deafened ? <VolumeX size={13} aria-label="Deafened" /> : p.muted ? <MicOff size={13} aria-label="Muted" /> : null}
-              {p.speaking && <em className="vp-speaking-text">speaking</em>}
-            </span>
-            <audio
-              ref={(el) => { if (el) { audioEls.current.set(p.userId, el); const s = remoteStreams[p.userId]; if (s) el.srcObject = s; } }}
-              autoPlay
-              playsInline
-            />
-          </button>
-        ))}
+        {participants.map((p) => {
+          const isSelf = p.userId === myUserId;
+          const stream = remoteStreams[p.userId];
+          // My own video shows as soon as I enable it; others' video shows when
+          // their session reports video: true.
+          const showVideo = isSelf ? videoOn : p.video;
+          return (
+            <div key={p.userId} className={`vp-tile ${p.speaking ? "speaking" : ""} ${isSelf ? "self" : ""}`}>
+              <div className="vp-media">
+                {showVideo ? (
+                  <video
+                    className="vp-video"
+                    autoPlay
+                    playsInline
+                    muted={isSelf}
+                    ref={(el) => {
+                      if (!el) return;
+                      if (isSelf) {
+                        localVideoRef.current = el;
+                        el.srcObject = localStream.current;
+                        void el.play().catch(() => {});
+                      } else {
+                        videoEls.current.set(p.userId, el);
+                        el.srcObject = stream ?? null;
+                        void el.play().catch(() => {});
+                      }
+                    }}
+                  />
+                ) : (
+                  <span className="vp-avatar-holder">
+                    <ProfileAvatar name={p.name} url={p.avatarUrl} size={64} showPresence={false} />
+                    {p.speaking && <span className="vp-speaking-ring" aria-hidden="true" />}
+                  </span>
+                )}
+              </div>
+              <button className="vp-name-btn" onClick={() => onOpenProfile(p.userId)}>
+                <span className="vp-name">{p.name}{isSelf ? " (you)" : ""}</span>
+              </button>
+              <span className="vp-flags">
+                {p.deafened ? <VolumeX size={13} aria-label="Deafened" /> : p.muted ? <MicOff size={13} aria-label="Muted" /> : null}
+                {p.speaking && <em className="vp-speaking-text">speaking</em>}
+              </span>
+              {/* Remote audio sink — never plays my own microphone back. */}
+              {!isSelf && (
+                <audio
+                  ref={(el) => { if (el) { audioEls.current.set(p.userId, el); const s = remoteStreams[p.userId]; if (s) el.srcObject = s; el.muted = deafened; } }}
+                  autoPlay
+                  playsInline
+                />
+              )}
+            </div>
+          );
+        })}
         {participants.length === 0 && <p className="fc-muted">Connecting to the channel…</p>}
       </div>
 

@@ -1,26 +1,33 @@
+import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "./ProfileAvatar";
 import ProfileEffect from "./ProfileEffect";
+import FollowListModal from "./FollowListModal";
 import { BADGES, nameStyle, plateStyle } from "@/lib/cosmetics";
 import { toast } from "sonner";
-import { ArrowLeft, MessageCircle, UserPlus } from "lucide-react";
+import { ArrowLeft, MessageCircle, UserCheck, UserPlus } from "lucide-react";
 
 export default function FullProfile({
   userId,
   onBack,
   onMessage,
+  onOpenProfile,
 }: {
   userId: string;
   onBack: () => void;
   onMessage: (userId: string) => void;
+  onOpenProfile?: (userId: string) => void;
 }) {
   const profile = useQuery(api.profiles.getProfile, { userId: userId as Id<"users"> });
   const appearance = useQuery(api.profiles.getAppearance, {});
   const sendRequest = useMutation(api.social.sendFriendRequest);
   const startDirect = useMutation(api.dms.startDirect);
+  const follow = useMutation(api.social.follow);
+  const unfollow = useMutation(api.social.unfollow);
+  const [followList, setFollowList] = useState<"followers" | "following" | "mutuals" | null>(null);
 
   if (!profile) {
     return (
@@ -88,8 +95,19 @@ export default function FullProfile({
         <div className="pf-page-actions">
           {!profile.isSelf && (
             <>
+              <Button
+                size="sm"
+                variant={profile.isFollowing ? "outline" : "default"}
+                onClick={async () => {
+                  try {
+                    if (profile.isFollowing) await unfollow({ userId: profile.userId as Id<"users"> });
+                    else await follow({ userId: profile.userId as Id<"users"> });
+                    toast.success(profile.isFollowing ? "Unfollowed" : "Following");
+                  } catch (e) { toast.error(e instanceof Error ? e.message : "Failed"); }
+                }}
+              ><UserCheck className="mr-1 h-4 w-4" /> {profile.isFollowing ? "Following" : profile.followsYou ? "Follow back" : "Follow"}</Button>
               {!profile.isFriend && (
-                <Button size="sm" onClick={async () => {
+                <Button size="sm" variant="outline" onClick={async () => {
                   try { await sendRequest({ toId: profile.userId as Id<"users"> }); toast.success("Friend request sent"); }
                   catch (e) { toast.error(e instanceof Error ? e.message : "Failed"); }
                 }}><UserPlus className="mr-1 h-4 w-4" /> Add Friend</Button>
@@ -110,6 +128,14 @@ export default function FullProfile({
         <p className="pf-handle">@{profile.username}</p>
         {profile.customStatus && <p className="pf-status">{profile.customStatus}</p>}
         {profile.pronouns && <p className="pf-bio">{profile.pronouns}</p>}
+        {(profile.isMutual || profile.followsYou) && (
+          <p className="pf-follow-tag">{profile.isMutual ? "Mutual Following" : "Follows you"}</p>
+        )}
+        <div className="pf-follow-stats pf-follow-stats-lg">
+          <button onClick={() => setFollowList("followers")}><strong>{profile.followers}</strong><span>Followers</span></button>
+          <button onClick={() => setFollowList("following")}><strong>{profile.following}</strong><span>Following</span></button>
+          {!profile.isSelf && <button onClick={() => setFollowList("mutuals")}><strong>•</strong><span>Mutuals</span></button>}
+        </div>
       </div>
 
       {badges.length > 0 && (
@@ -144,6 +170,16 @@ export default function FullProfile({
         <h3>Member Since</h3>
         <p className="pf-bio">{new Date(profile.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}</p>
       </section>
+
+      {followList && (
+        <FollowListModal
+          userId={profile.userId}
+          title={profile.displayName}
+          initialTab={followList}
+          onClose={() => setFollowList(null)}
+          onOpenProfile={(id) => { setFollowList(null); if (onOpenProfile) onOpenProfile(id); else onBack(); }}
+        />
+      )}
     </div>
   );
 }

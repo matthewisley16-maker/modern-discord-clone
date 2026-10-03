@@ -5,7 +5,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Compass, ImagePlus, LogOut, Mic, Plus, Shield, Trash2, Volume2, X } from "lucide-react";
+import { Compass, ImagePlus, LayoutList, LogOut, Mic, Plus, Shield, Trash2, Volume2, X } from "lucide-react";
+import ChannelManager from "./ChannelManager";
 
 const CATEGORIES = ["General", "Gaming", "Music", "Art", "Tech", "Study", "Sports", "Community"];
 const MAX_ICON_BYTES = 5 * 1024 * 1024;
@@ -300,6 +301,9 @@ export default function CommunitySettings({
                   </li>
                 ))}
             </ul>
+
+            <h3><LayoutList size={16} /> Channels &amp; categories</h3>
+            <ChannelManager serverId={serverId} roles={(details.roles ?? []).map((r) => ({ _id: r._id as string, name: r.name }))} />
 
             <h3><Shield size={16} /> General</h3>
             <label>Community name
