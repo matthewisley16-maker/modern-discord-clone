@@ -75,6 +75,7 @@ export default function Dashboard() {
   const [categoryId, setCategoryId] = useState<string>("");
   const [userLimit, setUserLimit] = useState(0);
   const [isPrivateChannel, setIsPrivateChannel] = useState(false);
+  const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>([]);
   const [communitySettingsOpen, setCommunitySettingsOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -142,6 +143,7 @@ export default function Dashboard() {
     setCategoryId("");
     setUserLimit(0);
     setIsPrivateChannel(false);
+    setAllowedRoleIds([]);
     setModal(next);
   }
 
@@ -170,6 +172,7 @@ export default function Dashboard() {
             ...(categoryId ? { categoryId: categoryId as Id<"channelCategories"> } : {}),
             userLimit,
             isPrivate: isPrivateChannel,
+            allowedRoleIds: isPrivateChannel ? allowedRoleIds : [],
           });
         }
       } else if (modal === "category" && communityId) {
@@ -647,6 +650,34 @@ export default function Dashboard() {
                         <input type="checkbox" checked={isPrivateChannel} onChange={(e) => setIsPrivateChannel(e.target.checked)} />
                         Private — only roles you allow can see and join it
                       </label>
+                      {isPrivateChannel && (
+                        <>
+                          <span className="fc-field-label">Roles that can see this channel</span>
+                          <div className="fc-radio-row">
+                            {["moderator", "member"].map((r) => (
+                              <label key={r} className={`fc-radio ${allowedRoleIds.includes(r) ? "active" : ""}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={allowedRoleIds.includes(r)}
+                                  onChange={(e) => setAllowedRoleIds(e.target.checked ? [...allowedRoleIds, r] : allowedRoleIds.filter((x) => x !== r))}
+                                />
+                                {r.charAt(0).toUpperCase() + r.slice(1)}
+                              </label>
+                            ))}
+                            {details?.roles.filter((r) => r.name !== "owner").map((r) => (
+                              <label key={r._id} className={`fc-radio ${allowedRoleIds.includes(r._id) ? "active" : ""}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={allowedRoleIds.includes(r._id)}
+                                  onChange={(e) => setAllowedRoleIds(e.target.checked ? [...allowedRoleIds, r._id] : allowedRoleIds.filter((x) => x !== r._id))}
+                                />
+                                {r.name}
+                              </label>
+                            ))}
+                          </div>
+                          <p className="fc-muted">Owners and admins can always see every channel.</p>
+                        </>
+                      )}
                     </>
                   )}
                 </>

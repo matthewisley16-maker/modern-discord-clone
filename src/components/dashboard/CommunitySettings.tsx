@@ -249,6 +249,46 @@ export default function CommunitySettings({
                       />
                       Private
                     </label>
+                    {c.isPrivate && (
+                      <div className="fc-radio-row">
+                        {["moderator", "member"].map((r) => {
+                          const allowed = (c.allowedRoleIds ?? []).includes(r);
+                          return (
+                            <label key={r} className={`fc-radio ${allowed ? "active" : ""}`}>
+                              <input
+                                type="checkbox"
+                                checked={allowed}
+                                onChange={(e) => {
+                                  const next = e.target.checked
+                                    ? [...(c.allowedRoleIds ?? []), r]
+                                    : (c.allowedRoleIds ?? []).filter((x) => x !== r);
+                                  updateChannelFull({ channelId: c._id, allowedRoleIds: next }).then(() => toast.success("Access updated.")).catch((err) => toast.error(err.message));
+                                }}
+                              />
+                              {r.charAt(0).toUpperCase() + r.slice(1)}
+                            </label>
+                          );
+                        })}
+                        {(details.roles ?? []).filter((r) => r.name !== "owner").map((r) => {
+                          const allowed = (c.allowedRoleIds ?? []).includes(r._id);
+                          return (
+                            <label key={r._id} className={`fc-radio ${allowed ? "active" : ""}`}>
+                              <input
+                                type="checkbox"
+                                checked={allowed}
+                                onChange={(e) => {
+                                  const next = e.target.checked
+                                    ? [...(c.allowedRoleIds ?? []), r._id]
+                                    : (c.allowedRoleIds ?? []).filter((x) => x !== r._id);
+                                  updateChannelFull({ channelId: c._id, allowedRoleIds: next }).then(() => toast.success("Access updated.")).catch((err) => toast.error(err.message));
+                                }}
+                              />
+                              {r.name}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                     <button
                       className="fc-voice-manage-del"
                       aria-label={`Delete ${c.name}`}
