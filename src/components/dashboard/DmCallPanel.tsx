@@ -5,9 +5,12 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
 import { toast } from "sonner";
-import { Maximize2, Mic, MicOff, Minimize2, PhoneOff, Video, VideoOff, VolumeX, X } from "lucide-react";
+import { Maximize2, Mic, MicOff, Minimize2, PhoneOff, Video, VideoOff, Volume2, VolumeX, X } from "lucide-react";
 
 const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+// Remembered across the session so the window reappears where the user put it.
+let savedPos: { x: number; y: number } | null = null;
 
 function fmtDuration(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -15,17 +18,21 @@ function fmtDuration(seconds: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+type View = "compact" | "float" | "full";
+
 /**
- * A real 1:1 call inside a DM conversation.
+ * A real 1:1 call inside a DM conversation, rendered as a DRAGGABLE floating
+ * window for both audio and video calls.
  *
  * Audio/video are peer-to-peer over WebRTC; signaling is relayed through Convex
- * scoped to the conversation. The component stays mounted while the user
- * navigates Freecord, so `minimized` only changes what is drawn.
+ * scoped to the conversation. The component is mounted at the app shell level
+ * and stays mounted while the user navigates, so the call keeps running.
  */
 export default function DmCallPanel({
   conversationId,
   peerId,
   peerName,
+  peerUsername,
   peerAvatarUrl,
   myUserId,
   media,
@@ -37,6 +44,7 @@ export default function DmCallPanel({
   conversationId: Id<"dmConversations">;
   peerId: Id<"users">;
   peerName: string;
+  peerUsername?: string | null;
   peerAvatarUrl?: string | null;
   myUserId: string;
   media: "voice" | "video";
@@ -51,10 +59,13 @@ export default function DmCallPanel({
 
   const [muted, setMuted] = useState(false);
   const [cameraOn, setCameraOn] = useState(media === "video");
+  const [speakerMuted, setSpeakerMuted] = useState(false);
   const [connection, setConnection] = useState<"connecting" | "connected" | "lost">("connecting");
-  const [remoteAudible, setRemoteAudible] = useState(false);
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const [view, setView] = useState<View>(minimized ? "compact" : "float");
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(savedPos);
+  const [dragging, setDragging] = useState(false);
 
   const localStream = useRef<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -62,6 +73,8 @@ export default function DmCallPanel({
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ dx: number; dy: number } | null>(null);
   const startedRef = useRef(false);
 
   // Call duration once connected.
@@ -70,6 +83,9 @@ export default function DmCallPanel({
     const t = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(t);
   }, [connection]);
+
+  // Keep speaker mute applied to the (always-mounted) remote audio sink.
+  useEffect(() => { if (audioEl.current) audioEl.current.muted = speakerMuted; }, [speakerMuted]);
 
   // Acquire local media and build the peer connection once.
   useEffect(() => {
@@ -104,7 +120,6 @@ export default function DmCallPanel({
         remoteStreamRef.current = remote;
         if (audioEl.current) { audioEl.current.srcObject = remote; void audioEl.current.play().catch(() => {}); }
         if (remoteVideoRef.current) { remoteVideoRef.current.srcObject = remote; void remoteVideoRef.current.play().catch(() => {}); }
-        setRemoteAudible(true);
         setRemoteHasVideo(remote.getVideoTracks().length > 0);
       };
       pc.onicecandidate = (e) => {
@@ -201,86 +216,170 @@ export default function DmCallPanel({
     }
   }
 
+  // ---- Dragging (header only), clamped to the visible area ----
+  function startDrag(e: React.PointerEvent) {
+    if ((e.target as HTMLElement).closest("button")) return; // buttons never drag
+    const el = rootRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    dragRef.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    setPos({ x: rect.left, y: rect.top });
+    setDragging(true);
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+  useEffect(() => {
+    if (!dragging) return;
+    function move(e: PointerEvent) {
+      const el = rootRef.current;
+      const d = dragRef.current;
+      if (!el || !d) return;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const x = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - d.dx));
+      const y = Math.max(8, Math.min(window.innerHeight - h - 8, e.clientY - d.dy));
+      savedPos = { x, y };
+      setPos({ x, y });
+    }
+    function up() { dragRef.current = null; setDragging(false); }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+  }, [dragging]);
+
+  // Bring the window back inside the viewport if the screen shrinks.
+  useEffect(() => {
+    function onResize() {
+      if (!pos || !rootRef.current) return;
+      const w = rootRef.current.offsetWidth;
+      const h = rootRef.current.offsetHeight;
+      setPos({ x: Math.max(8, Math.min(window.innerWidth - w - 8, pos.x)), y: Math.max(8, Math.min(window.innerHeight - h - 8, pos.y)) });
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [pos]);
+
+  function setViewAndNotify(next: View) {
+    setView(next);
+    if (next === "compact") onMinimize?.();
+    else if (next === "full") onExpand?.();
+  }
+
   const label = connection === "connected" ? "Connected" : connection === "connecting" ? "Connecting…" : "Connection lost";
+  const title = media === "video" ? "Video Call" : "Voice Call";
+  const style = pos ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" } : undefined;
+
+  const remoteVideo = (
+    <video
+      className={`fc-callwin-video ${remoteHasVideo ? "" : "hidden"}`}
+      autoPlay
+      playsInline
+      ref={(el) => { if (el) { remoteVideoRef.current = el; el.srcObject = remoteStreamRef.current; void el.play().catch(() => {}); } }}
+    />
+  );
+  const remoteFallback = !remoteHasVideo && (
+    <span className="fc-callwin-avbig"><ProfileAvatar name={peerName} url={peerAvatarUrl} size={view === "full" ? 96 : 60} showPresence={false} /></span>
+  );
+  const localVideo = cameraOn && (
+    <video
+      className="fc-callwin-selfvideo"
+      autoPlay
+      playsInline
+      muted
+      ref={(el) => { if (el) { localVideoRef.current = el; el.srcObject = localStream.current; void el.play().catch(() => {}); } }}
+    />
+  );
+
+  const controls = (
+    <div className="fc-callwin-controls">
+      <button className={muted ? "active" : ""} onClick={toggleMute} aria-label={muted ? "Unmute microphone" : "Mute microphone"} title={muted ? "Unmute" : "Mute"}>
+        {muted ? <MicOff size={16} /> : <Mic size={16} />}
+      </button>
+      <button className={speakerMuted ? "active" : ""} onClick={() => setSpeakerMuted((v) => !v)} aria-label={speakerMuted ? "Turn sound on" : "Mute sound"} title={speakerMuted ? "Sound on" : "Mute sound"}>
+        {speakerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+      </button>
+      <button className={cameraOn ? "active" : ""} onClick={toggleCamera} aria-label="Toggle camera" title="Camera">
+        {cameraOn ? <Video size={16} /> : <VideoOff size={16} />}
+      </button>
+      {view === "full"
+        ? <button onClick={() => setViewAndNotify("float")} aria-label="Shrink call window" title="Shrink"><Minimize2 size={16} /></button>
+        : <button onClick={() => setViewAndNotify("full")} aria-label="Expand call window" title="Expand"><Maximize2 size={16} /></button>}
+      <button className="danger" onClick={onLeave} aria-label="End call" title="End call"><PhoneOff size={16} /></button>
+    </div>
+  );
 
   return (
     <>
-      {/* Always-mounted remote audio sink so audio keeps playing when minimized. */}
+      {/* Always-mounted remote audio sink so audio keeps playing in every view. */}
       <audio ref={audioEl} autoPlay playsInline style={{ display: "none" }} />
-      <span className="vp-hidden-volume" aria-hidden="true"><VolumeX size={1} /></span>
 
-      {minimized ? (
-        <div className="vp-mini" role="region" aria-label={`Call with ${peerName}`} onClick={onExpand} title="Open the call">
-          <div className="vp-mini-head">
-            <span className="vp-mini-title"><span className={`vp-mini-dot ${connection}`} /> {media === "video" ? "Video" : "Voice"} · {peerName}</span>
-            <button className="vp-mini-x" aria-label="End call" onClick={(e) => { e.stopPropagation(); onLeave(); }}><X size={14} /></button>
-          </div>
-          <div className="vp-mini-avs">
-            <span className="vp-mini-av"><ProfileAvatar name={peerName} url={peerAvatarUrl} size={26} showPresence={false} /></span>
-            <span className="vp-mini-count">{fmtDuration(seconds)}</span>
-          </div>
-          {cameraOn && (
-            <video className="vp-mini-cam" autoPlay playsInline muted ref={(el) => { if (el) { el.srcObject = localStream.current; void el.play().catch(() => {}); } }} />
-          )}
-          <div className="vp-mini-controls" onClick={(e) => e.stopPropagation()}>
-            <button className={muted ? "active" : ""} onClick={toggleMute} aria-label={muted ? "Unmute" : "Mute"}>{muted ? <MicOff size={16} /> : <Mic size={16} />}</button>
-            <button className={cameraOn ? "active" : ""} onClick={toggleCamera} aria-label="Toggle camera">{cameraOn ? <Video size={16} /> : <VideoOff size={16} />}</button>
-            <button onClick={onExpand} aria-label="Open the call"><Maximize2 size={16} /></button>
-            <button className="danger" onClick={onLeave} aria-label="End call"><PhoneOff size={16} /></button>
-          </div>
-        </div>
-      ) : (
+      {view === "full" ? (
         <div className="fc-call-overlay" role="dialog" aria-label={`Call with ${peerName}`}>
           <div className="vp-panel">
             <header className="vp-head">
               <div>
-                <p className="vp-title">{media === "video" ? "Video call" : "Voice call"} · {peerName}</p>
+                <p className="vp-title">{title} · {peerName}</p>
                 <p className={`vp-status ${connection}`}><span className="vp-dot" /> {label}{connection === "connected" ? ` · ${fmtDuration(seconds)}` : ""}</p>
               </div>
               <div className="vp-head-actions">
-                {onMinimize && (
-                  <Button size="sm" variant="outline" onClick={onMinimize} title="Minimize — stay connected while you use Freecord">
-                    <Minimize2 className="mr-1 h-4 w-4" /> Minimize
-                  </Button>
-                )}
+                <Button size="sm" variant="outline" onClick={() => setViewAndNotify("float")}><Minimize2 className="mr-1 h-4 w-4" /> Shrink</Button>
                 <Button size="sm" variant="destructive" onClick={onLeave}><PhoneOff className="mr-1 h-4 w-4" /> End call</Button>
               </div>
             </header>
-
-            <div className="vp-grid">
-              <div className="vp-tile self">
-                <div className="vp-media">
-                  {cameraOn ? (
-                    <video className="vp-video" autoPlay playsInline muted ref={(el) => { if (el) { localVideoRef.current = el; el.srcObject = localStream.current; void el.play().catch(() => {}); } }} />
-                  ) : (
-                    <span className="vp-avatar-holder"><ProfileAvatar name="You" size={64} showPresence={false} /></span>
-                  )}
-                </div>
-                <span className="vp-name">You{muted ? " (muted)" : ""}</span>
+            <div className="fc-callwin-stage">
+              <div className="fc-callwin-remote">
+                {remoteVideo}
+                {remoteFallback}
+                <span className="fc-callwin-tag">{peerName}{peerUsername ? ` · @${peerUsername}` : ""}</span>
               </div>
-              <div className={`vp-tile ${remoteAudible && !remoteHasVideo ? "speaking" : ""}`}>
-                <div className="vp-media">
-                  {remoteHasVideo ? (
-                    <video className="vp-video" autoPlay playsInline ref={(el) => { if (el) { remoteVideoRef.current = el; el.srcObject = remoteStreamRef.current; void el.play().catch(() => {}); } }} />
-                  ) : (
-                    <span className="vp-avatar-holder">
-                      <ProfileAvatar name={peerName} url={peerAvatarUrl} size={64} showPresence={false} />
-                    </span>
-                  )}
-                </div>
-                <span className="vp-name">{peerName}</span>
-              </div>
+              <div className="fc-callwin-local">{localVideo}<span className="fc-callwin-tag">You</span></div>
             </div>
-
-            <footer className="vp-controls">
-              <button className={muted ? "active" : ""} onClick={toggleMute} aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>
-                {muted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-              </button>
-              <button className={cameraOn ? "active" : ""} onClick={toggleCamera} aria-label="Toggle camera" title="Toggle camera">
-                {cameraOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
-              </button>
-            </footer>
+            {controls}
           </div>
+        </div>
+      ) : (
+        <div
+          ref={rootRef}
+          className={`fc-callwin ${view === "compact" ? "compact" : ""} ${dragging ? "dragging" : ""} ${pos ? "" : "default-pos"}`}
+          style={style}
+          role="region"
+          aria-label={`Call with ${peerName}`}
+        >
+          <div className="fc-callwin-head" onPointerDown={startDrag} title="Drag to move">
+            <span className="fc-callwin-title">
+              <span className={`vp-mini-dot ${connection}`} />
+              {view === "compact" ? peerName : `${title} · ${peerName}`}
+            </span>
+            <span className="fc-callwin-head-btns">
+              {view === "float" && (
+                <button aria-label="Minimize call window" title="Minimize" onClick={(e) => { e.stopPropagation(); setViewAndNotify("compact"); }}><Minimize2 size={14} /></button>
+              )}
+              {view === "compact" && (
+                <button aria-label="Restore call window" title="Restore" onClick={(e) => { e.stopPropagation(); setViewAndNotify("float"); }}><Maximize2 size={14} /></button>
+              )}
+              <button className="danger" aria-label="End call" title="End call" onClick={(e) => { e.stopPropagation(); onLeave(); }}><X size={14} /></button>
+            </span>
+          </div>
+
+          <div className="fc-callwin-body">
+            {view === "compact" ? (
+              <div className="fc-callwin-compact-row">
+                <ProfileAvatar name={peerName} url={peerAvatarUrl} size={26} showPresence={false} />
+                <span className="fc-callwin-time">{connection === "connected" ? fmtDuration(seconds) : label}</span>
+              </div>
+            ) : (
+              <div className="fc-callwin-stage">
+                <div className="fc-callwin-remote">
+                  {remoteVideo}
+                  {remoteFallback}
+                  <span className="fc-callwin-tag">{peerName}{peerUsername ? ` · @${peerUsername}` : ""}</span>
+                </div>
+                <div className="fc-callwin-local">{localVideo}<span className="fc-callwin-tag">You</span></div>
+                <span className="fc-callwin-timer">{connection === "connected" ? fmtDuration(seconds) : label}</span>
+              </div>
+            )}
+          </div>
+
+          {controls}
         </div>
       )}
     </>

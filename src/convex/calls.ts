@@ -167,10 +167,12 @@ export const incomingCall = query({
       .collect();
     const invite = ringing.sort((a, b) => b._creationTime - a._creationTime)[0];
     if (!invite) return null;
+    const fromUser = await ctx.db.get(invite.fromId);
     return {
       inviteId: invite._id,
       fromId: invite.fromId,
       fromName: await displayNameOf(ctx, invite.fromId),
+      fromUsername: fromUser?.username ?? null,
       fromAvatarUrl: await avatarUrlOf(ctx, invite.fromId),
       media: invite.media,
       conversationId: invite.conversationId ?? null,
@@ -196,10 +198,13 @@ export const outgoingCall = query({
     const since = recent.endedAt ?? recent._creationTime;
     const ttl = recent.status === "ringing" ? 60_000 : recent.status === "accepted" ? 3_600_000 : 20_000;
     if (Date.now() - since > ttl) return null;
+    const toUser = await ctx.db.get(recent.toId);
     return {
       inviteId: recent._id,
       toId: recent.toId,
       toName: await displayNameOf(ctx, recent.toId as Id<"users">),
+      toUsername: toUser?.username ?? null,
+      toAvatarUrl: await avatarUrlOf(ctx, recent.toId),
       media: recent.media,
       status: recent.status,
       conversationId: recent.conversationId ?? null,

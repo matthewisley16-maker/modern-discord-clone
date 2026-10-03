@@ -7,6 +7,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Avatar, EmptyState } from "./ui";
 import MediaAttachment from "./MediaAttachment";
+import MentionText from "./MentionText";
+import { useMentions } from "@/hooks/use-mentions";
 import { toast } from "sonner";
 import { CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
 
@@ -36,8 +38,10 @@ export default function ChannelView({
   isVoice,
   highlightMessageId,
   onHighlightHandled,
+  serverId,
 }: {
   channelId: Id<"channels">;
+  serverId?: Id<"servers">;
   channelName: string;
   channelDescription: string;
   myUserId: string;
@@ -79,8 +83,11 @@ export default function ChannelView({
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const msgInput = useRef<HTMLInputElement>(null);
   // Typing heartbeats are throttled and cleared on send, switch, and unmount.
   const { onType, stop: stopTyping } = useTyping({ channelId });
+  // @mention autocomplete — real users, prioritized by the viewer's follows.
+  const mentions = useMentions({ value: draft, setValue: setDraft, inputRef: msgInput, serverId });
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, channelId]);
   useEffect(() => { setSearch(""); setReplyTo(null); setEditing(null); setDraft(""); }, [channelId]);
@@ -264,7 +271,7 @@ export default function ChannelView({
                     {m.reply.deleted ? <em>Original message deleted</em> : <><strong>{m.reply.author}</strong> {m.reply.body}</>}
                   </div>
                 )}
-                <p className="fc-text">{renderMentions(m.body)}</p>
+                <MentionText body={m.body} mentions={m.mentionUsers} onOpenProfile={onOpenProfile} />
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
                     {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}
@@ -335,16 +342,40 @@ export default function ChannelView({
             </div>
           )}
           {emojiOpen && <div className="fc-emoji-picker">{EMOJIS.map((e) => <button key={e} onClick={() => { setDraft(draft + e); setEmojiOpen(false); }}>{e}</button>)}</div>}
+          {mentions.open && (
+            <div className="fc-mention-menu" role="listbox" aria-label="Mention suggestions">
+              {mentions.suggestions.map((s, i) => (
+                <button
+                  key={s.userId}
+                  type="button"
+                  role="option"
+                  aria-selected={i === mentions.index}
+                  className={`fc-mention-item ${i === mentions.index ? "active" : ""}`}
+                  onMouseEnter={() => mentions.setIndex(i)}
+                  onMouseDown={(e) => { e.preventDefault(); mentions.choose(s); }}
+                >
+                  <Avatar name={s.displayName} size={26} url={s.avatarUrl} presence={s.presence} />
+                  <span className="fc-mention-name"><strong>{s.displayName}</strong><small>@{s.username}</small></span>
+                  {s.isMutual ? <em className="fc-mention-flag mutual">Mutual</em>
+                    : s.isFollowing ? <em className="fc-mention-flag following">Following</em>
+                      : s.followsYou ? <em className="fc-mention-flag follows-you">Follows you</em> : null}
+                </button>
+              ))}
+            </div>
+          )}
           <form className="fc-composer" onSubmit={submit}>
             <input ref={fileInput} type="file" multiple hidden onChange={(e) => { Array.from(e.target.files ?? []).forEach(stageFile); e.target.value = ""; }} />
             <button type="button" title="Attach a file" aria-label="Attach a file" onClick={() => fileInput.current?.click()}><Paperclip size={19} /></button>
             <button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => setEmojiOpen((v) => !v)}><Smile size={19} /></button>
             <input
+              ref={msgInput}
               aria-label="Message"
               value={draft}
               disabled={busy}
               maxLength={4000}
-              onChange={(e) => { setDraft(e.target.value); onType(e.target.value); }}
+              onChange={(e) => { mentions.onValueChange(e.target.value, e.target.selectionStart); onType(e.target.value); }}
+              onKeyDown={mentions.onKeyDown}
+              onBlur={() => window.setTimeout(mentions.close, 120)}
               onPaste={(e) => { const files = Array.from(e.clipboardData.files ?? []); if (files.length) { e.preventDefault(); files.forEach(stageFile); } }}
               placeholder={editing ? "Edit your message…" : `Message #${channelName}`}
             />
@@ -358,12 +389,4 @@ export default function ChannelView({
   );
 }
 
-/** Highlight @mentions, #channels and @role-style tokens without using innerHTML. */
-function renderMentions(body: string) {
-  const parts = body.split(/(\s+)/);
-  return parts.map((part, i) => {
-    if (/^@[a-z0-9._-]+$/i.test(part)) return <span key={i} className="fc-mention">{part}</span>;
-    if (/^#[a-z0-9-]+$/i.test(part)) return <span key={i} className="fc-channel-mention">{part}</span>;
-    return part;
-  });
-}
+

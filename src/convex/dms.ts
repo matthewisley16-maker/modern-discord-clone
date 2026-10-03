@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
+import { resolveMentions } from "./mentions";
 import type { Id } from "./_generated/dataModel";
 
 async function requireMember(ctx: Parameters<typeof displayNameOf>[0], conversationId: Id<"dmConversations">, userId: Id<"users">) {
@@ -282,6 +283,7 @@ export const messages = query({
         // Attachments are removed on delete-for-everyone, so this stays empty.
         attachments,
         reply,
+        mentionUsers: await resolveMentions(ctx, m.body, { conversationId }),
       });
     }
 
@@ -312,13 +314,15 @@ export const sendMessage = mutation({
     // Notify other members (muted conversations are skipped).
     const members = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
     const convo = await ctx.db.get(conversationId);
+    const mentioned = await resolveMentions(ctx, text, { conversationId });
     for (const m of members) {
       if (m.userId === me || m.muted) continue;
+      const isMention = mentioned.some((u) => u.userId === m.userId);
       await notify(
         ctx,
         m.userId,
-        replyToId ? "reply" : "dm",
-        replyToId ? "New reply" : "New direct message",
+        isMention ? "mention" : replyToId ? "reply" : "dm",
+        isMention ? "You were mentioned" : replyToId ? "New reply" : "New direct message",
         `${await displayNameOf(ctx, me)}${convo?.type === "group" ? ` in ${convo.name ?? "a group"}` : ""}: ${text.slice(0, 80)}`,
         // Deep link: open this conversation and jump to the message.
         `?dm=${conversationId}&message=${messageId}`,

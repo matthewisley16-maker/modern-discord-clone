@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, EmptyState } from "./ui";
 import MediaAttachment from "./MediaAttachment";
+import MentionText from "./MentionText";
+import { useMentions } from "@/hooks/use-mentions";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
 import { toast } from "sonner";
@@ -73,7 +75,10 @@ export default function DmView({
   const [showGroupPanel, setShowGroupPanel] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const msgInput = useRef<HTMLInputElement>(null);
   const { onType, stop: stopTyping } = useTyping({ conversationId });
+  // @mention autocomplete scoped to this conversation's members.
+  const mentions = useMentions({ value: draft, setValue: setDraft, inputRef: msgInput, conversationId });
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, conversationId]);
   useEffect(() => { markRead({ conversationId }).catch(() => {}); setSearch(""); setReplyTo(null); setEditing(null); }, [conversationId, markRead]);
@@ -265,7 +270,7 @@ export default function DmView({
                 {m.deleted ? (
                   <p className="fc-deleted">This message was deleted.</p>
                 ) : (
-                  <p className="fc-text">{m.body}</p>
+                  <MentionText body={m.body} mentions={m.mentionUsers} onOpenProfile={onOpenProfile} />
                 )}
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
@@ -347,16 +352,40 @@ export default function DmView({
             {EMOJIS.map((e) => <button key={e} onClick={() => { setDraft(draft + e); setEmojiOpen(false); }}>{e}</button>)}
           </div>
         )}
+        {mentions.open && (
+          <div className="fc-mention-menu" role="listbox" aria-label="Mention suggestions">
+            {mentions.suggestions.map((s, i) => (
+              <button
+                key={s.userId}
+                type="button"
+                role="option"
+                aria-selected={i === mentions.index}
+                className={`fc-mention-item ${i === mentions.index ? "active" : ""}`}
+                onMouseEnter={() => mentions.setIndex(i)}
+                onMouseDown={(e) => { e.preventDefault(); mentions.choose(s); }}
+              >
+                <Avatar name={s.displayName} size={26} url={s.avatarUrl} presence={s.presence} />
+                <span className="fc-mention-name"><strong>{s.displayName}</strong><small>@{s.username}</small></span>
+                {s.isMutual ? <em className="fc-mention-flag mutual">Mutual</em>
+                  : s.isFollowing ? <em className="fc-mention-flag following">Following</em>
+                    : s.followsYou ? <em className="fc-mention-flag follows-you">Follows you</em> : null}
+              </button>
+            ))}
+          </div>
+        )}
         <form className="fc-composer" onSubmit={submit}>
           <input ref={fileInput} type="file" multiple hidden onChange={(e) => { Array.from(e.target.files ?? []).forEach(stageFile); e.target.value = ""; }} />
           <button type="button" title="Attach a file" aria-label="Attach a file" onClick={() => fileInput.current?.click()}><Paperclip size={19} /></button>
           <button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => setEmojiOpen((v) => !v)}><Smile size={19} /></button>
           <input
+            ref={msgInput}
             aria-label="Message"
             value={draft}
             disabled={busy}
             maxLength={4000}
-            onChange={(e) => { setDraft(e.target.value); onType(e.target.value); }}
+            onChange={(e) => { mentions.onValueChange(e.target.value, e.target.selectionStart); onType(e.target.value); }}
+            onKeyDown={mentions.onKeyDown}
+            onBlur={() => window.setTimeout(mentions.close, 120)}
             onPaste={(e) => { const files = Array.from(e.clipboardData.files ?? []); if (files.length) { e.preventDefault(); files.forEach(stageFile); } }}
             placeholder={editing ? "Edit your message…" : `Message ${title}`}
           />

@@ -122,6 +122,7 @@ export default function Dashboard() {
     conversationId: Id<"dmConversations">;
     peerId: Id<"users">;
     name: string;
+    username?: string | null;
     media: "voice" | "video";
   } | null>(null);
   // Which call UI is showing: full screen or the floating minimized window.
@@ -489,6 +490,7 @@ export default function Dashboard() {
         conversationId: outgoingCall.conversationId as Id<"dmConversations">,
         peerId: outgoingCall.toId as Id<"users">,
         name: outgoingCall.toName,
+        username: outgoingCall.toUsername ?? null,
         media: outgoingCall.media,
       });
     }
@@ -845,6 +847,7 @@ export default function Dashboard() {
             {section === "community" && details && channel && (
               <ChannelView
                 channelId={channel._id}
+                serverId={communityId ?? undefined}
                 channelName={channel.name}
                 channelDescription={channel.description}
                 myUserId={me?.userId ?? ""}
@@ -918,6 +921,7 @@ export default function Dashboard() {
           conversationId={dmCall.conversationId}
           peerId={dmCall.peerId}
           peerName={dmCall.name}
+          peerUsername={dmCall.username}
           myUserId={me?.userId ?? ""}
           media={dmCall.media}
           minimized={callMinimized}
@@ -960,6 +964,7 @@ export default function Dashboard() {
                       conversationId: incomingCall.conversationId as Id<"dmConversations">,
                       peerId: incomingCall.fromId as Id<"users">,
                       name: incomingCall.fromName,
+                      username: incomingCall.fromUsername ?? null,
                       media: incomingCall.media,
                     });
                   } else {
