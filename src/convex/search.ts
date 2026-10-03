@@ -1,7 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { query } from "./_generated/server";
-import { displayNameOf, profileOf, settingsOf } from "./lib";
+import { avatarUrlOf, displayNameOf, profileOf, settingsOf } from "./lib";
 import type { QueryCtx } from "./_generated/server";
 
 async function presenceOf(ctx: QueryCtx, userId: string) {
@@ -22,7 +22,7 @@ export const global = query({
     if (!userId || term.length < 1) return empty;
     const want = filter ?? "all";
     const out: {
-      people: { userId: string; username: string; displayName: string; avatarColor: string }[];
+      people: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null }[];
       communities: { serverId: string; name: string; description: string; iconColor: string; memberCount: number }[];
       messages: { messageId: string; body: string; author: string; channelName: string; communityName: string; createdAt: number }[];
       channels: { channelId: string; name: string; communityName: string }[];
@@ -42,6 +42,7 @@ export const global = query({
           username: user.username ?? "",
           displayName: profile.displayName,
           avatarColor: profile.avatarColor ?? "violet",
+          avatarUrl: await avatarUrlOf(ctx, profile.userId),
         });
         if (out.people.length >= 10) break;
       }

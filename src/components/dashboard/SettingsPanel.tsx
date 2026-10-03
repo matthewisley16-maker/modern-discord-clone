@@ -73,7 +73,7 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
             <section className="fc-settings-section">
               <h3><User size={16} /> Profile</h3>
               <div className="fc-profile-preview">
-                <Avatar name={displayName || me?.username || "You"} size={64} url={null} />
+                <Avatar name={displayName || me?.username || "You"} size={64} url={me?.avatarUrl} />
                 <div>
                   <p className="fc-settings-username">@{me?.username}</p>
                   <p className="fc-muted">{me?.email ? me.email : "No email linked"}</p>

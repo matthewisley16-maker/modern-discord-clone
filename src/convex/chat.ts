@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 
 import type { Id } from "./_generated/dataModel";
+import { avatarUrlOf } from "./lib";
 
 async function signedIn(ctx: QueryCtx) {
   const id = await getAuthUserId(ctx);
@@ -71,7 +72,7 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
           : { _id: parent._id, author: await nameOf(ctx, parent.userId), body: parent.body.slice(0, 140), deleted: false };
       }
     }
-    return { ...message, author: await nameOf(ctx, message.userId), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply };
+    return { ...message, author: await nameOf(ctx, message.userId), authorAvatarUrl: await avatarUrlOf(ctx, message.userId), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply };
   }));
 }});
 export const createServer = mutation({ args: { name: v.string(), description: v.string() }, handler: async (ctx, args) => {

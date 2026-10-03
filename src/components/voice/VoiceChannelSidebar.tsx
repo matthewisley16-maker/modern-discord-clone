@@ -63,7 +63,7 @@ export default function VoiceChannelSidebar({
               <li key={p.userId} className={p.speaking ? "speaking" : ""}>
                 <button className="vc-participant" onClick={() => onOpenProfile(p.userId)}>
                   <span className={`vc-ring ${p.speaking ? "on" : ""}`}>
-                    <ProfileAvatar name={p.name} size={22} showPresence={false} />
+                    <ProfileAvatar name={p.name} url={p.avatarUrl} size={22} showPresence={false} />
                   </span>
                   <span className="vc-participant-name">{p.name}</span>
                   {p.deafened ? <VolumeX size={12} /> : p.muted ? <MicOff size={12} /> : null}

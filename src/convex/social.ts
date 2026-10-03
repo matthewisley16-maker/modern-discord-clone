@@ -2,7 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
-import { areFriends, audit, currentUserId, displayNameOf, isBlockedEitherWay, notify, profileOf, settingsOf } from "./lib";
+import { areFriends, audit, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, profileOf, settingsOf } from "./lib";
 import type { Id } from "./_generated/dataModel";
 
 function pair(a: Id<"users">, b: Id<"users">): [Id<"users">, Id<"users">] {
@@ -19,6 +19,7 @@ async function publicCard(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"
     username: user?.username ?? "",
     displayName: profile?.displayName ?? user?.name ?? user?.username ?? "Freecord member",
     avatarColor: profile?.avatarColor ?? "violet",
+    avatarUrl: await avatarUrlOf(ctx, userId),
     presence: settings?.presenceVisible === false ? "offline" : presence?.status ?? "offline",
     customStatus: profile?.customStatus ?? "",
   };

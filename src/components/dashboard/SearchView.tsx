@@ -51,7 +51,7 @@ export default function SearchView({
           <SectionHeader title={`PEOPLE — ${results.people.length}`} />
           {results.people.map((p) => (
             <button key={p.userId} className="fc-row fc-row-main" onClick={() => onOpenProfile(p.userId)}>
-              <Avatar name={p.displayName} color={p.avatarColor} />
+              <Avatar name={p.displayName} color={p.avatarColor} url={p.avatarUrl} />
               <span><strong>{p.displayName}</strong><small>@{p.username}</small></span>
             </button>
           ))}

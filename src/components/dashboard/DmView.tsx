@@ -166,7 +166,7 @@ export default function DmView({
           <div className="fc-group-members">
             {convo.members.map((m) => (
               <div key={m.userId} className="fc-group-member">
-                <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={28} />
+                <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={28} url={m.avatarUrl} />
                 <span>{m.displayName}</span>
                 <button aria-label={`Remove ${m.displayName}`} onClick={async () => {
                   try { await removeMember({ conversationId, userId: m.userId as Id<"users"> }); toast.success("Member removed."); }
@@ -198,7 +198,7 @@ export default function DmView({
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
           return (
             <article key={m._id} className="fc-message" tabIndex={0}>
-              <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} />
+              <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} url={m.authorAvatarUrl} />
               <div className="fc-message-body">
                 <div className="fc-message-top">
                   <button className="fc-author" onClick={() => onOpenProfile(m.userId)}>{m.author}</button>

@@ -2,7 +2,7 @@ import { getAuthSessionId, getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
-import { currentUserId, displayNameOf, profileOf, settingsOf, audit, areFriends, isBlockedEitherWay } from "./lib";
+import { avatarUrlOf, currentUserId, displayNameOf, profileOf, settingsOf, audit, areFriends, isBlockedEitherWay } from "./lib";
 
 /**
  * Get the current signed in user. Returns null if the user is not signed in.
@@ -37,6 +37,8 @@ export const me = query({
       email: user?.email ?? null,
       name: user?.name ?? null,
       image: user?.image ?? null,
+      // Authoritative, freshly resolved avatar so the Dashboard updates instantly.
+      avatarUrl: await avatarUrlOf(ctx, userId),
       createdAt: user?._creationTime ?? null,
       profile: profile ?? null,
       settings: settings ?? null,
@@ -217,7 +219,7 @@ export const searchUsers = query({
     const term = q.trim().toLowerCase();
     if (term.length < 1) return [];
     const all = await ctx.db.query("profiles").take(500);
-    const results: { userId: string; username: string; displayName: string; avatarColor: string; presence: string }[] = [];
+    const results: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null; presence: string }[] = [];
     for (const profile of all) {
       const user = await ctx.db.get(profile.userId);
       if (!user) continue;
@@ -233,6 +235,7 @@ export const searchUsers = query({
         username,
         displayName: profile.displayName,
         avatarColor: profile.avatarColor ?? "violet",
+        avatarUrl: await avatarUrlOf(ctx, profile.userId),
         presence: settings?.presenceVisible === false ? "offline" : presence?.status ?? "offline",
       });
       if (results.length >= 25) break;

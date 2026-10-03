@@ -188,7 +188,7 @@ export default function ChannelView({
               onTouchEnd={() => { if (pressTimer.current) window.clearTimeout(pressTimer.current); }}
               onTouchMove={() => { if (pressTimer.current) window.clearTimeout(pressTimer.current); }}
             >
-              <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} />
+              <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} url={m.authorAvatarUrl} />
               <div className="fc-message-body">
                 <div className="fc-message-top">
                   <button className="fc-author" onClick={() => onOpenProfile(m.userId)}>{m.author}</button>

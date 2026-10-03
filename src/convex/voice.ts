@@ -1,7 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { audit, currentUserId, displayNameOf, hasPermission, isTimedOut, membershipOf, notify, requireMember, requirePermission } from "./lib";
+import { audit, avatarUrlOf, currentUserId, displayNameOf, hasPermission, isTimedOut, membershipOf, notify, requireMember, requirePermission } from "./lib";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 
@@ -236,12 +236,13 @@ export const channelTree = query({
     visible.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
 
     const sessions = await ctx.db.query("voiceSessions").collect();
-    const byChannel: Record<string, { userId: string; name: string; muted: boolean; deafened: boolean; speaking: boolean; video: boolean; screen: boolean }[]> = {};
+    const byChannel: Record<string, { userId: string; name: string; avatarUrl: string | null; muted: boolean; deafened: boolean; speaking: boolean; video: boolean; screen: boolean }[]> = {};
     for (const s of sessions) {
       const list = (byChannel[s.channelId as string] ??= []);
       list.push({
         userId: s.userId,
         name: await displayNameOf(ctx, s.userId),
+        avatarUrl: await avatarUrlOf(ctx, s.userId),
         muted: s.muted,
         deafened: s.deafened,
         speaking: Boolean(s.speaking),
@@ -401,6 +402,7 @@ export const voiceChannelDetails = query({
         .map(async (s) => ({
           userId: s.userId,
           name: await displayNameOf(ctx, s.userId),
+          avatarUrl: await avatarUrlOf(ctx, s.userId),
           muted: s.muted,
           deafened: s.deafened,
           speaking: Boolean(s.speaking),

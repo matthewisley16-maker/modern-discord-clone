@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -80,6 +80,8 @@ export default function Dashboard() {
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
+  // The upper-left icon collapses/expands the sidebar (never navigates home).
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
   const [modal, setModal] = useState<Modal>(null);
   const [value, setValue] = useState("");
   const [description, setDescription] = useState("");
@@ -187,6 +189,11 @@ export default function Dashboard() {
     }
   }
 
+  function toggleSidebar() {
+    if (typeof window !== "undefined" && window.innerWidth <= 760) setMobileNav((v) => !v);
+    else setDesktopCollapsed((v) => !v);
+  }
+
   async function joinVoice(channelId: Id<"channels">, name: string) {
     try {
       await joinVoiceChecked({ channelId });
@@ -264,7 +271,7 @@ export default function Dashboard() {
             {participants.map((p) => (
               <li key={p.userId} className={p.speaking ? "speaking" : ""}>
                 <button className="fc-voice-person" onClick={() => setProfileUserId(p.userId)}>
-                  <Avatar name={p.name} presence={p.speaking ? "online" : undefined} size={22} />
+                  <Avatar name={p.name} presence={p.speaking ? "online" : undefined} size={22} url={p.avatarUrl} />
                   <span className={p.speaking ? "talk" : ""}>{p.name}</span>
                   {p.deafened ? <span className="fc-mute-flag">🔇</span> : p.muted ? <span className="fc-mute-flag">🎙️</span> : null}
                 </button>
@@ -283,13 +290,19 @@ export default function Dashboard() {
     <div className={`fc-shell ${appearance?.density === "compact" ? "density-compact" : ""}`} style={appearanceStyle}>
       {/* ---------- Server rail ---------- */}
       <aside className={`fc-rail ${mobileNav ? "hide-mobile" : ""}`} aria-label="Communities">
-        <Link to="/" className="fc-rail-logo" aria-label="Freecord home">
+        <button
+          className="fc-rail-logo"
+          aria-label={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!desktopCollapsed}
+          title="Toggle sidebar"
+          onClick={toggleSidebar}
+        >
           <svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true">
             <rect width="64" height="64" rx="18" fill="url(#fcg)" />
             <defs><linearGradient id="fcg" x1="0" y1="0" x2="64" y2="64"><stop offset="0" stopColor="#9d7bff" /><stop offset="1" stopColor="#6d3ff5" /></linearGradient></defs>
             <g stroke="#fff" strokeWidth="5" strokeLinecap="round"><path d="M16 27v10M24 18v28M32 24v16M40 14v36M48 26v12" /></g>
           </svg>
-        </Link>
+        </button>
         <div className="fc-rail-rule" />
         <button
           className={`fc-rail-btn ${section === "home" ? "selected" : ""}`}
@@ -327,7 +340,7 @@ export default function Dashboard() {
       </aside>
 
       {/* ---------- Secondary sidebar ---------- */}
-      <aside className={`fc-sidebar ${mobileNav ? "open" : ""}`}>
+      <aside className={`fc-sidebar ${mobileNav ? "open" : ""} ${desktopCollapsed ? "collapsed" : ""}`}>
         {section === "community" && details ? (
           <>
             <div className="fc-sidebar-head">
@@ -371,6 +384,22 @@ export default function Dashboard() {
             <button className="fc-invite-btn" onClick={() => openModal("invite")}>
               <Users size={16} /> Invite your people
             </button>
+            <button className="fc-sidebar-action" onClick={() => { setSettingsOpen(true); setMobileNav(false); }}><Settings size={17} /> Settings</button>
+            {communities && communities.length > 0 && (
+              <>
+                <div className="fc-sidebar-section"><span>YOUR COMMUNITIES</span></div>
+                {communities.map((c) => (
+                  <button key={c._id} className={`fc-sidebar-action community ${communityId === c._id ? "active" : ""}`} onClick={() => openCommunity(c._id)}>
+                    <span className="fc-sidebar-community-icon">
+                      {(c as { iconUrl?: string | null }).iconUrl
+                        ? <img src={(c as { iconUrl?: string | null }).iconUrl!} alt="" />
+                        : initialsOf(c.name)}
+                    </span>
+                    {c.name}
+                  </button>
+                ))}
+              </>
+            )}
             {!details.isOwner && (
               <button className="fc-leave-btn" onClick={async () => {
                 try { await leaveCommunity({ serverId: communityId! }); toast.success("You left the community."); setCommunityId(null); setSection("home"); }
@@ -390,6 +419,24 @@ export default function Dashboard() {
             <button className="fc-sidebar-action" onClick={() => { setSection("home"); setMobileNav(false); }}><Users size={17} /> Friends</button>
             <button className="fc-sidebar-action" onClick={() => { setSection("discover"); setMobileNav(false); }}><Compass size={17} /> Discover</button>
             <button className="fc-sidebar-action" onClick={() => { setSection("search"); setMobileNav(false); }}><Search size={17} /> Search</button>
+            {/* Settings is also reachable from the expanded sidebar (in addition to the user panel). */}
+            <button className="fc-sidebar-action" onClick={() => { setSettingsOpen(true); setMobileNav(false); }}><Settings size={17} /> Settings</button>
+
+            {communities && communities.length > 0 && (
+              <>
+                <div className="fc-sidebar-section"><span>COMMUNITIES</span></div>
+                {communities.map((c) => (
+                  <button key={c._id} className="fc-sidebar-action community" onClick={() => openCommunity(c._id)}>
+                    <span className="fc-sidebar-community-icon">
+                      {(c as { iconUrl?: string | null }).iconUrl
+                        ? <img src={(c as { iconUrl?: string | null }).iconUrl!} alt="" />
+                        : initialsOf(c.name)}
+                    </span>
+                    {c.name}
+                  </button>
+                ))}
+              </>
+            )}
 
             <div className="fc-sidebar-section"><span>CONVERSATIONS</span></div>
             {conversations && conversations.length === 0 && (
@@ -401,7 +448,7 @@ export default function Dashboard() {
                   className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                   onClick={() => openConversation(c.conversationId)}
                 >
-                  <Avatar name={c.name} size={26} />
+                  <Avatar name={c.name} size={26} url={c.members?.[0]?.avatarUrl} />
                   <span className="fc-dm-name">{c.name}</span>
                   {c.pinned && <span className="fc-dm-flag">📌</span>}
                   {c.muted && <span className="fc-dm-flag">🔇</span>}
@@ -418,7 +465,7 @@ export default function Dashboard() {
 
         {/* User panel */}
         <div className="fc-user-panel">
-          <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} presence={me?.presence} size={34} />
+          <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} presence={me?.presence} size={34} url={me?.avatarUrl} />
           <div className="fc-user-text">
             <strong>{me?.profile?.displayName ?? me?.username ?? "…"}</strong>
             <small>{me?.profile?.customStatus || statusMeta.label}</small>
@@ -441,7 +488,7 @@ export default function Dashboard() {
       {/* ---------- Main ---------- */}
       <main className="fc-main">
         <header className="fc-topbar">
-          <button className="fc-menu-btn" aria-label="Open navigation" onClick={() => setMobileNav((v) => !v)}><Menu size={20} /></button>
+          <button className="fc-menu-btn" aria-label="Toggle navigation" onClick={toggleSidebar}><Menu size={20} /></button>
           <div className="fc-global-search">
             <Search size={15} />
             <input
@@ -517,7 +564,7 @@ export default function Dashboard() {
               <div className="fc-members-head">MEMBERS — {details.members.length}</div>
               {details.members.map((m) => (
                 <button key={m.userId} className="fc-member" onClick={() => setProfileUserId(m.userId)}>
-                  <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={30} />
+                  <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={30} url={m.avatarUrl} />
                   <span><strong>{m.displayName}</strong><small>{m.role === "owner" ? "Owner" : m.role}</small></span>
                 </button>
               ))}

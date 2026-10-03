@@ -1,31 +1,75 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Message send/receive sound effect.
  *
- * The requested Pixabay asset ("Message envoyé – iPhone Apple") is free to use,
- * but its audio file cannot be fetched at build time, so we do NOT pretend to
- * bundle it. Instead:
- *   1. If `VITE_MESSAGE_SFX_URL` is set, that URL is played.
- *   2. Otherwise a short, locally synthesised blip stands in, so the feature
- *      still works. Set the env var to the Pixabay file to use the exact sound.
+ * The requested asset is the Pixabay sound "Message envoyé – iPhone / Apple":
+ *   https://pixabay.com/sound-effects/film-special-effects-message-envoy%C3%A9-iphone-apple-391098/
  *
- * Reference: https://pixabay.com/sound-effects/film-special-effects-message-envoy%C3%A9-iphone-apple-391098/
+ * Pixabay blocks automated downloads (HTTP 403), so the file cannot be fetched
+ * at build time. This hook therefore loads the *exact* file from, in order:
+ *   1. `VITE_MESSAGE_SFX_URL` — a direct audio URL set in the Keys/env UI.
+ *   2. `/sounds/message-envoye-iphone.mp3` — the audio file dropped into
+ *      `public/sounds/` (same directory is served at the site root).
+ *
+ * Only if NEITHER is present does it fall back to a short synthesised blip, so
+ * messaging still has feedback. It never pretends the fallback is the Pixabay
+ * sound — the exact asset is used whenever it is available.
  */
-const SFX_URL = (import.meta.env.VITE_MESSAGE_SFX_URL as string | undefined) ?? "";
+const ENV_URL = (import.meta.env.VITE_MESSAGE_SFX_URL as string | undefined)?.trim() || "";
+const LOCAL_URL = "/sounds/message-envoye-iphone.mp3";
+
+/** Candidate URLs, most authoritative first. */
+const CANDIDATES = [ENV_URL, LOCAL_URL].filter(Boolean);
+
+/** True when `url` resolves to a decodable audio file. */
+function probe(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (typeof Audio === "undefined") { resolve(false); return; }
+    const audio = new Audio();
+    audio.preload = "auto";
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      audio.oncanplay = null;
+      audio.onerror = null;
+      resolve(ok);
+    };
+    audio.oncanplay = () => done(true);
+    audio.onerror = () => done(false);
+    audio.src = url;
+    audio.load();
+    // If the file is missing the browser fires `error` quickly; guard anyway.
+    window.setTimeout(() => done(false), 4000);
+  });
+}
 
 export function useMessageSound() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
+  const [assetUrl, setAssetUrl] = useState<string | null>(null);
 
-  const play = useCallback(() => {
-    try {
-      if (SFX_URL) {
-        if (!audioRef.current) audioRef.current = new Audio(SFX_URL);
-        audioRef.current.currentTime = 0;
-        void audioRef.current.play().catch(() => {});
-        return;
+  // Resolve which audio file actually exists, once, on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const url of CANDIDATES) {
+        if (await probe(url)) {
+          if (cancelled) return;
+          audioRef.current = new Audio(url);
+          audioRef.current.preload = "auto";
+          setAssetUrl(url);
+          return;
+        }
       }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /** Short synthesised blip — only used when the real asset is unavailable. */
+  const blip = useCallback(() => {
+    try {
       const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!Ctx) return;
       if (!ctxRef.current) ctxRef.current = new Ctx();
@@ -49,5 +93,19 @@ export function useMessageSound() {
     }
   }, []);
 
-  return { play, usingRemoteAsset: Boolean(SFX_URL) };
+  const play = useCallback(() => {
+    if (audioRef.current) {
+      try {
+        audioRef.current.currentTime = 0;
+        void audioRef.current.play().catch(() => blip());
+        return;
+      } catch {
+        blip();
+        return;
+      }
+    }
+    blip();
+  }, [blip]);
+
+  return { play, usingRemoteAsset: assetUrl !== null, assetUrl };
 }

@@ -28,6 +28,22 @@ export async function profileOf(ctx: Ctx, userId: Id<"users">) {
     .unique();
 }
 
+/**
+ * The user's authoritative current avatar URL.
+ * Resolves the uploaded profile picture first, falling back to the account
+ * image. Every card/list that renders an avatar uses this so the Dashboard,
+ * chats, member lists and DMs always agree on the newest picture.
+ */
+export async function avatarUrlOf(ctx: Ctx, userId: Id<"users">): Promise<string | null> {
+  const profile = await profileOf(ctx, userId);
+  if (profile?.avatarStorageId) {
+    const url = await ctx.storage.getUrl(profile.avatarStorageId);
+    if (url) return url;
+  }
+  const user = await ctx.db.get(userId);
+  return user?.image ?? null;
+}
+
 export async function settingsOf(ctx: Ctx, userId: Id<"users">) {
   return ctx.db
     .query("userSettings")

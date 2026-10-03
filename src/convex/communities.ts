@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import {
   audit,
+  avatarUrlOf,
   currentUserId,
   displayNameOf,
   effectivePermissions,
@@ -39,6 +40,7 @@ async function memberCard(ctx: QueryCtx, userId: Id<"users">, role?: string, tim
     username: user?.username ?? "",
     displayName: profile?.displayName ?? user?.name ?? "Freecord member",
     avatarColor: profile?.avatarColor ?? "violet",
+    avatarUrl: await avatarUrlOf(ctx, userId),
     presence: presence?.status ?? "offline",
     role: role ?? "member",
     timedOutUntil: timeoutUntil && timeoutUntil > Date.now() ? timeoutUntil : null,

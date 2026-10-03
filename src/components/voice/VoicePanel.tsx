@@ -304,7 +304,7 @@ export default function VoicePanel({
             onClick={() => onOpenProfile(p.userId)}
           >
             <span className="vp-avatar-holder">
-              <ProfileAvatar name={p.name} size={64} showPresence={false} />
+              <ProfileAvatar name={p.name} url={p.avatarUrl} size={64} showPresence={false} />
               {p.speaking && <span className="vp-speaking-ring" aria-hidden="true" />}
             </span>
             <span className="vp-name">
