@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
+
 import type { Id } from "./_generated/dataModel";
 
 async function signedIn(ctx: QueryCtx) {
@@ -42,8 +43,19 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
   const channel = await ctx.db.get(channelId);
   if (!channel) return [];
   await member(ctx, channel.serverId);
+  // Per-user "delete for me": hidden ids are filtered out for this viewer only.
+  const viewerId = await getAuthUserId(ctx);
+  const hidden = new Set(
+    viewerId
+      ? (await ctx.db.query("messageVisibility").withIndex("by_user", q => q.eq("userId", viewerId)).collect()).map(h => h.messageId)
+      : [],
+  );
   const messages = await ctx.db.query("messages").withIndex("by_channel", q => q.eq("channelId", channelId)).order("desc").take(150);
-  return Promise.all(messages.reverse().map(async message => {
+  return Promise.all(messages
+    // Messages deleted for everyone are removed from the conversation entirely,
+    // and per-user hides are filtered for this viewer only.
+    .filter(m => !m.deletedForEveryone && !hidden.has(m._id as string))
+    .reverse().map(async message => {
     const files = await ctx.db.query("attachments").withIndex("by_message", q => q.eq("messageId", message._id)).collect();
     const attachments = await Promise.all(files.map(async f => ({
       _id: f._id, name: f.name, size: f.size, contentType: f.contentType,
@@ -52,7 +64,12 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
     let reply = null;
     if (message.replyToId) {
       const parent = await ctx.db.get(message.replyToId);
-      if (parent) reply = { _id: parent._id, author: await nameOf(ctx, parent.userId), body: parent.body.slice(0, 140) };
+      if (parent) {
+        // Never expose the contents of a message deleted for everyone.
+        reply = parent.deletedForEveryone
+          ? { _id: parent._id, author: "", body: "Original message deleted", deleted: true }
+          : { _id: parent._id, author: await nameOf(ctx, parent.userId), body: parent.body.slice(0, 140), deleted: false };
+      }
     }
     return { ...message, author: await nameOf(ctx, message.userId), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply };
   }));

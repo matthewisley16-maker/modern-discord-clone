@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { useMessageSound } from "@/hooks/use-message-sound";
+import { useTyping, typingLabel } from "@/hooks/use-typing";
+import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Avatar, EmptyState } from "./ui";
 import { toast } from "sonner";
-import { CheckCheck, Copy, FileText, Flag, Hash, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
+import { CheckCheck, Copy, FileText, Flag, Hash, Link2, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
 
 const EMOJIS = ["😀", "😂", "🙌", "❤️", "🔥", "👍", "🎉", "👋", "✨", "😮", "😢", "🙏"];
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -32,13 +35,19 @@ export default function ChannelView({
   const typing = useQuery(api.communities.typingIn, { channelId });
   const send = useMutation(api.chat.sendMessage);
   const edit = useMutation(api.chat.editMessage);
-  const remove = useMutation(api.chat.deleteMessage);
   const react = useMutation(api.chat.toggleReaction);
-  const setTyping = useMutation(api.communities.setTyping);
   const pin = useMutation(api.chat.pinMessage);
   const report = useMutation(api.social.report);
+  const deleteForEveryone = useMutation(api.deletion.deleteForEveryone);
+  const deleteForMe = useMutation(api.deletion.deleteForMe);
+  const canModerate = useQuery(api.deletion.canModerateHere, { channelId });
+  const hiddenIds = useQuery(api.deletion.myHiddenIds, {});
   const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
   const attach = useMutation(api.uploads.attach);
+  const { play: playSound } = useMessageSound();
+  const [confirmDelete, setConfirmDelete] = useState<{ messageId: Id<"messages"> } | null>(null);
+  const [longPressFor, setLongPressFor] = useState<string | null>(null);
+  const pressTimer = useRef<number | null>(null);
 
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<{ id: Id<"messages">; author: string; body: string } | null>(null);
@@ -51,14 +60,26 @@ export default function ChannelView({
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const throttle = useRef(0);
+  // Typing heartbeats are throttled and cleared on send, switch, and unmount.
+  const { onType, stop: stopTyping } = useTyping({ channelId });
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, channelId]);
   useEffect(() => { setSearch(""); setReplyTo(null); setEditing(null); setDraft(""); }, [channelId]);
 
+  // Play the message SFX when someone else's message arrives in this channel.
+  const lastCount = useRef<number | null>(null);
+  useEffect(() => {
+    if (!messages) return;
+    if (lastCount.current !== null && messages.length > lastCount.current) {
+      const newest = messages[messages.length - 1];
+      if (newest && newest.userId !== myUserId) playSound();
+    }
+    lastCount.current = messages.length;
+  }, [messages, myUserId, playSound]);
+
   const canSend = permissions.includes("sendMessages");
-  const canDeleteAny = permissions.includes("manageMessages") || permissions.includes("deleteMessages");
-  const visible = messages?.filter((m) => !search || m.body.toLowerCase().includes(search.toLowerCase()));
+  const hidden = new Set(hiddenIds ?? []);
+  const visible = messages?.filter((m) => !hidden.has(m._id as string)).filter((m) => !search || m.body.toLowerCase().includes(search.toLowerCase()));
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -67,6 +88,8 @@ export default function ChannelView({
     try {
       if (editing) { await edit({ messageId: editing.id, body: draft }); setEditing(null); }
       else { await send({ channelId, body: draft, replyToId: replyTo?.id }); setReplyTo(null); }
+      playSound();
+      stopTyping();
       setDraft("");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Message failed to send.");
@@ -99,6 +122,23 @@ export default function ChannelView({
   }
 
   return (
+    <>
+    {confirmDelete && (
+      <div className="fc-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Confirm delete">
+        <div className="fc-confirm">
+          <h3>Delete message?</h3>
+          <p>Are you sure you want to delete this message for everyone? This action cannot be undone.</p>
+          <div className="fc-confirm-actions">
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={async () => {
+              try { await deleteForEveryone({ messageId: confirmDelete.messageId }); toast.success("Message deleted for everyone."); }
+              catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); }
+              finally { setConfirmDelete(null); }
+            }}>Delete for everyone</Button>
+          </div>
+        </div>
+      </div>
+    )}
     <div
       className="fc-conversation"
       onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -136,7 +176,18 @@ export default function ChannelView({
           const mine = m.userId === myUserId;
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
           return (
-            <article key={m._id} className="fc-message" tabIndex={0}>
+            <article
+              key={m._id}
+              className={`fc-message ${longPressFor === m._id ? "menu-open" : ""}`}
+              tabIndex={0}
+              onContextMenu={(e) => { e.preventDefault(); setMenuFor(m._id); }}
+              onTouchStart={() => {
+                if (pressTimer.current) window.clearTimeout(pressTimer.current);
+                pressTimer.current = window.setTimeout(() => setMenuFor(m._id), 450);
+              }}
+              onTouchEnd={() => { if (pressTimer.current) window.clearTimeout(pressTimer.current); }}
+              onTouchMove={() => { if (pressTimer.current) window.clearTimeout(pressTimer.current); }}
+            >
               <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} />
               <div className="fc-message-body">
                 <div className="fc-message-top">
@@ -145,7 +196,12 @@ export default function ChannelView({
                   {mine && <b className="fc-badge">YOU</b>}
                   {m.pinned && <b className="fc-badge pin"><Pin size={9} /> PINNED</b>}
                 </div>
-                {m.reply && <div className="fc-reply-quote"><Reply size={12} /> <strong>{m.reply.author}</strong> {m.reply.body}</div>}
+                {m.reply && (
+                  <div className={`fc-reply-quote ${m.reply.deleted ? "deleted" : ""}`}>
+                    <Reply size={12} />
+                    {m.reply.deleted ? <em>Original message deleted</em> : <><strong>{m.reply.author}</strong> {m.reply.body}</>}
+                  </div>
+                )}
                 <p className="fc-text">{renderMentions(m.body)}</p>
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
@@ -169,9 +225,24 @@ export default function ChannelView({
                 <button title="Copy text" aria-label="Copy message text" onClick={async () => { try { await navigator.clipboard.writeText(m.body); toast.success("Copied."); } catch { toast.error("Couldn't copy."); } }}><Copy size={15} /></button>
                 <button title="More" aria-label="More actions" onClick={() => setMenuFor(menuFor === m._id ? null : m._id)}>⋯</button>
                 {menuFor === m._id && (
-                  <div className="fc-menu">
+                  <div className="fc-menu" role="menu">
+                    <button onClick={() => { setReplyTo({ id: m._id, author: m.author, body: m.body.slice(0, 120) }); setEditing(null); setMenuFor(null); }}><Reply size={13} /> Reply</button>
+                    <button onClick={() => { react({ messageId: m._id, emoji: "👍" }).catch(() => {}); setMenuFor(null); }}><Smile size={13} /> Add reaction</button>
                     {mine && <button onClick={() => { setEditing({ id: m._id, body: m.body }); setDraft(m.body); setReplyTo(null); setMenuFor(null); }}><Pencil size={13} /> Edit</button>}
-                    {(mine || canDeleteAny) && <button className="danger" onClick={async () => { try { await remove({ messageId: m._id }); toast.success("Message deleted."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setMenuFor(null); }}><Trash2 size={13} /> Delete</button>}
+                    <button onClick={() => { pin({ messageId: m._id, pinned: !m.pinned }).catch(() => {}); setMenuFor(null); }}><Pin size={13} /> {m.pinned ? "Unpin" : "Pin"}</button>
+                    <button onClick={async () => { try { await navigator.clipboard.writeText(m.body); toast.success("Copied."); } catch { toast.error("Couldn't copy."); } setMenuFor(null); }}><Copy size={13} /> Copy text</button>
+                    <button onClick={async () => { try { await navigator.clipboard.writeText(`${window.location.origin}/dashboard?channel=${m.channelId}&message=${m._id}`); toast.success("Message link copied."); } catch { toast.error("Couldn't copy."); } setMenuFor(null); }}><Link2 size={13} /> Copy message link</button>
+                    <button onClick={async () => { try { await navigator.clipboard.writeText(m._id); toast.success("Message ID copied."); } catch { toast.error("Couldn't copy."); } setMenuFor(null); }}><Copy size={13} /> Copy message ID</button>
+                    {/* Delete for me is always available and only affects this user. */}
+                    <button onClick={async () => { try { await deleteForMe({ messageId: m._id }); toast.success("Message hidden for you only."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setMenuFor(null); }}>
+                      <Trash2 size={13} /> Delete for me
+                    </button>
+                    {/* Delete for everyone only appears when permitted. */}
+                    {(mine || canModerate) && (
+                      <button className="danger" onClick={() => { setConfirmDelete({ messageId: m._id }); setMenuFor(null); }}>
+                        <Trash2 size={13} /> Delete for everyone
+                      </button>
+                    )}
                     <button onClick={async () => { try { await report({ targetType: "message", targetId: m._id, category: "other" }); toast.success("Report sent to moderators."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setMenuFor(null); }}><Flag size={13} /> Report</button>
                   </div>
                 )}
@@ -179,7 +250,7 @@ export default function ChannelView({
             </article>
           );
         })}
-        {typing && typing.length > 0 && <p className="fc-typing">{typing.join(", ")} {typing.length === 1 ? "is" : "are"} typing…</p>}
+        {typing && typing.length > 0 && <p className="fc-typing">{typingLabel(typing)}</p>}
         <div ref={bottom} />
       </div>
 
@@ -200,7 +271,7 @@ export default function ChannelView({
               value={draft}
               disabled={busy}
               maxLength={4000}
-              onChange={(e) => { setDraft(e.target.value); const now = Date.now(); if (e.target.value && now - throttle.current > 2500) { throttle.current = now; setTyping({ channelId }).catch(() => {}); } }}
+              onChange={(e) => { setDraft(e.target.value); onType(e.target.value); }}
               onPaste={(e) => { const f = e.clipboardData.files?.[0]; if (f) { e.preventDefault(); upload(f); } }}
               placeholder={editing ? "Edit your message…" : `Message #${channelName}`}
             />
@@ -210,6 +281,7 @@ export default function ChannelView({
         </div>
       )}
     </div>
+    </>
   );
 }
 

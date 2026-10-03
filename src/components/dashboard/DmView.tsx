@@ -5,6 +5,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, EmptyState } from "./ui";
+import { useMessageSound } from "@/hooks/use-message-sound";
+import { useTyping, typingLabel } from "@/hooks/use-typing";
 import { toast } from "sonner";
 import { AtSign, Check, CheckCheck, Copy, Download, FileText, Flag, MessageCircle, MonitorUp, MoreVertical, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
 
@@ -30,9 +32,9 @@ export default function DmView({
   const typing = useQuery(api.dms.typingIn, { conversationId });
   const send = useMutation(api.dms.sendMessage);
   const edit = useMutation(api.dms.editMessage);
-  const remove = useMutation(api.dms.deleteMessage);
+  const deleteDmForEveryone = useMutation(api.deletion.deleteDmForEveryone);
+  const deleteDmForMe = useMutation(api.deletion.deleteDmForMe);
   const react = useMutation(api.dms.toggleReaction);
-  const setTyping = useMutation(api.dms.setTyping);
   const markRead = useMutation(api.dms.markRead);
   const setPinned = useMutation(api.dms.setPinnedMessage);
   const report = useMutation(api.social.report);
@@ -54,10 +56,22 @@ export default function DmView({
   const [showGroupPanel, setShowGroupPanel] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const typingThrottle = useRef(0);
+  const { onType, stop: stopTyping } = useTyping({ conversationId });
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, conversationId]);
   useEffect(() => { markRead({ conversationId }).catch(() => {}); setSearch(""); setReplyTo(null); setEditing(null); }, [conversationId, markRead]);
+
+  // Play the message SFX on send and when the other person's message arrives.
+  const { play: playSound } = useMessageSound();
+  const lastCount = useRef<number | null>(null);
+  useEffect(() => {
+    if (!messages) return;
+    if (lastCount.current !== null && messages.length > lastCount.current) {
+      const newest = messages[messages.length - 1];
+      if (newest && newest.userId !== myUserId) playSound();
+    }
+    lastCount.current = messages.length;
+  }, [messages, myUserId, playSound]);
 
   const title = convo?.type === "group" ? convo.name : convo?.members[0]?.displayName ?? "Conversation";
 
@@ -73,20 +87,13 @@ export default function DmView({
         await send({ conversationId, body: draft, replyToId: replyTo?.id });
         setReplyTo(null);
       }
+      playSound();
+      stopTyping();
       setDraft("");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Message failed to send.");
     } finally {
       setBusy(false);
-    }
-  }
-
-  function onDraftChange(value: string) {
-    setDraft(value);
-    const now = Date.now();
-    if (value && now - typingThrottle.current > 2500) {
-      typingThrottle.current = now;
-      setTyping({ conversationId }).catch(() => {});
     }
   }
 
@@ -248,7 +255,9 @@ export default function DmView({
                 {openMenu === m._id && (
                   <div className="fc-menu">
                     {mine && <button onClick={() => { setEditing({ id: m._id, body: m.body }); setDraft(m.body); setReplyTo(null); setOpenMenu(null); }}><Pencil size={13} /> Edit</button>}
-                    {mine && <button className="danger" onClick={async () => { try { await remove({ messageId: m._id }); toast.success("Message deleted."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setOpenMenu(null); }}><Trash2 size={13} /> Delete</button>}
+                    {/* Delete for me only hides the message for this user. */}
+                    <button onClick={async () => { try { await deleteDmForMe({ messageId: m._id }); toast.success("Message hidden for you only."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setOpenMenu(null); }}><Trash2 size={13} /> Delete for me</button>
+                    {mine && <button className="danger" onClick={async () => { try { await deleteDmForEveryone({ messageId: m._id }); toast.success("Message deleted for everyone."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setOpenMenu(null); }}><Trash2 size={13} /> Delete for everyone</button>}
                     <button onClick={async () => { try { await report({ targetType: "dmMessage", targetId: m._id, category: "other", description: "Reported from DM" }); toast.success("Report sent to moderators."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setOpenMenu(null); }}><Flag size={13} /> Report</button>
                   </div>
                 )}
@@ -256,9 +265,7 @@ export default function DmView({
             </article>
           );
         })}
-        {typing && typing.length > 0 && (
-          <p className="fc-typing">{typing.join(", ")} {typing.length === 1 ? "is" : "are"} typing…</p>
-        )}
+        {typing && typing.length > 0 && <p className="fc-typing">{typingLabel(typing)}</p>}
         <div ref={bottom} />
       </div>
 
@@ -292,7 +299,7 @@ export default function DmView({
             value={draft}
             disabled={busy}
             maxLength={4000}
-            onChange={(e) => onDraftChange(e.target.value)}
+            onChange={(e) => { setDraft(e.target.value); onType(e.target.value); }}
             onPaste={(e) => { const f = e.clipboardData.files?.[0]; if (f) { e.preventDefault(); upload(f); } }}
             placeholder={editing ? "Edit your message…" : `Message ${title}`}
           />

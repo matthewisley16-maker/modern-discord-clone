@@ -240,12 +240,19 @@ export const messages = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     await requireMember(ctx, conversationId, userId);
+    // "Delete for me" is per-user and never affects other members.
+    const hidden = new Set(
+      (await ctx.db.query("messageVisibility").withIndex("by_user", (q) => q.eq("userId", userId)).collect()).map((h) => h.messageId),
+    );
     const rows = await ctx.db
       .query("dmMessages")
       .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
       .order("desc")
       .take(150);
-    const ordered = rows.reverse();
+    // Deleted-for-everyone messages are removed entirely; hides apply per user.
+    const ordered = rows
+      .filter((r) => !r.deletedForEveryone && !hidden.has(r._id as string))
+      .reverse();
     const term = search?.trim().toLowerCase();
 
     const result = [];
@@ -259,12 +266,17 @@ export const messages = query({
       let reply = null;
       if (m.replyToId) {
         const parent = await ctx.db.get(m.replyToId);
-        if (parent) reply = { _id: parent._id, author: await displayNameOf(ctx, parent.userId), body: parent.body.slice(0, 140) };
+        if (parent) {
+          reply = parent.deletedForEveryone
+            ? { _id: parent._id, author: "", body: "Original message deleted", deleted: true }
+            : { _id: parent._id, author: await displayNameOf(ctx, parent.userId), body: parent.body.slice(0, 140), deleted: false };
+        }
       }
       result.push({
         ...m,
         author: await displayNameOf(ctx, m.userId),
         reactions,
+        // Attachments are removed on delete-for-everyone, so this stays empty.
         attachments,
         reply,
       });

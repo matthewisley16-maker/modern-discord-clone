@@ -7,24 +7,26 @@ import { useAuth } from "@/hooks/use-auth";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import CallPanel from "@/components/CallPanel";
+import VoicePanel from "@/components/voice/VoicePanel";
 import DmView from "@/components/dashboard/DmView";
 import ChannelView from "@/components/dashboard/ChannelView";
 import HomeView from "@/components/dashboard/HomeView";
 import DiscoverView from "@/components/dashboard/DiscoverView";
 import SearchView from "@/components/dashboard/SearchView";
-import ProfileDrawer from "@/components/dashboard/ProfileDrawer";
+import ProfilePopup from "@/components/profile/ProfilePopup";
+import FullProfile from "@/components/profile/FullProfile";
+import ProfileEditor from "@/components/profile/ProfileEditor";
 import SettingsPanel from "@/components/dashboard/SettingsPanel";
 import CommunitySettings from "@/components/dashboard/CommunitySettings";
-import { Avatar, colorFor, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
+import { Avatar, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
+import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
 import {
-  AtSign, Bell, Check, Compass, Hash, Headphones, Home, LogOut, Menu, Mic, Phone, Plus,
-  Search, Settings, Users, Volume2, X,
+  AtSign, Bell, Compass, Hash, Home, Lock, LogOut, Menu, Phone, Plus, Search, Settings, Users, Volume2, X,
 } from "lucide-react";
 
 type Section = "home" | "dms" | "discover" | "search" | "community";
-type Modal = "create" | "join" | "channel" | "invite" | "createCommunity" | null;
+type Modal = "create" | "join" | "channel" | "category" | "invite" | "createCommunity" | null;
 
 export default function Dashboard() {
   const { signOut } = useAuth();
@@ -38,15 +40,21 @@ export default function Dashboard() {
   const incomingCall = useQuery(api.calls.incomingCall, {});
   const outgoingCall = useQuery(api.calls.outgoingCall, {});
 
-  const setStatus = useMutation(api.users.setStatus);
-  const heartbeat = useMutation(api.users.heartbeat);
+  const setStatus = useMutation(api.profiles.setPresence);
+  const heartbeat = useMutation(api.profiles.heartbeat);
+  const disconnect = useMutation(api.profiles.disconnect);
+  const appearance = useQuery(api.profiles.getAppearance, {});
+  const createChannelFull = useMutation(api.voice.createChannelFull);
+  const createCategory = useMutation(api.voice.createCategory);
+  const reorderChannels = useMutation(api.voice.reorderChannels);
+  const { play: playMessageSound } = useMessageSound();
   const createCommunity = useMutation(api.communities.create);
   const joinByCode = useMutation(api.communities.joinByCode);
   const createChannel = useMutation(api.communities.createChannel);
   const leaveCommunity = useMutation(api.communities.leave);
   const markAllRead = useMutation(api.social.markAllNotificationsRead);
   const markRead = useMutation(api.social.markNotificationRead);
-  const leaveVoice = useMutation(api.communities.leaveVoice);
+  const leaveVoiceSession = useMutation(api.voice.leaveVoiceSession);
   const respondCall = useMutation(api.calls.respondCall);
   const cancelCall = useMutation(api.calls.cancelCall);
   const inviteCall = useMutation(api.calls.inviteCall);
@@ -58,7 +66,15 @@ export default function Dashboard() {
   const [channelId, setChannelId] = useState<Id<"channels"> | null>(null);
   const [conversationId, setConversationId] = useState<Id<"dmConversations"> | null>(null);
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
+  const [fullProfileUserId, setFullProfileUserId] = useState<string | null>(null);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [categoryName, setCategoryName] = useState("");
+  const [categoryId, setCategoryId] = useState<string>("");
+  const [userLimit, setUserLimit] = useState(0);
+  const [isPrivateChannel, setIsPrivateChannel] = useState(false);
   const [communitySettingsOpen, setCommunitySettingsOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -67,9 +83,12 @@ export default function Dashboard() {
   const [value, setValue] = useState("");
   const [description, setDescription] = useState("");
   const [isPublic, setIsPublic] = useState(true);
-  const [channelType, setChannelType] = useState<"text" | "voice">("text");
+  const [channelType, setChannelType] = useState<"text" | "voice" | "video">("text");
   const [busy, setBusy] = useState(false);
   const [inCall, setInCall] = useState<{ channelId: Id<"channels">; name: string } | null>(null);
+  const joinVoiceChecked = useMutation(api.voice.joinVoiceChecked);
+  // Reactive channel tree: categories, ordering, and live voice participants.
+  const channelTree = useQuery(api.voice.channelTree, communityId ? { serverId: communityId } : "skip");
 
   const details = useQuery(api.communities.details, communityId ? { serverId: communityId } : "skip");
   const channel = details?.channels.find((c) => c._id === channelId) ?? details?.channels.find((c) => c.type !== "voice");
@@ -78,8 +97,20 @@ export default function Dashboard() {
   useEffect(() => {
     heartbeat({}).catch(() => {});
     const t = setInterval(() => heartbeat({}).catch(() => {}), 30_000);
-    return () => clearInterval(t);
-  }, [heartbeat]);
+    // Soft-disconnect on unload so presence and typing clear promptly.
+    const bye = () => { disconnect({}).catch(() => {}); };
+    window.addEventListener("beforeunload", bye);
+    return () => { clearInterval(t); window.removeEventListener("beforeunload", bye); };
+  }, [heartbeat, disconnect]);
+
+  // Apply the user's saved appearance (density, font size, accent) to the shell.
+  const appearanceStyle = useMemo(() => {
+    const colors = appearance?.customColors;
+    return {
+      fontSize: appearance?.fontSize ? `${appearance.fontSize}px` : undefined,
+      ...(colors?.accent ? ({ ["--fc-accent" as string]: colors.accent } as Record<string, string>) : {}),
+    } as React.CSSProperties;
+  }, [appearance]);
   useEffect(() => {
     if (voiceSession) setInCall({ channelId: voiceSession.channelId, name: voiceSession.channelName });
   }, [voiceSession]);
@@ -108,6 +139,9 @@ export default function Dashboard() {
     setValue("");
     setDescription("");
     setChannelType("text");
+    setCategoryId("");
+    setUserLimit(0);
+    setIsPrivateChannel(false);
     setModal(next);
   }
 
@@ -123,8 +157,23 @@ export default function Dashboard() {
         const id = await joinByCode({ code: value });
         openCommunity(id);
       } else if (modal === "channel" && communityId) {
-        const id = await createChannel({ serverId: communityId, name: value, type: channelType });
-        setChannelId(id);
+        if (channelType === "text") {
+          const id = await createChannel({ serverId: communityId, name: value, type: "text" });
+          setChannelId(id);
+        } else {
+          // Full voice/video channel: category, user limit and privacy are all
+          // validated server-side by createChannelFull.
+          await createChannelFull({
+            serverId: communityId,
+            name: value,
+            type: channelType,
+            ...(categoryId ? { categoryId: categoryId as Id<"channelCategories"> } : {}),
+            userLimit,
+            isPrivate: isPrivateChannel,
+          });
+        }
+      } else if (modal === "category" && communityId) {
+        await createCategory({ serverId: communityId, name: value });
       }
       setModal(null);
       toast.success("All set!");
@@ -136,7 +185,37 @@ export default function Dashboard() {
   }
 
   async function joinVoice(channelId: Id<"channels">, name: string) {
-    setInCall({ channelId, name });
+    try {
+      await joinVoiceChecked({ channelId });
+      setInCall({ channelId, name });
+    } catch (e) {
+      // Surfaces "Voice channel is full.", permission, and privacy errors.
+      toast.error(e instanceof Error ? e.message : "Could not join the voice channel.");
+    }
+  }
+
+  /** Persist a drag-and-drop reorder: drop `dragId` onto `targetId`. */
+  async function handleDrop(targetId: string) {
+    const id = dragId;
+    setDragId(null);
+    setDragOverId(null);
+    if (!id || id === targetId || !communityId || !channelTree) return;
+    const all = [...channelTree.uncategorized, ...channelTree.byCategory.flatMap((g) => g.channels)];
+    const from = all.find((c) => c._id === id);
+    const to = all.find((c) => c._id === targetId);
+    if (!from || !to) return;
+    // Adopt the target's category so dragging also moves a channel between groups.
+    const group = all.filter((c) => (c.categoryId ?? null) === (to.categoryId ?? null) && c._id !== id);
+    const at = group.findIndex((c) => c._id === targetId);
+    group.splice(at < 0 ? group.length : at, 0, from);
+    try {
+      await reorderChannels({
+        serverId: communityId,
+        order: group.map((c, i) => ({ channelId: c._id, position: i, categoryId: to.categoryId ?? undefined })),
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not reorder channels.");
+    }
   }
 
   async function startDmCall(media: "voice" | "video") {
@@ -152,11 +231,53 @@ export default function Dashboard() {
     }
   }
 
+  /** A single channel row, with voice participants and drag-and-drop reordering. */
+  function renderChannelRow(c: { _id: Id<"channels">; name: string; type?: string | null; userLimit?: number | null; isPrivate?: boolean | null }) {
+    const isVoice = c.type === "voice" || c.type === "video";
+    const participants = channelTree?.voiceParticipants[c._id as string] ?? [];
+    const canManage = Boolean(details?.permissions.includes("manageChannels"));
+    return (
+      <div
+        key={c._id}
+        className={`fc-channel-block ${dragOverId === c._id ? "drag-over" : ""}`}
+        draggable={canManage}
+        onDragStart={() => setDragId(c._id)}
+        onDragOver={(e) => { if (canManage) { e.preventDefault(); setDragOverId(c._id); } }}
+        onDragLeave={() => setDragOverId((v) => (v === c._id ? null : v))}
+        onDrop={(e) => { e.preventDefault(); handleDrop(c._id); }}
+      >
+        <button
+          className={`fc-channel ${!isVoice && channel?._id === c._id ? "active" : ""} ${isVoice && inCall?.channelId === c._id ? "in-voice" : ""}`}
+          onClick={() => { if (isVoice) joinVoice(c._id, c.name); else { setChannelId(c._id); setMobileNav(false); } }}
+        >
+          {isVoice ? (c.isPrivate ? <Lock size={15} /> : <Volume2 size={17} />) : <Hash size={17} />}
+          <span className="fc-channel-name">{c.name}</span>
+          {isVoice && (c.userLimit ?? 0) > 0 && (
+            <span className={`fc-channel-limit ${participants.length >= (c.userLimit ?? 0) ? "full" : ""}`}>{participants.length}/{c.userLimit}</span>
+          )}
+        </button>
+        {isVoice && participants.length > 0 && (
+          <ul className="fc-voice-people">
+            {participants.map((p) => (
+              <li key={p.userId} className={p.speaking ? "speaking" : ""}>
+                <button className="fc-voice-person" onClick={() => setProfileUserId(p.userId)}>
+                  <Avatar name={p.name} presence={p.speaking ? "online" : undefined} size={22} />
+                  <span className={p.speaking ? "talk" : ""}>{p.name}</span>
+                  {p.deafened ? <span className="fc-mute-flag">🔇</span> : p.muted ? <span className="fc-mute-flag">🎙️</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
   const statusMeta = PRESENCE_META[me?.presence ?? "online"] ?? PRESENCE_META.online;
   const hasUnread = (notifications?.unread ?? 0) > 0;
 
   return (
-    <div className="fc-shell">
+    <div className={`fc-shell ${appearance?.density === "compact" ? "density-compact" : ""}`} style={appearanceStyle}>
       {/* ---------- Server rail ---------- */}
       <aside className={`fc-rail ${mobileNav ? "hide-mobile" : ""}`} aria-label="Communities">
         <Link to="/" className="fc-rail-logo" aria-label="Freecord home">
@@ -222,18 +343,26 @@ export default function Dashboard() {
             <div className="fc-sidebar-section">
               <span>TEXT CHANNELS</span>
               {details.permissions.includes("createChannels") && (
-                <button aria-label="Create channel" onClick={() => openModal("channel")}><Plus size={15} /></button>
+                <>
+                  <button aria-label="Create a category" title="Create a category" onClick={() => openModal("category")}><Plus size={15} /></button>
+                  <button aria-label="Create channel" title="Create channel" onClick={() => openModal("channel")}><Plus size={15} /></button>
+                </>
               )}
             </div>
-            {details.channels.filter((c) => c.type !== "voice").map((c) => (
+            {channelTree && (
+              <>
+                {channelTree.byCategory.map(({ category, channels }) => (
+                  <div key={category._id} className="fc-cat-group">
+                    <p className="fc-cat-name">{category.name}</p>
+                    {channels.map((c) => renderChannelRow(c))}
+                  </div>
+                ))}
+                {channelTree.uncategorized.map((c) => renderChannelRow(c))}
+              </>
+            )}
+            {!channelTree && details.channels.map((c) => (
               <button key={c._id} className={`fc-channel ${channel?._id === c._id ? "active" : ""}`} onClick={() => { setChannelId(c._id); setMobileNav(false); }}>
                 <Hash size={17} /> {c.name}
-              </button>
-            ))}
-            <div className="fc-sidebar-section"><span>VOICE CHANNELS</span></div>
-            {details.channels.filter((c) => c.type === "voice").map((c) => (
-              <button key={c._id} className="fc-channel" onClick={() => joinVoice(c._id, c.name)}>
-                <Volume2 size={17} /> {c.name}
               </button>
             ))}
             <button className="fc-invite-btn" onClick={() => openModal("invite")}>
@@ -295,7 +424,7 @@ export default function Dashboard() {
             aria-label="Set your status"
             className="fc-status-select"
             value={me?.presence ?? "online"}
-            onChange={async (e) => { try { await setStatus({ status: e.target.value as never }); } catch { toast.error("Could not set status."); } }}
+            onChange={async (e) => { try { await setStatus({ status: e.target.value as never, manual: true }); } catch { toast.error("Could not set status."); } }}
           >
             <option value="online">Online</option>
             <option value="idle">Idle</option>
@@ -380,9 +509,7 @@ export default function Dashboard() {
             {section === "community" && details && !channel && (
               <div className="fc-scroll-view"><div className="fc-empty"><h3>No text channels yet.</h3><p>Create one to start talking.</p></div></div>
             )}
-          </div>
-
-          {section === "community" && details && (
+          </div>            {section === "community" && details && (
             <aside className="fc-members" aria-label="Community members">
               <div className="fc-members-head">MEMBERS — {details.members.length}</div>
               {details.members.map((m) => (
@@ -397,10 +524,31 @@ export default function Dashboard() {
       </main>
 
       {/* ---------- Overlays ---------- */}
-      {profileUserId && (
-        <ProfileDrawer userId={profileUserId} onClose={() => setProfileUserId(null)} onMessage={(id) => { openConversation(id as Id<"dmConversations">); setProfileUserId(null); }} />
+      {profileUserId && !fullProfileUserId && (
+        <ProfilePopup
+          userId={profileUserId}
+          serverId={section === "community" ? communityId ?? undefined : undefined}
+          onClose={() => setProfileUserId(null)}
+          onMessage={(id) => { openConversation(id as Id<"dmConversations">); setProfileUserId(null); }}
+          onViewFull={(id) => { setFullProfileUserId(id); setProfileUserId(null); }}
+        />
       )}
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {fullProfileUserId && (
+        <div className="fc-profile-page-overlay">
+          <FullProfile
+            userId={fullProfileUserId}
+            onBack={() => setFullProfileUserId(null)}
+            onMessage={(id) => { openConversation(id as Id<"dmConversations">); setFullProfileUserId(null); }}
+          />
+        </div>
+      )}
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={() => setSettingsOpen(false)}
+          onEditProfile={() => { setSettingsOpen(false); setProfileEditorOpen(true); }}
+        />
+      )}
+      {profileEditorOpen && <ProfileEditor onClose={() => setProfileEditorOpen(false)} />}
       {communitySettingsOpen && communityId && (
         <CommunitySettings
           serverId={communityId}
@@ -411,11 +559,12 @@ export default function Dashboard() {
 
       {inCall && (
         <div className="fc-call-overlay">
-          <CallPanel
+          <VoicePanel
             channelId={inCall.channelId}
             channelName={inCall.name}
             myUserId={me?.userId ?? ""}
-            onLeave={async () => { try { await leaveVoice({}); } catch { /* already left */ } setInCall(null); }}
+            onOpenProfile={setProfileUserId}
+            onLeave={async () => { try { await leaveVoiceSession({}); } catch { /* already left */ } setInCall(null); }}
           />
         </div>
       )}
@@ -446,10 +595,10 @@ export default function Dashboard() {
         <DialogContent className="freecord-dialog">
           <DialogHeader>
             <DialogTitle>
-              {modal === "createCommunity" ? "Create a community" : modal === "join" ? "Join with an invite" : modal === "channel" ? "Create a channel" : "Invite your people"}
+              {modal === "createCommunity" ? "Create a community" : modal === "join" ? "Join with an invite" : modal === "channel" ? "Create a channel" : modal === "category" ? "Create a category" : "Invite your people"}
             </DialogTitle>
             <DialogDescription>
-              {modal === "createCommunity" ? "Communities are home for your people. You can make it public or private." : modal === "join" ? "Paste an invite code shared by a community." : modal === "channel" ? "Add a text or voice channel to this community." : "Share this invite code, or create a fresh one."}
+              {modal === "createCommunity" ? "Communities are home for your people. You can make it public or private." : modal === "join" ? "Paste an invite code shared by a community." : modal === "channel" ? "Add a text, voice, or video channel to this community." : modal === "category" ? "Group channels together in the sidebar." : "Share this invite code, or create a fresh one."}
             </DialogDescription>
           </DialogHeader>
 
@@ -462,7 +611,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <form className="fc-modal-form" onSubmit={handleModal}>
-              <label htmlFor="modal-value">{modal === "join" ? "Invite code" : modal === "channel" ? "Channel name" : "Community name"}</label>
+              <label htmlFor="modal-value">{modal === "join" ? "Invite code" : modal === "category" ? "Category name" : modal === "channel" ? "Channel name" : "Community name"}</label>
               <Input id="modal-value" autoFocus required value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} maxLength={60} placeholder={modal === "createCommunity" ? "The Creative Corner" : modal === "channel" ? "share-your-work" : "Paste your invite"} />
               {modal === "createCommunity" && (
                 <>
@@ -475,12 +624,36 @@ export default function Dashboard() {
                 </>
               )}
               {modal === "channel" && (
-                <label className="fc-checkbox-row">
-                  <input type="checkbox" checked={channelType === "voice"} onChange={(e) => setChannelType(e.target.checked ? "voice" : "text")} />
-                  Voice channel
-                </label>
+                <>
+                  <span className="fc-field-label">Channel type</span>
+                  <div className="fc-radio-row">
+                    {([["text", "Text channel"], ["voice", "Voice channel"], ["video", "Video channel"]] as const).map(([t, label]) => (
+                      <label key={t} className={`fc-radio ${channelType === t ? "active" : ""}`}>
+                        <input type="radio" name="channel-type" checked={channelType === t} onChange={() => setChannelType(t)} />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                  <label htmlFor="modal-category">Category</label>
+                  <select id="modal-category" className="fc-select" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+                    <option value="">No category</option>
+                    {channelTree?.categories.map((cat) => <option key={cat._id} value={cat._id}>{cat.name}</option>)}
+                  </select>
+                  {channelType !== "text" && (
+                    <>
+                      <label htmlFor="modal-limit">User limit (0 = unlimited)</label>
+                      <Input id="modal-limit" type="number" min={0} max={100} value={userLimit} onChange={(e) => setUserLimit(Number(e.target.value) || 0)} />
+                      <label className="fc-checkbox-row">
+                        <input type="checkbox" checked={isPrivateChannel} onChange={(e) => setIsPrivateChannel(e.target.checked)} />
+                        Private — only roles you allow can see and join it
+                      </label>
+                    </>
+                  )}
+                </>
               )}
-              <Button type="submit" disabled={busy || !value.trim()}>{busy ? "One moment…" : "Confirm"}</Button>
+              <Button type="submit" disabled={busy || !value.trim()}>
+                {busy ? "One moment…" : modal === "channel" ? "Create channel" : modal === "category" ? "Create category" : "Confirm"}
+              </Button>
             </form>
           )}
         </DialogContent>

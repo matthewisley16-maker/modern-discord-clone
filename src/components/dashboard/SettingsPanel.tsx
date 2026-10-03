@@ -11,7 +11,7 @@ import { KeyRound, Mail, Monitor, Shield, Trash2, User, X } from "lucide-react";
 const TABS = ["Profile", "Account", "Privacy", "Notifications", "Sessions"] as const;
 type Tab = (typeof TABS)[number];
 
-export default function SettingsPanel({ onClose }: { onClose: () => void }) {
+export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () => void; onEditProfile?: () => void }) {
   const { signOut } = useAuth();
   const me = useQuery(api.users.me, {});
   const updateProfile = useMutation(api.users.updateProfile);
@@ -79,6 +79,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   <p className="fc-muted">{me?.email ? me.email : "No email linked"}</p>
                 </div>
               </div>
+              <Button variant="outline" onClick={onEditProfile}>Open the full profile editor</Button>
+              <p className="fc-muted">Customize your avatar, banner, colors, nameplate, badges and widgets.</p>
               <label>Display name<Input value={displayName} maxLength={40} onChange={(e) => setDisplayName(e.target.value)} /></label>
               <label>Bio<Input value={bio} maxLength={200} onChange={(e) => setBio(e.target.value)} placeholder="A little about you" /></label>
               <label>Custom status<Input value={customStatus} maxLength={80} onChange={(e) => setCustomStatus(e.target.value)} placeholder="What are you up to?" /></label>

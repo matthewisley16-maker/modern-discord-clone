@@ -249,6 +249,10 @@ const schema = defineSchema(
       editedAt: v.optional(v.number()),
       deleted: v.optional(v.boolean()),
       pinned: v.optional(v.boolean()),
+      // --- deletion ---
+      deletedForEveryone: v.optional(v.boolean()),
+      deletedAt: v.optional(v.number()),
+      deletedBy: v.optional(v.id("users")),
     }).index("by_conversation", ["conversationId"]),
 
     dmReactions: defineTable({
@@ -309,7 +313,34 @@ const schema = defineSchema(
       type: v.optional(channelTypeValidator),
       locked: v.optional(v.boolean()),
       slowModeSeconds: v.optional(v.number()),
+      // --- voice + organisation ---
+      categoryId: v.optional(v.id("channelCategories")),
+      position: v.optional(v.number()),
+      userLimit: v.optional(v.number()), // 0 / undefined = unlimited
+      isPrivate: v.optional(v.boolean()),
+      allowedRoleIds: v.optional(v.array(v.string())),
     }).index("by_server", ["serverId"]),
+
+    /** Channel categories (folders) used to group text and voice channels. */
+    channelCategories: defineTable({
+      serverId: v.id("servers"),
+      name: v.string(),
+      position: v.number(),
+    }).index("by_server", ["serverId"]),
+
+    /**
+     * Per-user "delete for me" visibility. Kept separate from the message so
+     * hiding a message for one user never affects anyone else.
+     */
+    messageVisibility: defineTable({
+      userId: v.id("users"),
+      messageId: v.string(), // channel or DM message id
+      channelId: v.optional(v.id("channels")),
+      conversationId: v.optional(v.id("dmConversations")),
+      hiddenAt: v.number(),
+    })
+      .index("by_user", ["userId"])
+      .index("by_user_message", ["userId", "messageId"]),
 
     messages: defineTable({
       channelId: v.id("channels"),
@@ -320,6 +351,11 @@ const schema = defineSchema(
       deleted: v.optional(v.boolean()),
       pinned: v.optional(v.boolean()),
       mentions: v.optional(v.array(v.id("users"))),
+      // --- deletion ---
+      deletedForEveryone: v.optional(v.boolean()),
+      deletedAt: v.optional(v.number()),
+      deletedBy: v.optional(v.id("users")),
+      deletedByModerator: v.optional(v.boolean()),
     }).index("by_channel", ["channelId"]),
 
     reactions: defineTable({
@@ -392,6 +428,9 @@ const schema = defineSchema(
       deafened: v.boolean(),
       video: v.boolean(),
       screen: v.boolean(),
+      /** Real voice-activity state driven by the client's mic analyser. */
+      speaking: v.optional(v.boolean()),
+      lastSpokeAt: v.optional(v.number()),
     })
       .index("by_channel", ["channelId"])
       .index("by_user", ["userId"]),

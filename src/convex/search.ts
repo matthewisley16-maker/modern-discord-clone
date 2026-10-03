@@ -87,13 +87,19 @@ export const global = query({
     // --- Messages in channels the user belongs to ---
     if (want === "all" || want === "messages") {
       const mine = await ctx.db.query("memberships").withIndex("by_user", (x) => x.eq("userId", userId)).collect();
+      // "Delete for me" is per-user: never surface messages this viewer hid.
+      const hidden = new Set(
+        (await ctx.db.query("messageVisibility").withIndex("by_user", (x) => x.eq("userId", userId)).collect()).map((h) => h.messageId),
+      );
       for (const m of mine) {
         const channels = await ctx.db.query("channels").withIndex("by_server", (x) => x.eq("serverId", m.serverId)).collect();
         const server = await ctx.db.get(m.serverId);
         for (const channel of channels) {
           const messages = await ctx.db.query("messages").withIndex("by_channel", (x) => x.eq("channelId", channel._id)).order("desc").take(200);
           for (const message of messages) {
-            if (message.deleted) continue;
+            // Deleted-for-everyone messages must not appear for anyone; hidden
+            // messages must not appear for the user who hid them.
+            if (message.deletedForEveryone || hidden.has(message._id as string)) continue;
             if (!message.body.toLowerCase().includes(term)) continue;
             out.messages.push({
               messageId: message._id,

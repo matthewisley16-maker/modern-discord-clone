@@ -170,7 +170,7 @@ export function findCosmetic(id: string | undefined | null) {
 }
 
 /** Inline style for a display name given font/effect/colors. */
-export function nameStyle(font?: string, effect?: string, colors?: string[]): CSSProperties {
+export function nameStyle(font?: string | null, effect?: string | null, colors?: string[] | null): CSSProperties {
   const f = NAME_FONTS.find((x) => x.id === (font ?? "default"));
   const style: CSSProperties = {};
   if (f?.css) {
@@ -213,13 +213,13 @@ export function nameStyle(font?: string, effect?: string, colors?: string[]): CS
 }
 
 /** Inline style for a profile frame ring. */
-export function frameStyle(frameId?: string): CSSProperties {
+export function frameStyle(frameId?: string | null): CSSProperties {
   const frame = FRAMES.find((f) => f.id === frameId);
   if (!frame || frame.id === "frame_none" || !frame.background) return {};
   return { background: frame.background, padding: 3 };
 }
 
-export function plateStyle(plateId?: string): CSSProperties {
+export function plateStyle(plateId?: string | null): CSSProperties {
   const plate = NAMEPLATES.find((p) => p.id === plateId);
   if (!plate || plate.id === "plate_none" || !plate.background) return {};
   return { background: plate.background };

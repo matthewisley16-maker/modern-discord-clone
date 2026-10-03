@@ -5,7 +5,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Compass, ImagePlus, LogOut, Shield, Trash2, X } from "lucide-react";
+import { Compass, ImagePlus, LogOut, Mic, Plus, Shield, Trash2, Volume2, X } from "lucide-react";
 
 const CATEGORIES = ["General", "Gaming", "Music", "Art", "Tech", "Study", "Sports", "Community"];
 const MAX_ICON_BYTES = 5 * 1024 * 1024;
@@ -23,6 +23,12 @@ export default function CommunitySettings({
   const update = useMutation(api.communities.updateSettings);
   const leave = useMutation(api.communities.leave);
   const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
+  const channelTree = useQuery(api.voice.channelTree, { serverId });
+  const createChannelFull = useMutation(api.voice.createChannelFull);
+  const updateChannelFull = useMutation(api.voice.updateChannelFull);
+  const deleteChannelFull = useMutation(api.voice.deleteChannelFull);
+  const [newVoiceName, setNewVoiceName] = useState("");
+  const [newVoiceLimit, setNewVoiceLimit] = useState(0);
 
   const server = details?.server;
   const canManage = details?.permissions.includes("manageCommunity") ?? false;
@@ -193,6 +199,67 @@ export default function CommunitySettings({
             <label>Tags (comma separated, up to 6)
               <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="art, design, feedback" />
             </label>
+
+            <h3><Volume2 size={16} /> Voice channels</h3>
+            <p className="fc-muted">Create voice rooms, set limits, and manage privacy. Members see changes immediately.</p>
+            <div className="fc-new-voice">
+              <Input value={newVoiceName} maxLength={40} placeholder="e.g. General Voice" onChange={(e) => setNewVoiceName(e.target.value)} />
+              <Input
+                type="number" min={0} max={100} value={newVoiceLimit}
+                aria-label="User limit"
+                onChange={(e) => setNewVoiceLimit(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+              />
+              <Button
+                size="sm"
+                disabled={busy || !newVoiceName.trim()}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await createChannelFull({ serverId, name: newVoiceName, type: "voice", userLimit: newVoiceLimit });
+                    setNewVoiceName("");
+                    setNewVoiceLimit(0);
+                    toast.success("Voice channel created.");
+                  } catch (e) { toast.error(e instanceof Error ? e.message : "Could not create the channel."); }
+                  finally { setBusy(false); }
+                }}
+              ><Plus className="mr-1 h-4 w-4" /> Create voice channel</Button>
+            </div>
+            <ul className="fc-voice-manage">
+              {(channelTree?.uncategorized ?? [])
+                .concat(channelTree?.byCategory.flatMap((g) => g.channels) ?? [])
+                .filter((c) => c.type === "voice" || c.type === "video")
+                .map((c) => (
+                  <li key={c._id}>
+                    <span className="fc-voice-manage-name">{c.isPrivate ? <Mic size={13} /> : <Volume2 size={14} />} {c.name}</span>
+                    <label className="fc-voice-manage-limit">Limit
+                      <input
+                        type="number" min={0} max={100}
+                        defaultValue={c.userLimit ?? 0}
+                        onBlur={(e) => {
+                          const n = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                          if (n !== (c.userLimit ?? 0)) updateChannelFull({ channelId: c._id, userLimit: n }).then(() => toast.success("User limit updated.")).catch((err) => toast.error(err.message));
+                        }}
+                      />
+                    </label>
+                    <label className="fc-checkbox-row">
+                      <input
+                        type="checkbox"
+                        defaultChecked={c.isPrivate ?? false}
+                        onChange={(e) => updateChannelFull({ channelId: c._id, isPrivate: e.target.checked }).then(() => toast.success(e.target.checked ? "Now private." : "Now public.")).catch((err) => toast.error(err.message))}
+                      />
+                      Private
+                    </label>
+                    <button
+                      className="fc-voice-manage-del"
+                      aria-label={`Delete ${c.name}`}
+                      onClick={() => {
+                        if (!window.confirm(`Delete Voice Channel?\n\nThis will remove "${c.name}" from this community.`)) return;
+                        deleteChannelFull({ channelId: c._id }).then(() => toast.success("Channel deleted.")).catch((err) => toast.error(err.message));
+                      }}
+                    ><Trash2 size={14} /></button>
+                  </li>
+                ))}
+            </ul>
 
             <h3><Shield size={16} /> General</h3>
             <label>Community name
