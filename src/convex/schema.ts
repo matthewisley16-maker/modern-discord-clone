@@ -16,6 +16,47 @@ export const roleValidator = v.union(
 );
 export type Role = Infer<typeof roleValidator>;
 
+// ---- Community (server) permission model ----
+export const PERMISSIONS = [
+  "sendMessages",
+  "deleteMessages",
+  "manageMessages",
+  "createChannels",
+  "manageChannels",
+  "kickMembers",
+  "banMembers",
+  "manageRoles",
+  "manageCommunity",
+  "createInvites",
+  "useVoice",
+  "manageMembers",
+] as const;
+export const permissionValidator = v.union(
+  ...PERMISSIONS.map((p) => v.literal(p)),
+);
+export type Permission = (typeof PERMISSIONS)[number];
+
+export const communityRoleValidator = v.union(
+  v.literal("owner"),
+  v.literal("admin"),
+  v.literal("moderator"),
+  v.literal("member"),
+);
+
+export const presenceValidator = v.union(
+  v.literal("online"),
+  v.literal("idle"),
+  v.literal("dnd"),
+  v.literal("invisible"),
+  v.literal("offline"),
+);
+
+export const channelTypeValidator = v.union(
+  v.literal("text"),
+  v.literal("voice"),
+  v.literal("video"),
+);
+
 const schema = defineSchema(
   {
     // default auth tables using convex auth.
@@ -31,28 +72,279 @@ const schema = defineSchema(
       isAnonymous: v.optional(v.boolean()), // is the user anonymous. do not remove
 
       role: v.optional(roleValidator), // role of the user. do not remove
-    }).index("email", ["email"]).index("username", ["username"]), // indexes for email + username. do not remove or modify
+    })
+      .index("email", ["email"])
+      .index("username", ["username"]), // indexes for email + username. do not remove or modify
 
-    servers: defineTable({
-      name: v.string(), description: v.string(), ownerId: v.id("users"), inviteCode: v.string(),
-    }).index("by_invite", ["inviteCode"]),
-    memberships: defineTable({ serverId: v.id("servers"), userId: v.id("users") })
-      .index("by_user", ["userId"]).index("by_server", ["serverId"])
-      .index("by_server_user", ["serverId", "userId"]),
-    channels: defineTable({ serverId: v.id("servers"), name: v.string(), description: v.string() })
-      .index("by_server", ["serverId"]),
-    messages: defineTable({ channelId: v.id("channels"), userId: v.id("users"), body: v.string() })
-      .index("by_channel", ["channelId"]),
-    reactions: defineTable({ messageId: v.id("messages"), userId: v.id("users"), emoji: v.string() })
-      .index("by_message", ["messageId"]),
+    // ---------- Profiles & presence ----------
     profiles: defineTable({
-      userId: v.id("users"), displayName: v.string(), bio: v.optional(v.string()),
-      avatarColor: v.optional(v.string()), status: v.optional(v.string()), customStatus: v.optional(v.string()),
+      userId: v.id("users"),
+      displayName: v.string(),
+      bio: v.optional(v.string()),
+      avatarColor: v.optional(v.string()),
+      bannerColor: v.optional(v.string()),
+      avatarStorageId: v.optional(v.id("_storage")),
+      bannerStorageId: v.optional(v.id("_storage")),
+      status: v.optional(presenceValidator),
+      customStatus: v.optional(v.string()),
+      badges: v.optional(v.array(v.string())),
     }).index("by_user", ["userId"]),
+
+    presence: defineTable({
+      userId: v.id("users"),
+      status: presenceValidator,
+      lastSeen: v.number(),
+    }).index("by_user", ["userId"]),
+
+    userSettings: defineTable({
+      userId: v.id("users"),
+      // privacy
+      dmPrivacy: v.optional(v.string()), // everyone | friends | none
+      friendRequestPrivacy: v.optional(v.string()), // everyone | mutual | none
+      followPrivacy: v.optional(v.string()), // everyone | none
+      searchable: v.optional(v.boolean()),
+      publicProfile: v.optional(v.boolean()),
+      presenceVisible: v.optional(v.boolean()),
+      readReceipts: v.optional(v.boolean()),
+      activityVisible: v.optional(v.boolean()),
+      // notification prefs
+      notifyFriendRequests: v.optional(v.boolean()),
+      notifyDMs: v.optional(v.boolean()),
+      notifyMentions: v.optional(v.boolean()),
+      notifyInvites: v.optional(v.boolean()),
+      notifyFollows: v.optional(v.boolean()),
+      notifyCalls: v.optional(v.boolean()),
+    }).index("by_user", ["userId"]),
+
+    // ---------- Social graph ----------
+    friendRequests: defineTable({
+      fromId: v.id("users"),
+      toId: v.id("users"),
+      status: v.union(v.literal("pending"), v.literal("accepted"), v.literal("declined"), v.literal("cancelled")),
+    })
+      .index("by_to", ["toId", "status"])
+      .index("by_from", ["fromId", "status"])
+      .index("by_pair", ["fromId", "toId"]),
+
+    friendships: defineTable({ userA: v.id("users"), userB: v.id("users") })
+      .index("by_a", ["userA"])
+      .index("by_b", ["userB"])
+      .index("by_pair", ["userA", "userB"]),
+
+    follows: defineTable({ followerId: v.id("users"), followingId: v.id("users") })
+      .index("by_follower", ["followerId"])
+      .index("by_following", ["followingId"])
+      .index("by_pair", ["followerId", "followingId"]),
+
+    blocks: defineTable({ blockerId: v.id("users"), blockedId: v.id("users") })
+      .index("by_blocker", ["blockerId"])
+      .index("by_blocked", ["blockedId"])
+      .index("by_pair", ["blockerId", "blockedId"]),
+
+    // ---------- Direct messages ----------
+    dmConversations: defineTable({
+      type: v.union(v.literal("direct"), v.literal("group")),
+      name: v.optional(v.string()),
+      iconColor: v.optional(v.string()),
+      iconStorageId: v.optional(v.id("_storage")),
+      ownerId: v.id("users"),
+      lastMessageAt: v.number(),
+    }).index("by_lastMessage", ["lastMessageAt"]),
+
+    dmMembers: defineTable({
+      conversationId: v.id("dmConversations"),
+      userId: v.id("users"),
+      pinned: v.optional(v.boolean()),
+      muted: v.optional(v.boolean()),
+      lastReadAt: v.optional(v.number()),
+    })
+      .index("by_conversation", ["conversationId"])
+      .index("by_user", ["userId"])
+      .index("by_pair", ["conversationId", "userId"]),
+
+    dmMessages: defineTable({
+      conversationId: v.id("dmConversations"),
+      userId: v.id("users"),
+      body: v.string(),
+      replyToId: v.optional(v.id("dmMessages")),
+      editedAt: v.optional(v.number()),
+      deleted: v.optional(v.boolean()),
+      pinned: v.optional(v.boolean()),
+    }).index("by_conversation", ["conversationId"]),
+
+    dmReactions: defineTable({
+      messageId: v.id("dmMessages"),
+      userId: v.id("users"),
+      emoji: v.string(),
+    }).index("by_message", ["messageId"]),
+
+    typing: defineTable({
+      scope: v.string(), // "dm:<id>" or "channel:<id>"
+      userId: v.id("users"),
+      at: v.number(),
+    }).index("by_scope", ["scope"]),
+
+    // ---------- Communities (servers) ----------
+    servers: defineTable({
+      name: v.string(),
+      description: v.string(),
+      ownerId: v.id("users"),
+      inviteCode: v.string(),
+      iconColor: v.optional(v.string()),
+      iconStorageId: v.optional(v.id("_storage")),
+      bannerColor: v.optional(v.string()),
+      bannerStorageId: v.optional(v.id("_storage")),
+      isPublic: v.optional(v.boolean()),
+      tags: v.optional(v.array(v.string())),
+      category: v.optional(v.string()),
+      slowModeSeconds: v.optional(v.number()),
+      locked: v.optional(v.boolean()),
+    })
+      .index("by_invite", ["inviteCode"])
+      .index("by_public", ["isPublic"]),
+
+    memberships: defineTable({
+      serverId: v.id("servers"),
+      userId: v.id("users"),
+      role: v.optional(communityRoleValidator),
+      timeoutUntil: v.optional(v.number()),
+      customRoleId: v.optional(v.id("communityRoles")),
+    })
+      .index("by_user", ["userId"])
+      .index("by_server", ["serverId"])
+      .index("by_server_user", ["serverId", "userId"]),
+
+    communityRoles: defineTable({
+      serverId: v.id("servers"),
+      name: v.string(),
+      color: v.optional(v.string()),
+      permissions: v.array(permissionValidator),
+      position: v.number(),
+    }).index("by_server", ["serverId"]),
+
+    channels: defineTable({
+      serverId: v.id("servers"),
+      name: v.string(),
+      description: v.string(),
+      type: v.optional(channelTypeValidator),
+      locked: v.optional(v.boolean()),
+      slowModeSeconds: v.optional(v.number()),
+    }).index("by_server", ["serverId"]),
+
+    messages: defineTable({
+      channelId: v.id("channels"),
+      userId: v.id("users"),
+      body: v.string(),
+      replyToId: v.optional(v.id("messages")),
+      editedAt: v.optional(v.number()),
+      deleted: v.optional(v.boolean()),
+      pinned: v.optional(v.boolean()),
+      mentions: v.optional(v.array(v.id("users"))),
+    }).index("by_channel", ["channelId"]),
+
+    reactions: defineTable({
+      messageId: v.id("messages"),
+      userId: v.id("users"),
+      emoji: v.string(),
+    }).index("by_message", ["messageId"]),
+
+    attachments: defineTable({
+      storageId: v.id("_storage"),
+      uploaderId: v.id("users"),
+      name: v.string(),
+      size: v.number(),
+      contentType: v.string(),
+      // exactly one target
+      messageId: v.optional(v.id("messages")),
+      dmMessageId: v.optional(v.id("dmMessages")),
+    })
+      .index("by_message", ["messageId"])
+      .index("by_dm_message", ["dmMessageId"]),
+
+    invites: defineTable({
+      serverId: v.id("servers"),
+      code: v.string(),
+      createdBy: v.id("users"),
+      expiresAt: v.optional(v.number()),
+      maxUses: v.optional(v.number()),
+      uses: v.number(),
+    })
+      .index("by_code", ["code"])
+      .index("by_server", ["serverId"]),
+
+    bans: defineTable({
+      serverId: v.id("servers"),
+      userId: v.id("users"),
+      reason: v.optional(v.string()),
+      byId: v.id("users"),
+    })
+      .index("by_server", ["serverId"])
+      .index("by_server_user", ["serverId", "userId"]),
+
+    reports: defineTable({
+      targetType: v.union(v.literal("user"), v.literal("message"), v.literal("community"), v.literal("dmMessage")),
+      targetId: v.string(),
+      reporterId: v.id("users"),
+      category: v.string(),
+      description: v.optional(v.string()),
+      status: v.union(v.literal("open"), v.literal("resolved"), v.literal("dismissed")),
+    }).index("by_status", ["status"]),
+
+    // ---------- Notifications ----------
+    notifications: defineTable({
+      userId: v.id("users"),
+      type: v.string(),
+      title: v.string(),
+      body: v.optional(v.string()),
+      link: v.optional(v.string()),
+      actorId: v.optional(v.id("users")),
+      read: v.boolean(),
+    })
+      .index("by_user", ["userId"])
+      .index("by_user_read", ["userId", "read"]),
+
+    // ---------- Voice / video ----------
+    voiceSessions: defineTable({
+      channelId: v.id("channels"),
+      userId: v.id("users"),
+      joinedAt: v.number(),
+      muted: v.boolean(),
+      deafened: v.boolean(),
+      video: v.boolean(),
+      screen: v.boolean(),
+    })
+      .index("by_channel", ["channelId"])
+      .index("by_user", ["userId"]),
+
+    voiceSignals: defineTable({
+      channelId: v.id("channels"),
+      fromUserId: v.id("users"),
+      toUserId: v.id("users"),
+      kind: v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate")),
+      payload: v.string(),
+    }).index("by_to", ["toUserId"]),
+
+    callInvites: defineTable({
+      fromId: v.id("users"),
+      toId: v.id("users"),
+      conversationId: v.optional(v.id("dmConversations")),
+      channelId: v.optional(v.id("channels")),
+      media: v.union(v.literal("voice"), v.literal("video")),
+      status: v.union(v.literal("ringing"), v.literal("accepted"), v.literal("declined"), v.literal("missed")),
+    }).index("by_to", ["toId", "status"]),
+
+    // ---------- Ops ----------
     rateLimits: defineTable({ key: v.string(), count: v.number(), windowStart: v.number() })
       .index("by_key", ["key"]),
     moderationLogs: defineTable({ action: v.string(), actorId: v.optional(v.id("users")), detail: v.string() }),
-    
+    auditLogs: defineTable({
+      action: v.string(),
+      actorId: v.optional(v.id("users")),
+      targetType: v.optional(v.string()),
+      targetId: v.optional(v.string()),
+      detail: v.string(),
+      at: v.number(),
+    }).index("by_at", ["at"]),
   },
   {
     schemaValidation: false,
