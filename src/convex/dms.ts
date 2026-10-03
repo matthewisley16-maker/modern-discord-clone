@@ -386,6 +386,18 @@ export const setTyping = mutation({
   },
 });
 
+/** Clear my typing state for a DM (called on send, empty draft, or leaving). */
+export const stopTyping = mutation({
+  args: { conversationId: v.optional(v.id("dmConversations")), channelId: v.optional(v.id("channels")) },
+  handler: async (ctx, { conversationId, channelId }) => {
+    const me = await currentUserId(ctx);
+    const scope = channelId ? `channel:${channelId}` : conversationId ? `dm:${conversationId}` : null;
+    if (!scope) return;
+    const rows = await ctx.db.query("typing").withIndex("by_scope", (q) => q.eq("scope", scope)).collect();
+    for (const row of rows) if (row.userId === me) await ctx.db.delete(row._id);
+  },
+});
+
 /** Who is currently typing (entries older than 6s are ignored). */
 export const typingIn = query({
   args: { conversationId: v.id("dmConversations") },
