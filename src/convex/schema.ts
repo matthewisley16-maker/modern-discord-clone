@@ -88,13 +88,92 @@ const schema = defineSchema(
       status: v.optional(presenceValidator),
       customStatus: v.optional(v.string()),
       badges: v.optional(v.array(v.string())),
+      // --- profile customization (all free) ---
+      pronouns: v.optional(v.string()),
+      interests: v.optional(v.array(v.string())),
+      socialLinks: v.optional(v.array(v.object({ label: v.string(), url: v.string() }))),
+      theme: v.optional(v.string()), // preset id or "custom"
+      themeColors: v.optional(v.object({ primary: v.string(), accent: v.string(), background: v.string(), text: v.optional(v.string()) })),
+      decorationId: v.optional(v.string()),
+      frameId: v.optional(v.string()),
+      effectId: v.optional(v.string()),
+      nameplateId: v.optional(v.string()),
+      nameFont: v.optional(v.string()),
+      nameEffect: v.optional(v.string()),
+      nameColors: v.optional(v.array(v.string())),
+      badgeOrder: v.optional(v.array(v.string())),
+      avatarHistory: v.optional(v.array(v.id("_storage"))),
+      widgets: v.optional(v.array(v.object({
+        id: v.string(), type: v.string(), enabled: v.boolean(), position: v.number(), content: v.optional(v.string()),
+      }))),
+      activityType: v.optional(v.string()), // playing | listening | watching | streaming | custom
+      activityName: v.optional(v.string()),
+      activitySince: v.optional(v.number()),
+      // per-field visibility: everyone | friends | mutual | none
+      privacy: v.optional(v.object({
+        bio: v.optional(v.string()), pronouns: v.optional(v.string()), badges: v.optional(v.string()),
+        activity: v.optional(v.string()), socialLinks: v.optional(v.string()), widgets: v.optional(v.string()),
+        friendsList: v.optional(v.string()), mutuals: v.optional(v.string()), customStatus: v.optional(v.string()),
+      })),
+      favorites: v.optional(v.array(v.string())),
     }).index("by_user", ["userId"]),
+
+    /** Per-community profile overrides (nickname, avatar, bio, etc.). */
+    memberProfiles: defineTable({
+      serverId: v.id("servers"),
+      userId: v.id("users"),
+      nickname: v.optional(v.string()),
+      bio: v.optional(v.string()),
+      pronouns: v.optional(v.string()),
+      avatarStorageId: v.optional(v.id("_storage")),
+      bannerStorageId: v.optional(v.id("_storage")),
+      nameFont: v.optional(v.string()),
+      nameEffect: v.optional(v.string()),
+      nameColors: v.optional(v.array(v.string())),
+      statusText: v.optional(v.string()),
+    })
+      .index("by_server_user", ["serverId", "userId"])
+      .index("by_user", ["userId"]),
 
     presence: defineTable({
       userId: v.id("users"),
       status: presenceValidator,
+      manualStatus: v.optional(presenceValidator), // what the user explicitly chose
       lastSeen: v.number(),
+      lastActive: v.optional(v.number()),
+      connected: v.optional(v.boolean()),
     }).index("by_user", ["userId"]),
+
+    /** Appearance + accessibility settings (per account, persisted). */
+    appearance: defineTable({
+      userId: v.id("users"),
+      theme: v.optional(v.string()), // dark | light | midnight | contrast
+      density: v.optional(v.string()), // comfortable | compact
+      fontSize: v.optional(v.number()),
+      messageSpacing: v.optional(v.number()),
+      reducedMotion: v.optional(v.boolean()),
+      customColors: v.optional(v.object({
+        sidebar: v.optional(v.string()), background: v.optional(v.string()),
+        channel: v.optional(v.string()), accent: v.optional(v.string()),
+      })),
+    }).index("by_user", ["userId"]),
+
+    /** Server-side custom emoji and stickers. */
+    emojis: defineTable({
+      serverId: v.id("servers"),
+      name: v.string(),
+      storageId: v.id("_storage"),
+      createdBy: v.id("users"),
+    }).index("by_server", ["serverId"]),
+
+    stickers: defineTable({
+      serverId: v.id("servers"),
+      name: v.string(),
+      description: v.optional(v.string()),
+      tags: v.optional(v.array(v.string())),
+      storageId: v.id("_storage"),
+      createdBy: v.id("users"),
+    }).index("by_server", ["serverId"]),
 
     userSettings: defineTable({
       userId: v.id("users"),
@@ -182,7 +261,8 @@ const schema = defineSchema(
       scope: v.string(), // "dm:<id>" or "channel:<id>"
       userId: v.id("users"),
       at: v.number(),
-    }).index("by_scope", ["scope"]),
+      sessionId: v.optional(v.string()),
+    }).index("by_scope", ["scope"]).index("by_user", ["userId"]),
 
     // ---------- Communities (servers) ----------
     servers: defineTable({
