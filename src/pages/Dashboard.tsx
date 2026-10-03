@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -7,66 +7,465 @@ import { useAuth } from "@/hooks/use-auth";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import CallPanel from "@/components/CallPanel";
+import DmView from "@/components/dashboard/DmView";
+import ChannelView from "@/components/dashboard/ChannelView";
+import HomeView from "@/components/dashboard/HomeView";
+import DiscoverView from "@/components/dashboard/DiscoverView";
+import SearchView from "@/components/dashboard/SearchView";
+import ProfileDrawer from "@/components/dashboard/ProfileDrawer";
+import SettingsPanel from "@/components/dashboard/SettingsPanel";
+import { Avatar, colorFor, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { toast } from "sonner";
-import { AudioLines, ArrowUpRight, ChevronDown, Copy, Hash, LogOut, Menu, MessageCircle, Plus, Search, Send, Settings, Smile, Trash2, Users, X } from "lucide-react";
-import { FreecordMark } from "./Landing";
+import {
+  AtSign, Bell, Check, Compass, Hash, Headphones, Home, LogOut, Menu, Mic, Phone, Plus,
+  Search, Settings, Users, Volume2, X,
+} from "lucide-react";
 
-type Modal = "create" | "join" | "channel" | "profile" | "invite" | null;
+type Section = "home" | "dms" | "discover" | "search" | "community";
+type Modal = "create" | "join" | "channel" | "invite" | "createCommunity" | null;
+
 export default function Dashboard() {
   const { signOut } = useAuth();
-  const workspace = useQuery(api.chat.workspace);
-  const [selectedServer, setSelectedServer] = useState<Id<"servers"> | null>(null);
-  const serverId = selectedServer ?? workspace?.servers[0]?._id;
-  const details = useQuery(api.chat.serverDetails, serverId ? { serverId } : "skip");
-  const [selectedChannel, setSelectedChannel] = useState<Id<"channels"> | null>(null);
-  const channel = details?.channels.find(c => c._id === selectedChannel) ?? details?.channels[0];
-  const messages = useQuery(api.chat.messages, channel ? { channelId: channel._id } : "skip");
-  const createServer = useMutation(api.chat.createServer);
-  const joinServer = useMutation(api.chat.joinServer);
-  const createChannel = useMutation(api.chat.createChannel);
-  const sendMessage = useMutation(api.chat.sendMessage);
-  const deleteMessage = useMutation(api.chat.deleteMessage);
-  const toggleReaction = useMutation(api.chat.toggleReaction);
-  const updateProfile = useMutation(api.chat.updateProfile);
+  const navigate = useNavigate();
+  const me = useQuery(api.users.me, {});
+  const communities = useQuery(api.communities.listMine, {});
+  const conversations = useQuery(api.dms.listConversations, {});
+  const notifications = useQuery(api.social.listNotifications, {});
+  const dmUnread = useQuery(api.dms.unreadTotal, {});
+  const voiceSession = useQuery(api.communities.myVoiceSession, {});
+  const incomingCall = useQuery(api.calls.incomingCall, {});
+  const outgoingCall = useQuery(api.calls.outgoingCall, {});
+
+  const setStatus = useMutation(api.users.setStatus);
+  const heartbeat = useMutation(api.users.heartbeat);
+  const createCommunity = useMutation(api.communities.create);
+  const joinByCode = useMutation(api.communities.joinByCode);
+  const createChannel = useMutation(api.communities.createChannel);
+  const leaveCommunity = useMutation(api.communities.leave);
+  const markAllRead = useMutation(api.social.markAllNotificationsRead);
+  const markRead = useMutation(api.social.markNotificationRead);
+  const leaveVoice = useMutation(api.communities.leaveVoice);
+  const respondCall = useMutation(api.calls.respondCall);
+  const cancelCall = useMutation(api.calls.cancelCall);
+  const inviteCall = useMutation(api.calls.inviteCall);
+  const setMuted = useMutation(api.dms.setMuted);
+  const setPinned = useMutation(api.dms.setPinned);
+
+  const [section, setSection] = useState<Section>("home");
+  const [communityId, setCommunityId] = useState<Id<"servers"> | null>(null);
+  const [channelId, setChannelId] = useState<Id<"channels"> | null>(null);
+  const [conversationId, setConversationId] = useState<Id<"dmConversations"> | null>(null);
+  const [profileUserId, setProfileUserId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [mobileNav, setMobileNav] = useState(false);
   const [modal, setModal] = useState<Modal>(null);
   const [value, setValue] = useState("");
   const [description, setDescription] = useState("");
+  const [isPublic, setIsPublic] = useState(true);
+  const [channelType, setChannelType] = useState<"text" | "voice">("text");
   const [busy, setBusy] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [search, setSearch] = useState("");
-  const [mobileNav, setMobileNav] = useState(false);
-  const [membersOpen, setMembersOpen] = useState(true);
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const bottom = useRef<HTMLDivElement>(null);
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, channel?._id]);
-  function openModal(next: Modal) { setValue(next === "profile" ? workspace?.displayName ?? "" : ""); setDescription(""); setModal(next); }
+  const [inCall, setInCall] = useState<{ channelId: Id<"channels">; name: string } | null>(null);
+
+  const details = useQuery(api.communities.details, communityId ? { serverId: communityId } : "skip");
+  const channel = details?.channels.find((c) => c._id === channelId) ?? details?.channels.find((c) => c.type !== "voice");
+
+  // Presence heartbeat so others see us online, and resume any voice session.
+  useEffect(() => {
+    heartbeat({}).catch(() => {});
+    const t = setInterval(() => heartbeat({}).catch(() => {}), 30_000);
+    return () => clearInterval(t);
+  }, [heartbeat]);
+  useEffect(() => {
+    if (voiceSession) setInCall({ channelId: voiceSession.channelId, name: voiceSession.channelName });
+  }, [voiceSession]);
+
+  // Keep the selected community valid.
+  useEffect(() => {
+    if (communityId && details && !details.channels.some((c) => c._id === channelId)) {
+      setChannelId(details.channels.find((c) => c.type !== "voice")?._id ?? null);
+    }
+  }, [details, communityId, channelId]);
+
+  function openCommunity(id: string) {
+    setCommunityId(id as Id<"servers">);
+    setChannelId(null);
+    setSection("community");
+    setMobileNav(false);
+  }
+
+  function openConversation(id: Id<"dmConversations">) {
+    setConversationId(id);
+    setSection("dms");
+    setMobileNav(false);
+  }
+
+  function openModal(next: Modal) {
+    setValue("");
+    setDescription("");
+    setChannelType("text");
+    setModal(next);
+  }
+
   async function handleModal(e: React.FormEvent) {
-    e.preventDefault(); setBusy(true);
+    e.preventDefault();
+    setBusy(true);
     try {
-      if (modal === "create") { const id = await createServer({ name: value, description }); setSelectedServer(id); setSelectedChannel(null); }
-      if (modal === "join") { const id = await joinServer({ code: value }); setSelectedServer(id); setSelectedChannel(null); }
-      if (modal === "channel" && serverId) { const id = await createChannel({ serverId, name: value }); setSelectedChannel(id); }
-      if (modal === "profile") await updateProfile({ name: value });
-      setModal(null); toast.success(modal === "join" ? "Welcome to your community!" : "All set!");
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Something went wrong."); }
-    finally { setBusy(false); }
+      if (modal === "createCommunity") {
+        const id = await createCommunity({ name: value, description, isPublic });
+        openCommunity(id);
+        setSection("discover");
+      } else if (modal === "join") {
+        const id = await joinByCode({ code: value });
+        openCommunity(id);
+      } else if (modal === "channel" && communityId) {
+        const id = await createChannel({ serverId: communityId, name: value, type: channelType });
+        setChannelId(id);
+      }
+      setModal(null);
+      toast.success("All set!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
   }
-  async function send(e: React.FormEvent) {
-    e.preventDefault(); if (!channel || !draft.trim() || sending) return;
-    const body = draft; setSending(true);
-    try { await sendMessage({ channelId: channel._id, body }); setDraft(""); }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Message could not be sent."); }
-    finally { setSending(false); }
+
+  async function joinVoice(channelId: Id<"channels">, name: string) {
+    setInCall({ channelId, name });
   }
-  async function act(operation: Promise<unknown>) { try { await operation; } catch (error) { toast.error(error instanceof Error ? error.message : "Action failed."); } }
-  const initials = (name: string) => name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
-  const visibleMessages = messages?.filter(m => `${m.body} ${m.author}`.toLowerCase().includes(search.toLowerCase()));
-  return <div className="workspace-shell"><aside className="server-rail workspace-rail"><Link className="rail-logo" to="/" aria-label="Freecord home"><AudioLines size={25} /></Link><div className="rail-rule" />{workspace?.servers.map(s => <button title={s.name} aria-label={s.name} key={s._id} onClick={() => { setSelectedServer(s._id); setSelectedChannel(null); setSearch(""); setDraft(""); }} className={`server-bubble ${s._id === serverId ? "selected" : "sage"}`}>{initials(s.name)}</button>)}<button title="Create server" aria-label="Create server" onClick={() => openModal("create")} className="server-bubble add"><Plus /></button><button title="Join server" aria-label="Join server" onClick={() => openModal("join")} className="server-bubble add"><ArrowUpRight /></button><button className="rail-bottom" title="Sign out" aria-label="Sign out" onClick={() => act(signOut())}><LogOut size={20} /></button></aside>
-    <aside className={`channel-sidebar workspace-sidebar ${mobileNav ? "is-open" : ""}`}><div className="server-title"><span>{details?.server?.name ?? "Your communities"}</span><button aria-label="Close channels" className="mobile-close" onClick={() => setMobileNav(false)}><X size={18} /></button><ChevronDown size={16} /></div><div className="community-banner"><span className="banner-star">✳</span><span>{details?.server?.description || "A little space.\nA lot of possibility."}</span></div><div className="channel-category">TEXT CHANNELS{details?.server?.ownerId === workspace?.userId && serverId && <button aria-label="Create channel" onClick={() => openModal("channel")}><Plus size={15} /></button>}</div>{details?.channels.map(c => <button className={`channel-item ${channel?._id === c._id ? "active" : ""}`} key={c._id} onClick={() => { setSelectedChannel(c._id); setSearch(""); setDraft(""); setMobileNav(false); }}><Hash size={18} />{c.name}</button>)}{serverId && <button className="invite-sidebar" onClick={() => openModal("invite")}><Users size={16} /> Invite your people <Plus size={15} /></button>}<div className="sidebar-help"><span>YOUR LITTLE CORNER</span><p>Good conversations start with a hello. Make someone’s day.</p><span className="help-flower">✳</span></div><div className="sidebar-footer"><span className="avatar sage">{initials(workspace?.displayName ?? "You")}</span><div><strong>{workspace?.displayName ?? "Loading…"}</strong><small>Your personal space</small></div><button aria-label="Edit profile" onClick={() => openModal("profile")}><Settings size={18} /></button></div></aside>
-    <main className="workspace-main"><header className="conversation-header"><button className="mobile-menu" aria-label="Open channels" onClick={() => setMobileNav(true)}><Menu size={20} /></button><Hash size={22} /><strong>{channel?.name ?? "Welcome to Freecord"}</strong><span className="header-divider" /><span className="channel-description">{channel?.description ?? "Your people. Your place."}</span><div className="conversation-tools"><button aria-label="Toggle member list" onClick={() => setMembersOpen(!membersOpen)}><Users size={19} /></button><div className="preview-search"><Search size={14} /><input aria-label="Search messages" placeholder="Search messages" value={search} onChange={e => setSearch(e.target.value)} /></div></div></header>
-      {!workspace ? <div className="workspace-empty"><AudioLines className="animate-pulse" /><p>Getting your space ready…</p></div> : !serverId ? <div className="workspace-empty"><FreecordMark /><div className="empty-flower">✳</div><span className="eyebrow">A LITTLE CLOSER, STARTING HERE</span><h1>Your people.<br />Your place.</h1><p>Create a server for your friends, your project, or your next big idea.<br />Already have an invitation? There’s a place waiting for you.</p><div className="hero-actions"><button className="button-teal" onClick={() => openModal("create")}><Plus size={18} />Create a server</button><button className="button-outline" onClick={() => openModal("join")}>Join with an invite <ArrowUpRight size={17} /></button></div></div> : <><div className="workspace-messages"><div className="channel-welcome"><span className="welcome-hash"><Hash size={28} /></span><h3>Welcome to #{channel?.name}<span>.</span></h3><p>{channel?.description} Say hello and make yourself at home.</p></div><div className="date-divider"><span />The conversation<span /></div>{messages === undefined && <p className="chat-loading">Loading messages…</p>}{messages?.length === 0 && <div className="no-messages"><MessageCircle size={30} /><h3>A fresh start.</h3><p>Be the first to say hello. No sample users or messages here—just your community.</p></div>}{search && visibleMessages?.length === 0 && <p className="chat-loading">No messages match “{search}”.</p>}{visibleMessages?.map(m => <article className="preview-message real-message" key={m._id}><span className={`avatar ${m.userId === workspace.userId ? "sage" : "peach"}`}>{initials(m.author)}</span><div className="message-content"><div className="message-byline"><strong>{m.author}</strong><span>{new Date(m._creationTime).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>{m.userId === workspace.userId && <b>YOU</b>}</div><p className="real-message-body">{m.body}</p><div className="reaction-row">{[...new Set(m.reactions.map(r => r.emoji))].map(emoji => <button className={m.reactions.some(r => r.emoji === emoji && r.userId === workspace.userId) ? "reacted" : ""} key={emoji} onClick={() => act(toggleReaction({ messageId: m._id, emoji }))}>{emoji} {m.reactions.filter(r => r.emoji === emoji).length}</button>)}</div></div><div className="message-actions"><button title="React with a heart" aria-label="React with a heart" onClick={() => act(toggleReaction({ messageId: m._id, emoji: "❤️" }))}><Smile size={16} /></button><button title="React with applause" aria-label="React with applause" onClick={() => act(toggleReaction({ messageId: m._id, emoji: "🙌" }))}>🙌</button>{m.userId === workspace.userId && <button title="Delete your message" aria-label="Delete your message" onClick={() => act(deleteMessage({ messageId: m._id }))}><Trash2 size={15} /></button>}</div></article>)}<div ref={bottom} /></div><div className="workspace-composer-wrap">{emojiOpen && <div className="emoji-picker">{["😊", "🙌", "❤️", "✨", "🔥", "👍", "🎉", "👋"].map(emoji => <button key={emoji} onClick={() => { setDraft(draft + emoji); setEmojiOpen(false); }}>{emoji}</button>)}</div>}<form className="preview-composer" onSubmit={send}><button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => setEmojiOpen(!emojiOpen)}><Smile size={20} /></button><input disabled={sending || !channel} maxLength={4000} aria-label="Message" value={draft} onChange={e => setDraft(e.target.value)} placeholder={`Message #${channel?.name ?? "general"}`} /><button disabled={sending || !draft.trim() || !channel} aria-label="Send message"><Send size={18} /></button></form><div className="composer-note">Enter to send · Be kind. Be yourself. <span>{draft.length ? `${draft.length}/4000` : "Live conversations, powered by Freecord"}</span></div></div></>}
-    </main>{membersOpen && serverId && <aside className="preview-members workspace-members"><div className="member-heading">YOUR COMMUNITY <span>{details?.members.length ?? "—"}</span></div>{details?.members.map(m => <div className="member-item" key={m.userId}><span className={`avatar ${m.userId === workspace?.userId ? "sage" : "peach"}`}>{initials(m.name)}</span><div><strong>{m.name}</strong><small>{m.userId === details.server?.ownerId ? "Server owner" : "Community member"}</small></div></div>)}<div className="invite-card"><span>More friends.<br />More possibilities.</span><button onClick={() => openModal("invite")}>Invite your people <ArrowUpRight size={14} /></button></div><div className="workspace-limits">Text chat is live.<br />Voice, video, and attachments are not included in this version.</div></aside>}
-    <Dialog open={modal !== null} onOpenChange={open => { if (!open && !busy) setModal(null); }}><DialogContent className="freecord-dialog"><DialogHeader><DialogTitle>{modal === "create" ? "Make a little space." : modal === "join" ? "Find your people." : modal === "channel" ? "Start a new conversation." : modal === "profile" ? "Make yourself at home." : "Good company is better together."}</DialogTitle><DialogDescription>{modal === "create" ? "A server is a home for your community. Give it a name that feels like you." : modal === "join" ? "Paste the invite code shared by your community." : modal === "channel" ? "Only server owners can add text channels." : modal === "profile" ? "Choose the display name your community will see." : "Share this invite code with friends. They can sign in and use Join with an invite."}</DialogDescription></DialogHeader>{modal === "invite" ? <div className="invite-modal"><code>{details?.server?.inviteCode}</code><Button onClick={async () => { try { await navigator.clipboard.writeText(details?.server?.inviteCode ?? ""); toast.success("Invite code copied!"); } catch { toast.error("Couldn't copy. Select and copy the code manually."); } }}><Copy size={15} />Copy invite code</Button></div> : <form onSubmit={handleModal} className="modal-form"><label htmlFor="modal-name">{modal === "join" ? "Invite code" : modal === "profile" ? "Display name" : modal === "channel" ? "Channel name" : "Server name"}</label><Input id="modal-name" autoFocus required value={value} disabled={busy} onChange={e => setValue(e.target.value)} maxLength={modal === "join" ? 100 : modal === "create" ? 50 : 40} placeholder={modal === "create" ? "The Creative Corner" : modal === "channel" ? "share-your-work" : modal === "profile" ? "Your name" : "Paste your invitation"} />{modal === "create" && <><label htmlFor="server-description">A little about your space (optional)</label><Input id="server-description" value={description} onChange={e => setDescription(e.target.value)} maxLength={200} placeholder="For big ideas and good company." /></>}<Button type="submit" disabled={busy || !value.trim()}>{busy ? "One moment…" : modal === "create" ? "Create server" : modal === "join" ? "Join server" : modal === "channel" ? "Create channel" : "Save profile"}<ArrowUpRight size={16} /></Button></form>}</DialogContent></Dialog>
-  </div>;
+
+  async function startDmCall(media: "voice" | "video") {
+    if (!conversationId) return;
+    const convo = conversations?.find((c) => c.conversationId === conversationId);
+    const target = convo?.members[0];
+    if (!target) { toast.error("There's no one else in this conversation to call."); return; }
+    try {
+      await inviteCall({ toId: target.userId as Id<"users">, conversationId, media });
+      toast.success(`Ringing ${target.displayName}…`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not start the call.");
+    }
+  }
+
+  const statusMeta = PRESENCE_META[me?.presence ?? "online"] ?? PRESENCE_META.online;
+  const hasUnread = (notifications?.unread ?? 0) > 0;
+
+  return (
+    <div className="fc-shell">
+      {/* ---------- Server rail ---------- */}
+      <aside className={`fc-rail ${mobileNav ? "hide-mobile" : ""}`} aria-label="Communities">
+        <Link to="/" className="fc-rail-logo" aria-label="Freecord home">
+          <svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true">
+            <rect width="64" height="64" rx="18" fill="url(#fcg)" />
+            <defs><linearGradient id="fcg" x1="0" y1="0" x2="64" y2="64"><stop offset="0" stopColor="#9d7bff" /><stop offset="1" stopColor="#6d3ff5" /></linearGradient></defs>
+            <g stroke="#fff" strokeWidth="5" strokeLinecap="round"><path d="M16 27v10M24 18v28M32 24v16M40 14v36M48 26v12" /></g>
+          </svg>
+        </Link>
+        <div className="fc-rail-rule" />
+        <button
+          className={`fc-rail-btn ${section === "home" ? "selected" : ""}`}
+          title="Home" aria-label="Home"
+          onClick={() => { setSection("home"); setMobileNav(false); }}
+        ><Home size={20} /></button>
+        <button
+          className={`fc-rail-btn ${section === "dms" ? "selected" : ""}`}
+          title="Direct messages" aria-label="Direct messages"
+          onClick={() => { setSection("dms"); setMobileNav(false); }}
+        ><AtSign size={20} />{(dmUnread ?? 0) > 0 && <i className="fc-rail-badge">{dmUnread}</i>}</button>
+        <button
+          className={`fc-rail-btn ${section === "discover" ? "selected" : ""}`}
+          title="Discover" aria-label="Discover communities"
+          onClick={() => { setSection("discover"); setMobileNav(false); }}
+        ><Compass size={20} /></button>
+
+        <div className="fc-rail-rule" />
+        {communities?.map((c) => (
+          <button
+            key={c._id}
+            className={`fc-rail-server ${communityId === c._id && section === "community" ? "selected" : ""}`}
+            title={c.name} aria-label={c.name}
+            onClick={() => openCommunity(c._id)}
+          >{initialsOf(c.name)}</button>
+        ))}
+        <button className="fc-rail-server add" title="Create a community" aria-label="Create a community" onClick={() => openModal("createCommunity")}><Plus size={20} /></button>
+        <button className="fc-rail-server add" title="Join with invite" aria-label="Join with invite" onClick={() => openModal("join")}><Hash size={18} /></button>
+
+        <button className="fc-rail-btn bottom" title="Sign out" aria-label="Sign out" onClick={async () => { await signOut(); navigate("/"); }}>
+          <LogOut size={19} />
+        </button>
+      </aside>
+
+      {/* ---------- Secondary sidebar ---------- */}
+      <aside className={`fc-sidebar ${mobileNav ? "open" : ""}`}>
+        {section === "community" && details ? (
+          <>
+            <div className="fc-sidebar-head">
+              <span className="fc-sidebar-title">{details.server.name}</span>
+              <button className="fc-close-mobile" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={17} /></button>
+            </div>
+            <div className="fc-sidebar-banner">
+              <span className="fc-sidebar-banner-star">✳</span>
+              <span>{details.server.description || "A little space. A lot of possibility."}</span>
+            </div>
+            <div className="fc-sidebar-section">
+              <span>TEXT CHANNELS</span>
+              {details.permissions.includes("createChannels") && (
+                <button aria-label="Create channel" onClick={() => openModal("channel")}><Plus size={15} /></button>
+              )}
+            </div>
+            {details.channels.filter((c) => c.type !== "voice").map((c) => (
+              <button key={c._id} className={`fc-channel ${channel?._id === c._id ? "active" : ""}`} onClick={() => { setChannelId(c._id); setMobileNav(false); }}>
+                <Hash size={17} /> {c.name}
+              </button>
+            ))}
+            <div className="fc-sidebar-section"><span>VOICE CHANNELS</span></div>
+            {details.channels.filter((c) => c.type === "voice").map((c) => (
+              <button key={c._id} className="fc-channel" onClick={() => joinVoice(c._id, c.name)}>
+                <Volume2 size={17} /> {c.name}
+              </button>
+            ))}
+            <button className="fc-invite-btn" onClick={() => openModal("invite")}>
+              <Users size={16} /> Invite your people
+            </button>
+            {!details.isOwner && (
+              <button className="fc-leave-btn" onClick={async () => {
+                try { await leaveCommunity({ serverId: communityId! }); toast.success("You left the community."); setCommunityId(null); setSection("home"); }
+                catch (e) { toast.error(e instanceof Error ? e.message : "Could not leave."); }
+              }}>Leave community</button>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="fc-sidebar-head">
+              <span className="fc-sidebar-title">Direct Messages</span>
+              <button className="fc-close-mobile" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={17} /></button>
+            </div>
+            <button className="fc-sidebar-action" onClick={() => { setSection("home"); setMobileNav(false); }}><Users size={17} /> Friends</button>
+            <button className="fc-sidebar-action" onClick={() => { setSection("discover"); setMobileNav(false); }}><Compass size={17} /> Discover</button>
+            <button className="fc-sidebar-action" onClick={() => { setSection("search"); setMobileNav(false); }}><Search size={17} /> Search</button>
+
+            <div className="fc-sidebar-section"><span>CONVERSATIONS</span></div>
+            {conversations && conversations.length === 0 && (
+              <p className="fc-sidebar-empty">No conversations yet. Start one from your friends list.</p>
+            )}
+            {conversations?.map((c) => (
+              <div key={c.conversationId} className="fc-dm-row">
+                <button
+                  className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
+                  onClick={() => openConversation(c.conversationId)}
+                >
+                  <Avatar name={c.name} size={26} />
+                  <span className="fc-dm-name">{c.name}</span>
+                  {c.pinned && <span className="fc-dm-flag">📌</span>}
+                  {c.muted && <span className="fc-dm-flag">🔇</span>}
+                  {c.unread > 0 && <i className="fc-dm-badge">{c.unread}</i>}
+                </button>
+                <div className="fc-dm-tools">
+                  <button title="Pin" aria-label="Pin conversation" onClick={() => setPinned({ conversationId: c.conversationId, pinned: !c.pinned })}>📌</button>
+                  <button title="Mute" aria-label="Mute conversation" onClick={() => setMuted({ conversationId: c.conversationId, muted: !c.muted })}>🔇</button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* User panel */}
+        <div className="fc-user-panel">
+          <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} presence={me?.presence} size={34} />
+          <div className="fc-user-text">
+            <strong>{me?.profile?.displayName ?? me?.username ?? "…"}</strong>
+            <small>{me?.profile?.customStatus || statusMeta.label}</small>
+          </div>
+          <select
+            aria-label="Set your status"
+            className="fc-status-select"
+            value={me?.presence ?? "online"}
+            onChange={async (e) => { try { await setStatus({ status: e.target.value as never }); } catch { toast.error("Could not set status."); } }}
+          >
+            <option value="online">Online</option>
+            <option value="idle">Idle</option>
+            <option value="dnd">Do Not Disturb</option>
+            <option value="invisible">Invisible</option>
+          </select>
+          <button aria-label="Open settings" onClick={() => setSettingsOpen(true)}><Settings size={18} /></button>
+        </div>
+      </aside>
+
+      {/* ---------- Main ---------- */}
+      <main className="fc-main">
+        <header className="fc-topbar">
+          <button className="fc-menu-btn" aria-label="Open navigation" onClick={() => setMobileNav((v) => !v)}><Menu size={20} /></button>
+          <div className="fc-global-search">
+            <Search size={15} />
+            <input
+              aria-label="Search Freecord"
+              placeholder="Search people, communities, messages"
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); if (e.target.value) setSection("search"); }}
+              onKeyDown={(e) => { if (e.key === "Enter") setSection("search"); }}
+            />
+          </div>
+          <div className="fc-topbar-actions">
+            <button className="fc-bell" aria-label="Notifications" onClick={() => setNotifOpen((v) => !v)}>
+              <Bell size={19} />
+              {hasUnread && <i className="fc-bell-dot">{notifications?.unread}</i>}
+            </button>
+          </div>
+        </header>
+
+        {notifOpen && (
+          <div className="fc-notif-panel">
+            <div className="fc-notif-head">
+              <strong>Notifications</strong>
+              <button onClick={async () => { await markAllRead({}); toast.success("All caught up."); }}>Mark all read</button>
+            </div>
+            {notifications && notifications.items.length === 0 && <p className="fc-sidebar-empty">You're all caught up.</p>}
+            {notifications?.items.map((n) => (
+              <button key={n._id} className={`fc-notif ${n.read ? "" : "unread"}`} onClick={async () => { await markRead({ id: n._id }); }}>
+                <strong>{n.title}</strong>
+                {n.body && <small>{n.body}</small>}
+                <small className="fc-muted">{new Date(n._creationTime).toLocaleString()}</small>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="fc-main-body">
+          <div className="fc-main-content">
+            {section === "home" && <HomeView onOpenProfile={setProfileUserId} onMessage={openConversation} onDiscover={() => setSection("discover")} />}
+            {section === "discover" && <DiscoverView onOpenCommunity={openCommunity} onCreate={() => openModal("createCommunity")} onJoinByCode={() => openModal("join")} />}
+            {section === "search" && <SearchView query={searchQuery} onOpenProfile={setProfileUserId} onOpenCommunity={openCommunity} />}
+            {section === "dms" && (
+              conversationId ? (
+                <DmView conversationId={conversationId} myUserId={me?.userId ?? ""} onOpenProfile={setProfileUserId} onStartCall={startDmCall} />
+              ) : (
+                <div className="fc-scroll-view">
+                  <div className="fc-view-head"><AtSign size={20} /><h2>Direct Messages</h2></div>
+                  <div className="fc-empty">
+                    <AtSign size={30} />
+                    <h3>Start a conversation with someone on Freecord.</h3>
+                    <p>Open your friends list and pick someone to message.</p>
+                    <Button className="mt-3" onClick={() => setSection("home")}>Go to friends</Button>
+                  </div>
+                </div>
+              )
+            )}
+            {section === "community" && details && channel && (
+              <ChannelView
+                channelId={channel._id}
+                channelName={channel.name}
+                channelDescription={channel.description}
+                myUserId={me?.userId ?? ""}
+                permissions={details.permissions}
+                onOpenProfile={setProfileUserId}
+                onJoinVoice={() => joinVoice(channel._id, channel.name)}
+                isVoice={channel.type === "voice"}
+              />
+            )}
+            {section === "community" && details && !channel && (
+              <div className="fc-scroll-view"><div className="fc-empty"><h3>No text channels yet.</h3><p>Create one to start talking.</p></div></div>
+            )}
+          </div>
+
+          {section === "community" && details && (
+            <aside className="fc-members" aria-label="Community members">
+              <div className="fc-members-head">MEMBERS — {details.members.length}</div>
+              {details.members.map((m) => (
+                <button key={m.userId} className="fc-member" onClick={() => setProfileUserId(m.userId)}>
+                  <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={30} />
+                  <span><strong>{m.displayName}</strong><small>{m.role === "owner" ? "Owner" : m.role}</small></span>
+                </button>
+              ))}
+            </aside>
+          )}
+        </div>
+      </main>
+
+      {/* ---------- Overlays ---------- */}
+      {profileUserId && (
+        <ProfileDrawer userId={profileUserId} onClose={() => setProfileUserId(null)} onMessage={(id) => { openConversation(id as Id<"dmConversations">); setProfileUserId(null); }} />
+      )}
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+
+      {inCall && (
+        <div className="fc-call-overlay">
+          <CallPanel
+            channelId={inCall.channelId}
+            channelName={inCall.name}
+            myUserId={me?.userId ?? ""}
+            onLeave={async () => { try { await leaveVoice({}); } catch { /* already left */ } setInCall(null); }}
+          />
+        </div>
+      )}
+
+      {/* ---------- Incoming / outgoing call ---------- */}
+      {incomingCall && (
+        <div className="fc-call-toast">
+          <Avatar name={incomingCall.fromName} size={38} />
+          <div>
+            <strong>{incomingCall.fromName}</strong>
+            <small>{incomingCall.media === "video" ? "Video call" : "Voice call"} incoming…</small>
+          </div>
+          <Button size="sm" onClick={async () => { await respondCall({ inviteId: incomingCall.inviteId, accept: true }); toast.success("Call accepted."); }}>
+            <Phone className="h-4 w-4" />
+          </Button>
+          <Button size="sm" variant="outline" onClick={async () => { await respondCall({ inviteId: incomingCall.inviteId, accept: false }); }}>Decline</Button>
+        </div>
+      )}
+      {outgoingCall && outgoingCall.status === "ringing" && (
+        <div className="fc-call-toast">
+          <div><strong>Calling {outgoingCall.toName}…</strong><small>Waiting for them to answer</small></div>
+          <Button size="sm" variant="outline" onClick={() => cancelCall({ inviteId: outgoingCall.inviteId })}>Cancel</Button>
+        </div>
+      )}
+
+      {/* ---------- Modals ---------- */}
+      <Dialog open={modal !== null} onOpenChange={(open) => { if (!open && !busy) setModal(null); }}>
+        <DialogContent className="freecord-dialog">
+          <DialogHeader>
+            <DialogTitle>
+              {modal === "createCommunity" ? "Create a community" : modal === "join" ? "Join with an invite" : modal === "channel" ? "Create a channel" : "Invite your people"}
+            </DialogTitle>
+            <DialogDescription>
+              {modal === "createCommunity" ? "Communities are home for your people. You can make it public or private." : modal === "join" ? "Paste an invite code shared by a community." : modal === "channel" ? "Add a text or voice channel to this community." : "Share this invite code, or create a fresh one."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {modal === "invite" ? (
+            <div className="fc-invite-modal">
+              <code>{details?.inviteCode}</code>
+              <Button onClick={async () => { try { await navigator.clipboard.writeText(details?.inviteCode ?? ""); toast.success("Invite code copied!"); } catch { toast.error("Couldn't copy — select the code manually."); } }}>
+                Copy invite code
+              </Button>
+            </div>
+          ) : (
+            <form className="fc-modal-form" onSubmit={handleModal}>
+              <label htmlFor="modal-value">{modal === "join" ? "Invite code" : modal === "channel" ? "Channel name" : "Community name"}</label>
+              <Input id="modal-value" autoFocus required value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} maxLength={60} placeholder={modal === "createCommunity" ? "The Creative Corner" : modal === "channel" ? "share-your-work" : "Paste your invite"} />
+              {modal === "createCommunity" && (
+                <>
+                  <label htmlFor="modal-desc">Description</label>
+                  <Input id="modal-desc" value={description} maxLength={200} onChange={(e) => setDescription(e.target.value)} placeholder="For big ideas and good company." />
+                  <label className="fc-checkbox-row">
+                    <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
+                    List in Discover so anyone can find and join
+                  </label>
+                </>
+              )}
+              {modal === "channel" && (
+                <label className="fc-checkbox-row">
+                  <input type="checkbox" checked={channelType === "voice"} onChange={(e) => setChannelType(e.target.checked ? "voice" : "text")} />
+                  Voice channel
+                </label>
+              )}
+              <Button type="submit" disabled={busy || !value.trim()}>{busy ? "One moment…" : "Confirm"}</Button>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
 }

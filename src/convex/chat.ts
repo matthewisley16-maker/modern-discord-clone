@@ -43,7 +43,19 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
   if (!channel) return [];
   await member(ctx, channel.serverId);
   const messages = await ctx.db.query("messages").withIndex("by_channel", q => q.eq("channelId", channelId)).order("desc").take(150);
-  return Promise.all(messages.reverse().map(async message => ({ ...message, author: await nameOf(ctx, message.userId), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect() })));
+  return Promise.all(messages.reverse().map(async message => {
+    const files = await ctx.db.query("attachments").withIndex("by_message", q => q.eq("messageId", message._id)).collect();
+    const attachments = await Promise.all(files.map(async f => ({
+      _id: f._id, name: f.name, size: f.size, contentType: f.contentType,
+      isImage: f.contentType.startsWith("image/"), url: await ctx.storage.getUrl(f.storageId),
+    })));
+    let reply = null;
+    if (message.replyToId) {
+      const parent = await ctx.db.get(message.replyToId);
+      if (parent) reply = { _id: parent._id, author: await nameOf(ctx, parent.userId), body: parent.body.slice(0, 140) };
+    }
+    return { ...message, author: await nameOf(ctx, message.userId), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply };
+  }));
 }});
 export const createServer = mutation({ args: { name: v.string(), description: v.string() }, handler: async (ctx, args) => {
   const userId = await signedIn(ctx);
@@ -71,11 +83,12 @@ export const createChannel = mutation({ args: { serverId: v.id("servers"), name:
   if (channels.some(c => c.name === normalized)) throw new ConvexError("A channel with that name already exists.");
   return ctx.db.insert("channels", { serverId, name: normalized, description: "A new conversation starts here." });
 }});
-export const sendMessage = mutation({ args: { channelId: v.id("channels"), body: v.string() }, handler: async (ctx, { channelId, body }) => {
+export const sendMessage = mutation({ args: { channelId: v.id("channels"), body: v.string(), replyToId: v.optional(v.id("messages")) }, handler: async (ctx, { channelId, body, replyToId }) => {
   const channel = await ctx.db.get(channelId);
   if (!channel) throw new ConvexError("Channel not found.");
   const userId = await member(ctx, channel.serverId);
-  return ctx.db.insert("messages", { channelId, userId, body: clean(body, 4000) });
+  if (channel.locked) throw new ConvexError("This channel is locked.");
+  return ctx.db.insert("messages", { channelId, userId, body: clean(body, 4000), replyToId });
 }});
 export const deleteMessage = mutation({ args: { messageId: v.id("messages") }, handler: async (ctx, { messageId }) => {
   const message = await ctx.db.get(messageId);
@@ -98,6 +111,25 @@ export const toggleReaction = mutation({ args: { messageId: v.id("messages"), em
   const existing = reactions.find(r => r.userId === userId && r.emoji === emoji);
   if (existing) await ctx.db.delete(existing._id);
   else await ctx.db.insert("reactions", { messageId, userId, emoji });
+}});
+export const editMessage = mutation({ args: { messageId: v.id("messages"), body: v.string() }, handler: async (ctx, { messageId, body }) => {
+  const message = await ctx.db.get(messageId);
+  if (!message) throw new ConvexError("Message not found.");
+  const channel = await ctx.db.get(message.channelId);
+  if (!channel) throw new ConvexError("Channel not found.");
+  const userId = await member(ctx, channel.serverId);
+  if (message.userId !== userId) throw new ConvexError("You can only edit your own messages.");
+  const text = body.trim();
+  if (!text) throw new ConvexError("Message can't be empty.");
+  await ctx.db.patch(messageId, { body: text.slice(0, 4000), editedAt: Date.now() });
+}});
+export const pinMessage = mutation({ args: { messageId: v.id("messages"), pinned: v.boolean() }, handler: async (ctx, { messageId, pinned }) => {
+  const message = await ctx.db.get(messageId);
+  if (!message) throw new ConvexError("Message not found.");
+  const channel = await ctx.db.get(message.channelId);
+  if (!channel) throw new ConvexError("Channel not found.");
+  await member(ctx, channel.serverId);
+  await ctx.db.patch(messageId, { pinned });
 }});
 export const updateProfile = mutation({ args: { name: v.string() }, handler: async (ctx, { name }) => {
   const userId = await signedIn(ctx);
