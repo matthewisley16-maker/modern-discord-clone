@@ -13,6 +13,29 @@ export const PRESENCE_META: Record<string, { color: string; label: string }> = {
   offline: { color: "#6b6880", label: "Offline" },
 };
 
+// How long ago the user was last seen — never a fake or static value.
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+export function formatLastSeen(ts?: number | null, now: number = Date.now()): string {
+  if (!ts) return "Last online unknown";
+  const diff = Math.max(0, now - ts);
+  if (diff < MINUTE) return "Last online just now";
+  if (diff < HOUR) {
+    const m = Math.floor(diff / MINUTE);
+    return `Last online ${m} minute${m === 1 ? "" : "s"} ago`;
+  }
+  if (diff < DAY) {
+    const h = Math.floor(diff / HOUR);
+    return `Last online ${h} hour${h === 1 ? "" : "s"} ago`;
+  }
+  const d = Math.floor(diff / DAY);
+  if (d === 1) return "Last online yesterday";
+  if (d < 7) return `Last online ${d} days ago`;
+  return `Last online ${new Date(ts).toLocaleDateString()}`;
+}
+
 export function colorFor(name: string) {
   const keys = Object.keys(AVATAR_BG);
   let hash = 0;
@@ -30,17 +53,20 @@ export function Avatar({
   presence,
   size = 36,
   url,
+  lastSeen,
 }: {
   name: string;
   color?: string;
   presence?: string;
   size?: number;
   url?: string | null;
+  lastSeen?: number | null;
 }) {
   const key = color ?? colorFor(name);
   const meta = presence ? PRESENCE_META[presence] : undefined;
+  const title = presence === "offline" ? formatLastSeen(lastSeen) : meta?.label;
   return (
-    <span className="fc-avatar" style={{ width: size, height: size, background: url ? undefined : AVATAR_BG[key] ?? "#7c5cf6" }} title={meta?.label}>
+    <span className="fc-avatar" style={{ width: size, height: size, background: url ? undefined : AVATAR_BG[key] ?? "#7c5cf6" }} title={title}>
       {url ? <img src={url} alt="" /> : initialsOf(name)}
       {meta && <i style={{ background: meta.color }} />}
     </span>

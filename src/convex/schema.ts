@@ -193,6 +193,11 @@ const schema = defineSchema(
       notifyInvites: v.optional(v.boolean()),
       notifyFollows: v.optional(v.boolean()),
       notifyCalls: v.optional(v.boolean()),
+      // voice & video
+      voiceEchoCancellation: v.optional(v.boolean()),
+      voiceNoiseSuppression: v.optional(v.boolean()),
+      voiceAutoMute: v.optional(v.boolean()),
+      voiceInputVolume: v.optional(v.number()),
     }).index("by_user", ["userId"]),
 
     // ---------- Social graph ----------
@@ -451,6 +456,15 @@ const schema = defineSchema(
       media: v.union(v.literal("voice"), v.literal("video")),
       status: v.union(v.literal("ringing"), v.literal("accepted"), v.literal("declined"), v.literal("missed")),
     }).index("by_to", ["toId", "status"]),
+
+    /** WebRTC signaling for a DM/group call, scoped to the conversation. */
+    dmCallSignals: defineTable({
+      conversationId: v.id("dmConversations"),
+      fromUserId: v.id("users"),
+      toUserId: v.id("users"),
+      kind: v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate")),
+      payload: v.string(),
+    }).index("by_to", ["toUserId"]).index("by_conversation", ["conversationId"]),
 
     // ---------- Ops ----------
     rateLimits: defineTable({ key: v.string(), count: v.number(), windowStart: v.number() })

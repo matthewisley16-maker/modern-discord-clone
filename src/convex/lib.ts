@@ -29,6 +29,39 @@ export async function profileOf(ctx: Ctx, userId: Id<"users">) {
 }
 
 /**
+ * Effective presence for a viewer.
+ *
+ * A user is only "online" while their client is actually connected and still
+ * heart-beating. A closed tab (connected === false) or a stale heartbeat means
+ * offline immediately, so nobody is ever left permanently shown as online.
+ * Invisible users read as offline to everyone but themselves.
+ */
+export async function presenceInfoOf(
+  ctx: Ctx,
+  userId: Id<"users">,
+  viewerId?: Id<"users"> | null,
+): Promise<{ status: string; lastSeen: number | null }> {
+  const p = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+  const lastSeen = p?.lastSeen ?? null;
+  let status = p?.status ?? "offline";
+  if (!p) {
+    status = "offline";
+  } else if (p.connected === false) {
+    // Tab closed / explicit disconnect.
+    status = "offline";
+  } else if (lastSeen !== null && Date.now() - lastSeen > 90_000) {
+    // No heartbeat for 3 intervals — treat as gone even if "connected".
+    status = "offline";
+  }
+  if (viewerId && viewerId !== userId) {
+    if (status === "invisible") status = "offline";
+    const settings = await settingsOf(ctx, userId);
+    if (settings?.presenceVisible === false) status = "offline";
+  }
+  return { status, lastSeen };
+}
+
+/**
  * The user's authoritative current avatar URL.
  * Resolves the uploaded profile picture first, falling back to the account
  * image. Every card/list that renders an avatar uses this so the Dashboard,

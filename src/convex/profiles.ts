@@ -1,7 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { areFriends, currentUserId, isBlockedEitherWay, profileOf, settingsOf } from "./lib";
+import { areFriends, currentUserId, isBlockedEitherWay, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 
@@ -69,11 +69,9 @@ async function buildProfile(ctx: QueryCtx, userId: Id<"users">, viewerId: Id<"us
       .unique();
   }
 
-  const presence = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+  // Effective presence (stale sessions read offline; invisible hidden from others).
+  const { status: shownStatus, lastSeen } = await presenceInfoOf(ctx, userId, viewerId);
   const presenceVisible = settings?.presenceVisible !== false;
-  // Invisible users always read as offline to others.
-  const rawStatus = presence?.status ?? "offline";
-  const shownStatus = viewerId === userId ? rawStatus : rawStatus === "invisible" ? "offline" : presenceVisible ? rawStatus : "offline";
 
   const followers = await ctx.db.query("follows").withIndex("by_following", (q) => q.eq("followingId", userId)).collect();
   const following = await ctx.db.query("follows").withIndex("by_follower", (q) => q.eq("followerId", userId)).collect();
@@ -136,6 +134,7 @@ async function buildProfile(ctx: QueryCtx, userId: Id<"users">, viewerId: Id<"us
       : null,
     createdAt: user._creationTime,
     presence: shownStatus,
+    lastSeen,
     relationship,
     followers: canSee("friendsList") ? followers.length : 0,
     following: canSee("friendsList") ? following.length : 0,
@@ -403,7 +402,11 @@ export const disconnect = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) return;
     const existing = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
-    if (existing) await ctx.db.patch(existing._id, { connected: false, lastSeen: Date.now() });
+    const now = Date.now();
+    // Upsert so last-seen is always recorded, even for a session that never
+    // heart-beated — otherwise the user would look online with no timestamp.
+    if (existing) await ctx.db.patch(existing._id, { connected: false, lastSeen: now });
+    else await ctx.db.insert("presence", { userId, status: "offline", lastSeen: now, connected: false });
     // Clear typing state so nothing is left stuck on screen.
     const typing = await ctx.db.query("typing").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
     for (const t of typing) await ctx.db.delete(t._id);
@@ -415,18 +418,9 @@ export const presenceFor = query({
   args: { userIds: v.array(v.id("users")) },
   handler: async (ctx, { userIds }) => {
     const viewerId = await getAuthUserId(ctx);
-    const out: Record<string, string> = {};
+    const out: Record<string, { status: string; lastSeen: number | null }> = {};
     for (const id of userIds.slice(0, 200)) {
-      const p = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", id)).unique();
-      const settings = await settingsOf(ctx, id);
-      let status = p?.status ?? "offline";
-      // 60s grace: a brief disconnect doesn't immediately show as offline.
-      if (p && Date.now() - p.lastSeen > 60_000 && !p.connected) status = "offline";
-      if (viewerId !== id) {
-        if (status === "invisible") status = "offline";
-        if (settings?.presenceVisible === false) status = "offline";
-      }
-      out[id] = status;
+      out[id] = await presenceInfoOf(ctx, id, viewerId);
     }
     return out;
   },
@@ -459,7 +453,7 @@ export const updateAppearance = mutation({
     const userId = await currentUserId(ctx);
     const clean: Record<string, unknown> = {};
     if (args.theme !== undefined) {
-      if (!["dark", "light", "midnight", "contrast"].includes(args.theme)) throw new Error("Unknown theme.");
+      if (!["dark", "light", "midnight", "contrast", "system"].includes(args.theme)) throw new Error("Unknown theme.");
       clean.theme = args.theme;
     }
     if (args.density !== undefined) {

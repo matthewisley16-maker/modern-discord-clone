@@ -2,7 +2,7 @@ import { getAuthSessionId, getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
-import { avatarUrlOf, currentUserId, displayNameOf, profileOf, settingsOf, audit, areFriends, isBlockedEitherWay } from "./lib";
+import { avatarUrlOf, currentUserId, displayNameOf, presenceInfoOf, profileOf, settingsOf, audit, areFriends, isBlockedEitherWay } from "./lib";
 
 /**
  * Get the current signed in user. Returns null if the user is not signed in.
@@ -27,10 +27,8 @@ export const me = query({
     const user = await ctx.db.get(userId);
     const profile = await profileOf(ctx, userId);
     const settings = await settingsOf(ctx, userId);
-    const presence = await ctx.db
-      .query("presence")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
+    // Own presence: never default to "online" — a stale session must read offline.
+    const { status: presenceStatus, lastSeen } = await presenceInfoOf(ctx, userId, userId);
     return {
       userId,
       username: user?.username ?? null,
@@ -42,7 +40,8 @@ export const me = query({
       createdAt: user?._creationTime ?? null,
       profile: profile ?? null,
       settings: settings ?? null,
-      presence: presence?.status ?? "online",
+      presence: presenceStatus,
+      lastSeen,
     };
   },
 });
@@ -56,10 +55,7 @@ export const publicProfile = query({
     if (!user) return null;
     const profile = await profileOf(ctx, userId);
     const settings = await settingsOf(ctx, userId);
-    const presence = await ctx.db
-      .query("presence")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
+    const { status: presenceStatus, lastSeen } = await presenceInfoOf(ctx, userId, viewerId);
 
     const followers = await ctx.db
       .query("follows")
@@ -116,7 +112,8 @@ export const publicProfile = query({
       customStatus: profile?.customStatus ?? "",
       badges: profile?.badges ?? [],
       createdAt: user._creationTime,
-      presence: presenceVisible ? presence?.status ?? "offline" : "offline",
+      presence: presenceStatus,
+      lastSeen,
       presenceVisible,
       followers: followers.length,
       following: following.length,
@@ -202,6 +199,10 @@ export const updateSettings = mutation({
     notifyInvites: v.optional(v.boolean()),
     notifyFollows: v.optional(v.boolean()),
     notifyCalls: v.optional(v.boolean()),
+    voiceEchoCancellation: v.optional(v.boolean()),
+    voiceNoiseSuppression: v.optional(v.boolean()),
+    voiceAutoMute: v.optional(v.boolean()),
+    voiceInputVolume: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await currentUserId(ctx);
@@ -219,7 +220,7 @@ export const searchUsers = query({
     const term = q.trim().toLowerCase();
     if (term.length < 1) return [];
     const all = await ctx.db.query("profiles").take(500);
-    const results: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null; presence: string }[] = [];
+    const results: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null; presence: string; lastSeen: number | null }[] = [];
     for (const profile of all) {
       const user = await ctx.db.get(profile.userId);
       if (!user) continue;
@@ -229,14 +230,15 @@ export const searchUsers = query({
       const username = user.username ?? "";
       const haystack = `${profile.displayName} ${username}`.toLowerCase();
       if (!haystack.includes(term)) continue;
-      const presence = await ctx.db.query("presence").withIndex("by_user", (x) => x.eq("userId", profile.userId)).unique();
+      const { status, lastSeen } = await presenceInfoOf(ctx, profile.userId, viewerId);
       results.push({
         userId: profile.userId,
         username,
         displayName: profile.displayName,
         avatarColor: profile.avatarColor ?? "violet",
         avatarUrl: await avatarUrlOf(ctx, profile.userId),
-        presence: settings?.presenceVisible === false ? "offline" : presence?.status ?? "offline",
+        presence: status,
+        lastSeen,
       });
       if (results.length >= 25) break;
     }

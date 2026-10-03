@@ -2,10 +2,10 @@ import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
-import { ConvexReactClient } from "convex/react";
+import { ConvexReactClient, useConvexAuth } from "convex/react";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Route, Routes, useLocation } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import "./index.css";
 
 // Lazy load route components for better code splitting
@@ -15,13 +15,28 @@ const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Onboarding = lazy(() => import("./pages/Onboarding.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
-// Simple loading fallback for route transitions
+// No visual loading screen anywhere: lazy route chunks resolve into place
+// without a spinner or "Loading..." message.
 function RouteLoading() {
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-pulse text-muted-foreground">Loading...</div>
-    </div>
-  );
+  return null;
+}
+
+/**
+ * Root gate: a signed-in visitor lands on the Dashboard immediately, with no
+ * landing page, sign-in page, spinner or loading screen in between.
+ */
+function RootGate() {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  if (isLoading) return null;
+  return isAuthenticated ? <Dashboard /> : <Landing />;
+}
+
+/** `/auth` sends an already signed-in visitor straight to the Dashboard. */
+function AuthGate() {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  if (isLoading) return null;
+  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
+  return <AuthPage redirectAfterAuth="/dashboard" />;
 }
 
 /** Silent error boundary — if VlyToolbar crashes it renders nothing instead of
@@ -119,11 +134,8 @@ createRoot(document.getElementById("root")!).render(
           <RouteSyncer />
           <Suspense fallback={<RouteLoading />}>
             <Routes>
-              <Route path="/" element={<Landing />} />
-              <Route
-                path="/auth"
-                element={<AuthPage redirectAfterAuth="/dashboard" />}
-              />
+              <Route path="/" element={<RootGate />} />
+              <Route path="/auth" element={<AuthGate />} />
               <Route
                 path="/onboarding"
                 element={

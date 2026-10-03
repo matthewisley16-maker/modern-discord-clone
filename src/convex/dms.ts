@@ -2,7 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
-import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, profileOf, settingsOf } from "./lib";
+import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import type { Id } from "./_generated/dataModel";
 
 async function requireMember(ctx: Parameters<typeof displayNameOf>[0], conversationId: Id<"dmConversations">, userId: Id<"users">) {
@@ -14,17 +14,18 @@ async function requireMember(ctx: Parameters<typeof displayNameOf>[0], conversat
   return member;
 }
 
-async function card(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"users">) {
+async function card(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"users">, viewerId?: Id<"users">) {
   const profile = await profileOf(ctx, userId);
   const user = await ctx.db.get(userId);
-  const presence = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+  const { status, lastSeen } = await presenceInfoOf(ctx, userId, viewerId);
   return {
     userId,
     username: user?.username ?? "",
     displayName: profile?.displayName ?? user?.name ?? "Freecord member",
     avatarColor: profile?.avatarColor ?? "violet",
     avatarUrl: await avatarUrlOf(ctx, userId),
-    presence: presence?.status ?? "offline",
+    presence: status,
+    lastSeen,
   };
 }
 
@@ -41,7 +42,7 @@ export const listConversations = query({
       if (!convo) continue;
       const members = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", convo._id)).collect();
       const others = members.filter((m) => m.userId !== userId);
-      const otherCards = await Promise.all(others.map((m) => card(ctx, m.userId)));
+      const otherCards = await Promise.all(others.map((m) => card(ctx, m.userId, userId)));
 
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", convo._id)).collect();
       const lastRead = membership.lastReadAt ?? 0;
@@ -170,7 +171,7 @@ export const addGroupMembers = mutation({
       if (existingIds.has(id as string)) continue;
       if (await isBlockedEitherWay(ctx, me, id)) continue;
       await ctx.db.insert("dmMembers", { conversationId, userId: id, lastReadAt: 0 });
-      await notify(ctx, id, "invite", "Added to a group DM", `${await displayNameOf(ctx, me)} added you to "${convo.name ?? "a group"}".`, "/dashboard");
+      await notify(ctx, id, "invite", "Added to a group DM", `${await displayNameOf(ctx, me)} added you to "${convo.name ?? "a group"}".`, `?dm=${conversationId}`);
     }
   },
 });
@@ -319,7 +320,8 @@ export const sendMessage = mutation({
         replyToId ? "reply" : "dm",
         replyToId ? "New reply" : "New direct message",
         `${await displayNameOf(ctx, me)}${convo?.type === "group" ? ` in ${convo.name ?? "a group"}` : ""}: ${text.slice(0, 80)}`,
-        "/dashboard",
+        // Deep link: open this conversation and jump to the message.
+        `?dm=${conversationId}&message=${messageId}`,
         me,
       );
     }

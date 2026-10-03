@@ -2,7 +2,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
-import { Avatar, EmptyState, SectionHeader } from "./ui";
+import { Avatar, EmptyState, SectionHeader, formatLastSeen } from "./ui";
 import { toast } from "sonner";
 import { Check, MessageCircle, UserPlus, Users, X } from "lucide-react";
 
@@ -85,8 +85,11 @@ export default function HomeView({
           friends?.map((f) => (
             <div key={f.userId} className="fc-row">
               <button className="fc-row-main" onClick={() => onOpenProfile(f.userId)}>
-                <Avatar name={f.displayName} color={f.avatarColor} presence={f.presence} url={f.avatarUrl} />
-                <span><strong>{f.displayName}</strong><small>{f.customStatus || `@${f.username}`}</small></span>
+                <Avatar name={f.displayName} color={f.avatarColor} presence={f.presence} url={f.avatarUrl} lastSeen={f.lastSeen} />
+                <span>
+                  <strong>{f.displayName}</strong>
+                  <small>{f.presence === "offline" ? formatLastSeen(f.lastSeen) : f.customStatus || `@${f.username}`}</small>
+                </span>
               </button>
               <Button size="sm" variant="outline" onClick={() => run("Conversation opened", async () => { const id = await startDirect({ userId: f.userId as Id<"users"> }); onMessage(id); })}>
                 <MessageCircle className="mr-1 h-4 w-4" /> Message

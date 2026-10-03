@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import VoicePanel from "@/components/voice/VoicePanel";
+import DmCallPanel from "@/components/dashboard/DmCallPanel";
+import { useCallSound } from "@/hooks/use-call-sound";
 import DmView from "@/components/dashboard/DmView";
 import ChannelView from "@/components/dashboard/ChannelView";
 import HomeView from "@/components/dashboard/HomeView";
@@ -18,7 +20,7 @@ import FullProfile from "@/components/profile/FullProfile";
 import ProfileEditor from "@/components/profile/ProfileEditor";
 import SettingsPanel from "@/components/dashboard/SettingsPanel";
 import CommunitySettings from "@/components/dashboard/CommunitySettings";
-import { Avatar, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
+import { Avatar, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
 import {
@@ -54,6 +56,9 @@ export default function Dashboard() {
   const leaveCommunity = useMutation(api.communities.leave);
   const markAllRead = useMutation(api.social.markAllNotificationsRead);
   const markRead = useMutation(api.social.markNotificationRead);
+  const setNotifRead = useMutation(api.social.setNotificationRead);
+  const deleteNotif = useMutation(api.social.deleteNotification);
+  const clearNotifs = useMutation(api.social.clearAllNotifications);
   const leaveVoiceSession = useMutation(api.voice.leaveVoiceSession);
   const respondCall = useMutation(api.calls.respondCall);
   const cancelCall = useMutation(api.calls.cancelCall);
@@ -79,6 +84,9 @@ export default function Dashboard() {
   const [communitySettingsOpen, setCommunitySettingsOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // Message to scroll to and flash after clicking a notification.
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
+  const [notifMenuFor, setNotifMenuFor] = useState<string | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
   // The upper-left icon collapses/expands the sidebar (never navigates home).
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
@@ -89,6 +97,13 @@ export default function Dashboard() {
   const [channelType, setChannelType] = useState<"text" | "voice" | "video">("text");
   const [busy, setBusy] = useState(false);
   const [inCall, setInCall] = useState<{ channelId: Id<"channels">; name: string } | null>(null);
+  // An accepted DM/group call that is actually connected (real WebRTC audio).
+  const [dmCall, setDmCall] = useState<{
+    conversationId: Id<"dmConversations">;
+    peerId: Id<"users">;
+    name: string;
+    media: "voice" | "video";
+  } | null>(null);
   const joinVoiceChecked = useMutation(api.voice.joinVoiceChecked);
   // Reactive channel tree: categories, ordering, and live voice participants.
   const channelTree = useQuery(api.voice.channelTree, communityId ? { serverId: communityId } : "skip");
@@ -106,7 +121,7 @@ export default function Dashboard() {
     return () => { clearInterval(t); window.removeEventListener("beforeunload", bye); };
   }, [heartbeat, disconnect]);
 
-  // Apply the user's saved appearance (density, font size, accent) to the shell.
+  // Apply the user's saved appearance (theme, density, font size, accent, motion).
   const appearanceStyle = useMemo(() => {
     const colors = appearance?.customColors;
     return {
@@ -114,6 +129,20 @@ export default function Dashboard() {
       ...(colors?.accent ? ({ ["--fc-accent" as string]: colors.accent } as Record<string, string>) : {}),
     } as React.CSSProperties;
   }, [appearance]);
+
+  // Theme + reduced motion live on <html> so they apply to the whole app.
+  useEffect(() => {
+    const root = document.documentElement;
+    const chosen = appearance?.theme ?? "dark";
+    const resolved = chosen === "system"
+      ? (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark")
+      : chosen;
+    root.dataset.theme = resolved;
+    root.classList.toggle("fc-light", resolved === "light");
+    root.classList.toggle("fc-contrast", resolved === "contrast");
+    root.classList.toggle("fc-midnight", resolved === "midnight");
+    root.classList.toggle("fc-reduced-motion", appearance?.reducedMotion === true);
+  }, [appearance?.theme, appearance?.reducedMotion]);
   useEffect(() => {
     if (voiceSession) setInCall({ channelId: voiceSession.channelId, name: voiceSession.channelName });
   }, [voiceSession]);
@@ -186,6 +215,42 @@ export default function Dashboard() {
       toast.error(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Open the exact place a notification refers to, using the deep link stored on
+   * the notification. Falls back to a toast when the target no longer exists.
+   */
+  async function openNotification(n: { _id: Id<"notifications">; link?: string; read: boolean }) {
+    if (!n.read) { try { await markRead({ id: n._id }); } catch { /* ignore */ } }
+    setNotifOpen(false);
+    setNotifMenuFor(null);
+    const raw = n.link ?? "";
+    const query = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : raw.startsWith("?") ? raw.slice(1) : raw;
+    const p = new URLSearchParams(query);
+    const server = p.get("server");
+    const channel = p.get("channel");
+    const dm = p.get("dm");
+    const message = p.get("message");
+    try {
+      if (dm) {
+        openConversation(dm as Id<"dmConversations">);
+      } else if (server) {
+        openCommunity(server);
+        if (channel) setChannelId(channel as Id<"channels">);
+      } else if (p.get("view") === "friends") {
+        setSection("home");
+      } else if (p.get("discover")) {
+        setSection("discover");
+      } else {
+        // No usable target — tell the user instead of doing nothing.
+        toast.info("This notification has no destination any more.");
+        return;
+      }
+      if (message) setHighlightMessageId(message);
+    } catch {
+      toast.error("That conversation or channel is no longer available.");
     }
   }
 
@@ -282,6 +347,22 @@ export default function Dashboard() {
       </div>
     );
   }
+
+  // Ringtone while an incoming call rings or we wait for the other side.
+  const ringing = Boolean(incomingCall) || outgoingCall?.status === "ringing";
+  useCallSound(ringing && !dmCall);
+
+  // When the person we called accepts, connect the call for real.
+  useEffect(() => {
+    if (outgoingCall?.status === "accepted" && outgoingCall.conversationId) {
+      setDmCall({
+        conversationId: outgoingCall.conversationId as Id<"dmConversations">,
+        peerId: outgoingCall.toId as Id<"users">,
+        name: outgoingCall.toName,
+        media: outgoingCall.media,
+      });
+    }
+  }, [outgoingCall]);
 
   const statusMeta = PRESENCE_META[me?.presence ?? "online"] ?? PRESENCE_META.online;
   const hasUnread = (notifications?.unread ?? 0) > 0;
@@ -465,7 +546,7 @@ export default function Dashboard() {
 
         {/* User panel */}
         <div className="fc-user-panel">
-          <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} presence={me?.presence} size={34} url={me?.avatarUrl} />
+          <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} presence={me?.presence} size={34} url={me?.avatarUrl} lastSeen={me?.lastSeen} />
           <div className="fc-user-text">
             <strong>{me?.profile?.displayName ?? me?.username ?? "…"}</strong>
             <small>{me?.profile?.customStatus || statusMeta.label}</small>
@@ -511,15 +592,35 @@ export default function Dashboard() {
           <div className="fc-notif-panel">
             <div className="fc-notif-head">
               <strong>Notifications</strong>
-              <button onClick={async () => { await markAllRead({}); toast.success("All caught up."); }}>Mark all read</button>
+              <div className="fc-notif-head-actions">
+                <button onClick={async () => { try { await markAllRead({}); toast.success("All caught up."); } catch { toast.error("Could not update."); } }}>Mark all read</button>
+                <button onClick={async () => { try { const n = await clearNotifs({}); toast.success(n ? "Notifications cleared." : "Nothing to clear."); } catch { toast.error("Could not clear notifications."); } }}>Clear all</button>
+              </div>
             </div>
             {notifications && notifications.items.length === 0 && <p className="fc-sidebar-empty">You're all caught up.</p>}
             {notifications?.items.map((n) => (
-              <button key={n._id} className={`fc-notif ${n.read ? "" : "unread"}`} onClick={async () => { await markRead({ id: n._id }); }}>
-                <strong>{n.title}</strong>
-                {n.body && <small>{n.body}</small>}
-                <small className="fc-muted">{new Date(n._creationTime).toLocaleString()}</small>
-              </button>
+              <div key={n._id} className={`fc-notif-row ${n.read ? "" : "unread"}`}>
+                <button className="fc-notif" onClick={() => openNotification(n)} title={n.read ? "Read" : "Unread"}>
+                  <strong>{n.title}</strong>
+                  {n.body && <small>{n.body}</small>}
+                  <small className="fc-muted">{new Date(n._creationTime).toLocaleString()}{n.read ? "" : " · unread"}</small>
+                </button>
+                <button
+                  className="fc-notif-menu-btn"
+                  aria-label="Notification options"
+                  onClick={() => setNotifMenuFor(notifMenuFor === n._id ? null : n._id)}
+                >⋯</button>
+                {notifMenuFor === n._id && (
+                  <div className="fc-menu fc-notif-menu" role="menu">
+                    <button onClick={async () => { try { await setNotifRead({ id: n._id, read: !n.read }); } catch { toast.error("Could not update."); } setNotifMenuFor(null); }}>
+                      {n.read ? "Mark as unread" : "Mark as read"}
+                    </button>
+                    <button className="danger" onClick={async () => { try { await deleteNotif({ id: n._id }); toast.success("Notification removed."); } catch { toast.error("Could not remove."); } setNotifMenuFor(null); }}>
+                      Delete notification
+                    </button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
@@ -531,7 +632,7 @@ export default function Dashboard() {
             {section === "search" && <SearchView query={searchQuery} onOpenProfile={setProfileUserId} onOpenCommunity={openCommunity} />}
             {section === "dms" && (
               conversationId ? (
-                <DmView conversationId={conversationId} myUserId={me?.userId ?? ""} onOpenProfile={setProfileUserId} onStartCall={startDmCall} />
+                <DmView conversationId={conversationId} myUserId={me?.userId ?? ""} onOpenProfile={setProfileUserId} onStartCall={startDmCall} highlightMessageId={highlightMessageId} onHighlightHandled={() => setHighlightMessageId(null)} />
               ) : (
                 <div className="fc-scroll-view">
                   <div className="fc-view-head"><AtSign size={20} /><h2>Direct Messages</h2></div>
@@ -554,6 +655,8 @@ export default function Dashboard() {
                 onOpenProfile={setProfileUserId}
                 onJoinVoice={() => joinVoice(channel._id, channel.name)}
                 isVoice={channel.type === "voice"}
+                highlightMessageId={highlightMessageId}
+                onHighlightHandled={() => setHighlightMessageId(null)}
               />
             )}
             {section === "community" && details && !channel && (
@@ -564,8 +667,11 @@ export default function Dashboard() {
               <div className="fc-members-head">MEMBERS — {details.members.length}</div>
               {details.members.map((m) => (
                 <button key={m.userId} className="fc-member" onClick={() => setProfileUserId(m.userId)}>
-                  <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={30} url={m.avatarUrl} />
-                  <span><strong>{m.displayName}</strong><small>{m.role === "owner" ? "Owner" : m.role}</small></span>
+                  <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={30} url={m.avatarUrl} lastSeen={m.lastSeen} />
+                  <span>
+                    <strong>{m.displayName}</strong>
+                    <small>{m.presence === "offline" ? formatLastSeen(m.lastSeen) : m.role === "owner" ? "Owner" : m.role}</small>
+                  </span>
                 </button>
               ))}
             </aside>
@@ -607,6 +713,19 @@ export default function Dashboard() {
         />
       )}
 
+      {dmCall && (
+        <div className="fc-call-overlay">
+          <DmCallPanel
+            conversationId={dmCall.conversationId}
+            peerId={dmCall.peerId}
+            peerName={dmCall.name}
+            myUserId={me?.userId ?? ""}
+            media={dmCall.media}
+            onLeave={() => setDmCall(null)}
+          />
+        </div>
+      )}
+
       {inCall && (
         <div className="fc-call-overlay">
           <VoicePanel
@@ -627,7 +746,19 @@ export default function Dashboard() {
             <strong>{incomingCall.fromName}</strong>
             <small>{incomingCall.media === "video" ? "Video call" : "Voice call"} incoming…</small>
           </div>
-          <Button size="sm" onClick={async () => { await respondCall({ inviteId: incomingCall.inviteId, accept: true }); toast.success("Call accepted."); }}>
+          <Button size="sm" onClick={async () => {
+            await respondCall({ inviteId: incomingCall.inviteId, accept: true });
+            if (incomingCall.conversationId) {
+              setDmCall({
+                conversationId: incomingCall.conversationId as Id<"dmConversations">,
+                peerId: incomingCall.fromId as Id<"users">,
+                name: incomingCall.fromName,
+                media: incomingCall.media,
+              });
+            } else {
+              toast.error("This call has no conversation to connect to.");
+            }
+          }}>
             <Phone className="h-4 w-4" />
           </Button>
           <Button size="sm" variant="outline" onClick={async () => { await respondCall({ inviteId: incomingCall.inviteId, accept: false }); }}>Decline</Button>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
@@ -6,9 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "./ui";
 import { toast } from "sonner";
-import { KeyRound, Mail, Monitor, Shield, Trash2, User, X } from "lucide-react";
+import { KeyRound, Mail, Mic, Monitor, Palette, Settings2, Shield, Trash2, User, X } from "lucide-react";
 
-const TABS = ["Profile", "Account", "Privacy", "Notifications", "Sessions"] as const;
+const TABS = ["General", "Profile", "Appearance", "Notifications", "Privacy", "Voice & Video", "Account", "Sessions"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () => void; onEditProfile?: () => void }) {
@@ -21,7 +21,10 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
   const revokeOthers = useMutation(api.users.revokeOtherSessions);
   const deleteAccount = useMutation(api.users.deleteAccount);
 
-  const [tab, setTab] = useState<Tab>("Profile");
+  const appearance = useQuery(api.profiles.getAppearance, {});
+  const updateAppearance = useMutation(api.profiles.updateAppearance);
+
+  const [tab, setTab] = useState<Tab>("General");
   const [displayName, setDisplayName] = useState(me?.profile?.displayName ?? "");
   const [bio, setBio] = useState(me?.profile?.bio ?? "");
   const [customStatus, setCustomStatus] = useState(me?.profile?.customStatus ?? "");
@@ -29,6 +32,27 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
   const [busy, setBusy] = useState(false);
 
   const s = me?.settings;
+
+  // Local mirror of appearance settings so the controls feel instant; each
+  // change is also written to the backend for that account.
+  const [theme, setTheme] = useState("dark");
+  const [density, setDensity] = useState("comfortable");
+  const [fontSize, setFontSize] = useState(14);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [accent, setAccent] = useState("#7c5cf6");
+  useEffect(() => {
+    if (!appearance) return;
+    if (appearance.theme) setTheme(appearance.theme);
+    if (appearance.density) setDensity(appearance.density);
+    if (typeof appearance.fontSize === "number") setFontSize(appearance.fontSize);
+    if (typeof appearance.reducedMotion === "boolean") setReducedMotion(appearance.reducedMotion);
+    if (appearance.customColors?.accent) setAccent(appearance.customColors.accent);
+  }, [appearance]);
+
+  async function saveAppearance(patch: Parameters<typeof updateAppearance>[0]) {
+    try { await updateAppearance(patch); }
+    catch (e) { toast.error(e instanceof Error ? e.message : "Could not save appearance."); }
+  }
 
   async function saveProfile() {
     setBusy(true);
@@ -69,6 +93,108 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
         </nav>
 
         <div className="fc-settings-content">
+          {tab === "General" && (
+            <section className="fc-settings-section">
+              <h3><Settings2 size={16} /> General</h3>
+              <div className="fc-profile-preview">
+                <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} size={64} url={me?.avatarUrl} />
+                <div>
+                  <p className="fc-settings-username">@{me?.username}</p>
+                  <p className="fc-muted">{me?.email ? me.email : "No email linked"}</p>
+                </div>
+              </div>
+              <label className="fc-select-row">Theme
+                <select className="fc-select" value={theme} onChange={(e) => { setTheme(e.target.value); void saveAppearance({ theme: e.target.value }); }}>
+                  <option value="system">System / default</option>
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                  <option value="midnight">Midnight</option>
+                  <option value="contrast">High contrast</option>
+                </select>
+              </label>
+              <label className="fc-select-row">Interface density
+                <select className="fc-select" value={density} onChange={(e) => { setDensity(e.target.value); void saveAppearance({ density: e.target.value }); }}>
+                  <option value="comfortable">Comfortable</option>
+                  <option value="compact">Compact</option>
+                </select>
+              </label>
+              <Button variant="outline" onClick={onEditProfile}>Open the full profile editor</Button>
+              <p className="fc-muted">General preferences save to your account and follow you between devices.</p>
+              <Button variant="ghost" onClick={async () => { await signOut(); }}>Sign out</Button>
+            </section>
+          )}
+
+          {tab === "Appearance" && (
+            <section className="fc-settings-section">
+              <h3><Palette size={16} /> Appearance</h3>
+              <p className="fc-muted">Theme changes apply immediately and are saved to your account.</p>
+              <span className="fc-field-label">Theme</span>
+              <div className="fc-radio-row">
+                {([["system", "System"], ["dark", "Dark"], ["light", "Light"], ["midnight", "Midnight"], ["contrast", "High contrast"]] as const).map(([value, label]) => (
+                  <label key={value} className={`fc-radio ${theme === value ? "active" : ""}`}>
+                    <input type="radio" name="theme" checked={theme === value} onChange={() => { setTheme(value); void saveAppearance({ theme: value }); }} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <label className="fc-select-row">Interface density
+                <select className="fc-select" value={density} onChange={(e) => { setDensity(e.target.value); void saveAppearance({ density: e.target.value }); }}>
+                  <option value="comfortable">Comfortable</option>
+                  <option value="compact">Compact</option>
+                </select>
+              </label>
+              <label className="fc-select-row">Font size — {fontSize}px
+                <input
+                  type="range" min={12} max={20} step={1} value={fontSize}
+                  onChange={(e) => setFontSize(Number(e.target.value))}
+                  onMouseUp={() => void saveAppearance({ fontSize })}
+                  onTouchEnd={() => void saveAppearance({ fontSize })}
+                />
+              </label>
+              <label className="fc-select-row">Accent colour
+                <input
+                  type="color" value={accent}
+                  onChange={(e) => { setAccent(e.target.value); void saveAppearance({ customColors: { accent: e.target.value } }); }}
+                />
+              </label>
+              <label className="fc-toggle-row">
+                <span><strong>Reduce motion</strong><small>Turn off decorative animations and profile effects.</small></span>
+                <input
+                  type="checkbox" className="fc-switch" checked={reducedMotion}
+                  onChange={(e) => { setReducedMotion(e.target.checked); void saveAppearance({ reducedMotion: e.target.checked }); }}
+                />
+              </label>
+            </section>
+          )}
+
+          {tab === "Voice & Video" && (
+            <section className="fc-settings-section">
+              <h3><Mic size={16} /> Voice &amp; Video</h3>
+              <p className="fc-muted">These preferences are saved to your account and applied the next time you join voice.</p>
+              <label className="fc-toggle-row">
+                <span><strong>Echo cancellation</strong><small>Reduce echo from your speakers.</small></span>
+                <input type="checkbox" className="fc-switch" defaultChecked={(s as never as Record<string, boolean>)?.voiceEchoCancellation !== false} onChange={(e) => setPref("voiceEchoCancellation", e.target.checked)} />
+              </label>
+              <label className="fc-toggle-row">
+                <span><strong>Noise suppression</strong><small>Filter out background noise.</small></span>
+                <input type="checkbox" className="fc-switch" defaultChecked={(s as never as Record<string, boolean>)?.voiceNoiseSuppression !== false} onChange={(e) => setPref("voiceNoiseSuppression", e.target.checked)} />
+              </label>
+              <label className="fc-toggle-row">
+                <span><strong>Mute my microphone on join</strong><small>Join voice rooms muted by default.</small></span>
+                <input type="checkbox" className="fc-switch" defaultChecked={(s as never as Record<string, boolean>)?.voiceAutoMute === true} onChange={(e) => setPref("voiceAutoMute", e.target.checked)} />
+              </label>
+              <label className="fc-select-row">Input volume — {Math.round(((s?.voiceInputVolume ?? 1) as number) * 100)}%
+                <input
+                  type="range" min={0} max={1} step={0.05}
+                  defaultValue={(s?.voiceInputVolume ?? 1) as number}
+                  onMouseUp={(e) => setPref("voiceInputVolume", Number((e.target as HTMLInputElement).value))}
+                  onTouchEnd={(e) => setPref("voiceInputVolume", Number((e.target as HTMLInputElement).value))}
+                />
+              </label>
+              <p className="fc-muted">The speaking indicator is driven by your real microphone activity.</p>
+            </section>
+          )}
+
           {tab === "Profile" && (
             <section className="fc-settings-section">
               <h3><User size={16} /> Profile</h3>

@@ -7,6 +7,7 @@ import {
   avatarUrlOf,
   currentUserId,
   displayNameOf,
+  presenceInfoOf,
   effectivePermissions,
   hasPermission,
   isBlockedEitherWay,
@@ -31,17 +32,18 @@ function inviteCode() {
   return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
 }
 
-async function memberCard(ctx: QueryCtx, userId: Id<"users">, role?: string, timeoutUntil?: number) {
+async function memberCard(ctx: QueryCtx, userId: Id<"users">, role?: string, timeoutUntil?: number, viewerId?: Id<"users">) {
   const profile = await profileOf(ctx, userId);
   const user = await ctx.db.get(userId);
-  const presence = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+  const { status, lastSeen } = await presenceInfoOf(ctx, userId, viewerId);
   return {
     userId,
     username: user?.username ?? "",
     displayName: profile?.displayName ?? user?.name ?? "Freecord member",
     avatarColor: profile?.avatarColor ?? "violet",
     avatarUrl: await avatarUrlOf(ctx, userId),
-    presence: presence?.status ?? "offline",
+    presence: status,
+    lastSeen,
     role: role ?? "member",
     timedOutUntil: timeoutUntil && timeoutUntil > Date.now() ? timeoutUntil : null,
   };
@@ -233,7 +235,7 @@ export const details = query({
     const channels = await ctx.db.query("channels").withIndex("by_server", (q) => q.eq("serverId", serverId)).collect();
     const memberships = await ctx.db.query("memberships").withIndex("by_server", (q) => q.eq("serverId", serverId)).collect();
     const members = await Promise.all(
-      memberships.map((m) => memberCard(ctx, m.userId, m.role, m.timeoutUntil)),
+      memberships.map((m) => memberCard(ctx, m.userId, m.role, m.timeoutUntil, userId)),
     );
     const roles = await ctx.db.query("communityRoles").withIndex("by_server", (q) => q.eq("serverId", serverId)).collect();
     const permissions = await effectivePermissions(ctx, serverId, userId);
@@ -466,7 +468,7 @@ export const kickMember = mutation({
     if (!target) throw new Error("That user isn't a member.");
     await ctx.db.delete(target._id);
     await audit(ctx, "member.kick", me, `Kicked ${userId}`, "user", userId);
-    await notify(ctx, userId, "announcement", "Removed from a community", `You were removed from ${server?.name ?? "a community"}.`, "/dashboard");
+    await notify(ctx, userId, "announcement", "Removed from a community", `You were removed from ${server?.name ?? "a community"}.`, `?discover=1`);
   },
 });
 

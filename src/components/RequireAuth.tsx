@@ -8,7 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
-import { Loader2, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router";
 
@@ -39,12 +39,10 @@ export function RequireAuth({
   const navigate = useNavigate();
   const location = useLocation();
 
+  // No loading screen: while the session resolves we render nothing, so a
+  // signed-in user goes straight to their page without a spinner flash.
   if (isLoading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-background">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
-      </main>
-    );
+    return null;
   }
 
   if (!isAuthenticated) {

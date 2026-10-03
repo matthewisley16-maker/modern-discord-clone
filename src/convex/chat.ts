@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 
 import type { Id } from "./_generated/dataModel";
-import { avatarUrlOf } from "./lib";
+import { avatarUrlOf, notify } from "./lib";
 
 async function signedIn(ctx: QueryCtx) {
   const id = await getAuthUserId(ctx);
@@ -106,7 +106,33 @@ export const sendMessage = mutation({ args: { channelId: v.id("channels"), body:
   if (!channel) throw new ConvexError("Channel not found.");
   const userId = await member(ctx, channel.serverId);
   if (channel.locked) throw new ConvexError("This channel is locked.");
-  return ctx.db.insert("messages", { channelId, userId, body: clean(body, 4000), replyToId });
+  const text = clean(body, 4000);
+  const messageId = await ctx.db.insert("messages", { channelId, userId, body: text, replyToId });
+  // Deep link so the recipient lands on this exact message.
+  const link = `?server=${channel.serverId}&channel=${channelId}&message=${messageId}`;
+  const already = new Set<string>([userId as string]);
+
+  if (replyToId) {
+    const parent = await ctx.db.get(replyToId);
+    if (parent && parent.userId !== userId) {
+      already.add(parent.userId as string);
+      await notify(ctx, parent.userId, "reply", "New reply", `${await nameOf(ctx, userId)} replied to you in #${channel.name}`, link, userId);
+    }
+  }
+
+  // @username mentions notify the mentioned member (never the author).
+  const mentions = [...new Set((text.match(/@[a-z0-9._-]{2,24}/gi) ?? []).map((m) => m.slice(1).toLowerCase()))];
+  if (mentions.length > 0) {
+    const memberships = await ctx.db.query("memberships").withIndex("by_server", (q) => q.eq("serverId", channel.serverId)).collect();
+    for (const memberRow of memberships) {
+      if (already.has(memberRow.userId as string)) continue;
+      const u = await ctx.db.get(memberRow.userId);
+      if (!u?.username || !mentions.includes(u.username.toLowerCase())) continue;
+      already.add(memberRow.userId as string);
+      await notify(ctx, memberRow.userId, "mention", "You were mentioned", `${await nameOf(ctx, userId)} mentioned you in #${channel.name}`, link, userId);
+    }
+  }
+  return messageId;
 }});
 export const deleteMessage = mutation({ args: { messageId: v.id("messages") }, handler: async (ctx, { messageId }) => {
   const message = await ctx.db.get(messageId);

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import ProfileAvatar from "./ProfileAvatar";
 import ProfileEffect from "./ProfileEffect";
 import { BADGES, nameStyle, plateStyle } from "@/lib/cosmetics";
+import { formatLastSeen } from "@/components/dashboard/ui";
 import { toast } from "sonner";
 import { BellOff, Copy, Flag, MessageCircle, MoreHorizontal, ShieldOff, UserPlus, X } from "lucide-react";
 
@@ -80,7 +81,9 @@ export default function ProfilePopup({
             decorationId={profile.decorationId}
             size={76}
           />
-          <span className={`pf-presence-label ${profile.presence}`}>{presenceMeta}</span>
+          <span className={`pf-presence-label ${profile.presence}`}>
+            {profile.presence === "offline" ? formatLastSeen(profile.lastSeen) : presenceMeta}
+          </span>
         </div>
 
         <div className="pf-popup-names">

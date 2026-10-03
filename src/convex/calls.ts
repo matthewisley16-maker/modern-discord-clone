@@ -35,7 +35,7 @@ export const inviteCall = mutation({
       "call",
       media === "video" ? "Incoming video call" : "Incoming voice call",
       `${await displayNameOf(ctx, me)} is calling you.`,
-      "/dashboard",
+      conversationId ? `?dm=${conversationId}&call=${id}` : `?call=${id}`,
       me,
     );
     return id;
@@ -68,6 +68,52 @@ export const cancelCall = mutation({
     const invite = await ctx.db.get(inviteId);
     if (!invite || invite.fromId !== me) return;
     await ctx.db.patch(inviteId, { status: "missed" });
+    // Rewrite the recipient's "Incoming call" notification to a missed call so
+    // they are never left with a stale, ringing notification.
+    const theirs = await ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", invite.toId)).collect();
+    const pending = theirs
+      .filter((n) => n.type === "call" && n.title.startsWith("Incoming"))
+      .sort((a, b) => b._creationTime - a._creationTime)[0];
+    if (pending) await ctx.db.patch(pending._id, { title: "Missed call", read: false });
+  },
+});
+
+// ---------------- DM call signaling (WebRTC for calls) ----------------
+
+const signalKind = v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate"));
+
+/** Relay a WebRTC signal to the other member of a DM call. */
+export const sendDmSignal = mutation({
+  args: { conversationId: v.id("dmConversations"), toUserId: v.id("users"), kind: signalKind, payload: v.string() },
+  handler: async (ctx, { conversationId, toUserId, kind, payload }) => {
+    const me = await currentUserId(ctx);
+    const member = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", me))
+      .unique();
+    if (!member) throw new Error("You're not part of this conversation.");
+    await ctx.db.insert("dmCallSignals", { conversationId, fromUserId: me, toUserId, kind, payload });
+  },
+});
+
+/** Signals addressed to me for a given call. */
+export const pollDmSignals = query({
+  args: { conversationId: v.id("dmConversations") },
+  handler: async (ctx, { conversationId }) => {
+    const me = await getAuthUserId(ctx);
+    if (!me) return [];
+    const rows = await ctx.db.query("dmCallSignals").withIndex("by_to", (q) => q.eq("toUserId", me)).collect();
+    return rows.filter((r) => r.conversationId === conversationId);
+  },
+});
+
+export const clearDmSignal = mutation({
+  args: { signalId: v.id("dmCallSignals") },
+  handler: async (ctx, { signalId }) => {
+    const me = await currentUserId(ctx);
+    const signal = await ctx.db.get(signalId);
+    if (!signal || signal.toUserId !== me) return;
+    await ctx.db.delete(signalId);
   },
 });
 
@@ -110,6 +156,7 @@ export const outgoingCall = query({
       toName: await displayNameOf(ctx, recent.toId as Id<"users">),
       media: recent.media,
       status: recent.status,
+      conversationId: recent.conversationId ?? null,
     };
   },
 });

@@ -2,25 +2,25 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
-import { areFriends, audit, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, profileOf, settingsOf } from "./lib";
+import { areFriends, audit, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import type { Id } from "./_generated/dataModel";
 
 function pair(a: Id<"users">, b: Id<"users">): [Id<"users">, Id<"users">] {
   return (a as string) < (b as string) ? [a, b] : [b, a];
 }
 
-async function publicCard(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"users">) {
+async function publicCard(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"users">, viewerId?: Id<"users">) {
   const profile = await profileOf(ctx, userId);
   const user = await ctx.db.get(userId);
-  const settings = await settingsOf(ctx, userId);
-  const presence = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+  const { status, lastSeen } = await presenceInfoOf(ctx, userId, viewerId);
   return {
     userId,
     username: user?.username ?? "",
     displayName: profile?.displayName ?? user?.name ?? user?.username ?? "Freecord member",
     avatarColor: profile?.avatarColor ?? "violet",
     avatarUrl: await avatarUrlOf(ctx, userId),
-    presence: settings?.presenceVisible === false ? "offline" : presence?.status ?? "offline",
+    presence: status,
+    lastSeen,
     customStatus: profile?.customStatus ?? "",
   };
 }
@@ -48,7 +48,7 @@ export const sendFriendRequest = mutation({
       const [a, b] = pair(fromId, toId);
       await ctx.db.patch(reverse._id, { status: "accepted" });
       await ctx.db.insert("friendships", { userA: a, userB: b });
-      await notify(ctx, toId, "friend_accept", "Friend request accepted", `You're now friends.`, "/dashboard", fromId);
+      await notify(ctx, toId, "friend_accept", "Friend request accepted", `You're now friends.`, "?view=friends", fromId);
       return { status: "accepted" as const };
     }
     if (reverse && reverse.status === "accepted") throw new Error("You're already friends.");
@@ -63,7 +63,7 @@ export const sendFriendRequest = mutation({
     } else {
       await ctx.db.insert("friendRequests", { fromId, toId, status: "pending" });
     }
-    await notify(ctx, toId, "friend_request", "New friend request", `${await displayNameOf(ctx, fromId)} wants to be friends.`, "/dashboard", fromId);
+    await notify(ctx, toId, "friend_request", "New friend request", `${await displayNameOf(ctx, fromId)} wants to be friends.`, "?view=friends", fromId);
     return { status: "pending" as const };
   },
 });
@@ -80,7 +80,7 @@ export const respondFriendRequest = mutation({
       const already = await ctx.db.query("friendships").withIndex("by_pair", (q) => q.eq("userA", a).eq("userB", b)).unique();
       if (!already) await ctx.db.insert("friendships", { userA: a, userB: b });
       await ctx.db.patch(requestId, { status: "accepted" });
-      await notify(ctx, request.fromId, "friend_accept", "Friend request accepted", "You're now friends.", "/dashboard", userId);
+      await notify(ctx, request.fromId, "friend_accept", "Friend request accepted", "You're now friends.", "?view=friends", userId);
     } else {
       await ctx.db.patch(requestId, { status: "declined" });
     }
@@ -119,7 +119,7 @@ export const listFriends = query({
     const asA = await ctx.db.query("friendships").withIndex("by_a", (q) => q.eq("userA", userId)).collect();
     const asB = await ctx.db.query("friendships").withIndex("by_b", (q) => q.eq("userB", userId)).collect();
     const ids = [...asA.map((f) => f.userB), ...asB.map((f) => f.userA)];
-    const cards = await Promise.all(ids.map((id) => publicCard(ctx, id)));
+    const cards = await Promise.all(ids.map((id) => publicCard(ctx, id, userId)));
     // Online first, then alphabetical.
     return cards.sort((x, y) => {
       const rank = (s: string) => (s === "offline" ? 1 : 0);
@@ -142,8 +142,8 @@ export const listRequests = query({
       .withIndex("by_from", (q) => q.eq("fromId", userId).eq("status", "pending"))
       .collect();
     return {
-      incoming: await Promise.all(incoming.map(async (r) => ({ requestId: r._id, ...(await publicCard(ctx, r.fromId)) }))),
-      outgoing: await Promise.all(outgoing.map(async (r) => ({ requestId: r._id, ...(await publicCard(ctx, r.toId)) }))),
+      incoming: await Promise.all(incoming.map(async (r) => ({ requestId: r._id, ...(await publicCard(ctx, r.fromId, userId)) }))),
+      outgoing: await Promise.all(outgoing.map(async (r) => ({ requestId: r._id, ...(await publicCard(ctx, r.toId, userId)) }))),
     };
   },
 });
@@ -162,7 +162,7 @@ export const follow = mutation({
     const existing = await ctx.db.query("follows").withIndex("by_pair", (q) => q.eq("followerId", me).eq("followingId", userId)).unique();
     if (existing) return;
     await ctx.db.insert("follows", { followerId: me, followingId: userId });
-    await notify(ctx, userId, "follow", "New follower", `${await displayNameOf(ctx, me)} started following you.`, "/dashboard", me);
+    await notify(ctx, userId, "follow", "New follower", `${await displayNameOf(ctx, me)} started following you.`, "?view=friends", me);
   },
 });
 
@@ -181,7 +181,7 @@ export const listFollowing = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const rows = await ctx.db.query("follows").withIndex("by_follower", (q) => q.eq("followerId", userId)).collect();
-    return Promise.all(rows.map((r) => publicCard(ctx, r.followingId)));
+    return Promise.all(rows.map((r) => publicCard(ctx, r.followingId, userId)));
   },
 });
 
@@ -191,7 +191,7 @@ export const listFollowers = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const rows = await ctx.db.query("follows").withIndex("by_following", (q) => q.eq("followingId", userId)).collect();
-    return Promise.all(rows.map((r) => publicCard(ctx, r.followerId)));
+    return Promise.all(rows.map((r) => publicCard(ctx, r.followerId, userId)));
   },
 });
 
@@ -315,8 +315,31 @@ export const deleteNotification = mutation({
   args: { id: v.id("notifications") },
   handler: async (ctx, { id }) => {
     const userId = await currentUserId(ctx);
+    // Only the owner can delete a notification — never another user's.
     const n = await ctx.db.get(id);
     if (!n || n.userId !== userId) return;
     await ctx.db.delete(id);
+  },
+});
+
+/** Mark one notification read or unread (owner only). */
+export const setNotificationRead = mutation({
+  args: { id: v.id("notifications"), read: v.boolean() },
+  handler: async (ctx, { id, read }) => {
+    const userId = await currentUserId(ctx);
+    const n = await ctx.db.get(id);
+    if (!n || n.userId !== userId) return;
+    await ctx.db.patch(id, { read });
+  },
+});
+
+/** Remove every notification belonging to the signed-in user. */
+export const clearAllNotifications = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await currentUserId(ctx);
+    const items = await ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
+    for (const n of items) await ctx.db.delete(n._id);
+    return items.length;
   },
 });

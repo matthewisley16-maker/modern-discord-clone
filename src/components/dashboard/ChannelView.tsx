@@ -6,11 +6,24 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Avatar, EmptyState } from "./ui";
+import AudioPlayer from "./AudioPlayer";
 import { toast } from "sonner";
-import { CheckCheck, Copy, FileText, Flag, Hash, Link2, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
+import { CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
 
 const EMOJIS = ["😀", "😂", "🙌", "❤️", "🔥", "👍", "🎉", "👋", "✨", "😮", "😢", "🙏"];
 const MAX_BYTES = 10 * 1024 * 1024;
+
+/** A file uploaded to storage that is staged in the composer, not yet sent. */
+type PendingAttachment = { storageId: Id<"_storage">; name: string; size: number; contentType: string; previewUrl?: string };
+
+const isAudio = (contentType: string, name: string) =>
+  contentType.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(name);
+
+function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
 
 export default function ChannelView({
   channelId,
@@ -21,6 +34,8 @@ export default function ChannelView({
   onOpenProfile,
   onJoinVoice,
   isVoice,
+  highlightMessageId,
+  onHighlightHandled,
 }: {
   channelId: Id<"channels">;
   channelName: string;
@@ -30,6 +45,8 @@ export default function ChannelView({
   onOpenProfile: (userId: string) => void;
   onJoinVoice: () => void;
   isVoice?: boolean;
+  highlightMessageId?: string | null;
+  onHighlightHandled?: () => void;
 }) {
   const messages = useQuery(api.chat.messages, { channelId });
   const typing = useQuery(api.communities.typingIn, { channelId });
@@ -58,6 +75,8 @@ export default function ChannelView({
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Files are staged here, uploaded to storage, and only attached on Send.
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   // Typing heartbeats are throttled and cleared on send, switch, and unmount.
@@ -65,6 +84,17 @@ export default function ChannelView({
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, channelId]);
   useEffect(() => { setSearch(""); setReplyTo(null); setEditing(null); setDraft(""); }, [channelId]);
+
+  // Scroll to and flash a message opened from a notification.
+  useEffect(() => {
+    if (!highlightMessageId || !messages) return;
+    const el = document.getElementById(`msg-${highlightMessageId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("fc-message-flash");
+    const t = window.setTimeout(() => { el.classList.remove("fc-message-flash"); onHighlightHandled?.(); }, 2400);
+    return () => window.clearTimeout(t);
+  }, [highlightMessageId, messages, onHighlightHandled]);
 
   // Play the message SFX when someone else's message arrives in this channel.
   const lastCount = useRef<number | null>(null);
@@ -83,11 +113,22 @@ export default function ChannelView({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!draft.trim() || busy || !canSend) return;
+    if ((!draft.trim() && pending.length === 0) || busy || !canSend) return;
     setBusy(true);
     try {
-      if (editing) { await edit({ messageId: editing.id, body: draft }); setEditing(null); }
-      else { await send({ channelId, body: draft, replyToId: replyTo?.id }); setReplyTo(null); }
+      if (editing) {
+        await edit({ messageId: editing.id, body: draft });
+        setEditing(null);
+      } else {
+        // The message is only sent here, on explicit Send. Attachments ride along.
+        const fallback = pending.length ? `Shared ${pending.map((p) => p.name).join(", ").slice(0, 120)}` : "";
+        const messageId = await send({ channelId, body: draft.trim() || fallback, replyToId: replyTo?.id });
+        for (const att of pending) {
+          await attach({ storageId: att.storageId, name: att.name, size: att.size, contentType: att.contentType, messageId });
+        }
+        setReplyTo(null);
+        clearPending();
+      }
       playSound();
       stopTyping();
       setDraft("");
@@ -96,7 +137,24 @@ export default function ChannelView({
     } finally { setBusy(false); }
   }
 
-  async function upload(file: File) {
+  function clearPending() {
+    setPending((prev) => { prev.forEach((p) => p.previewUrl && URL.revokeObjectURL(p.previewUrl)); return []; });
+  }
+
+  function removePending(index: number) {
+    setPending((prev) => {
+      const next = [...prev];
+      const [gone] = next.splice(index, 1);
+      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+      return next;
+    });
+  }
+
+  /**
+   * Upload the bytes to storage and STAGE the file. Nothing is sent until the
+   * user presses Send, so the text box stays available for a caption.
+   */
+  async function stageFile(file: File) {
     if (file.size > MAX_BYTES) { toast.error("Files must be 10 MB or smaller."); return; }
     setUploadPct(0);
     try {
@@ -113,9 +171,12 @@ export default function ChannelView({
         xhr.onerror = () => reject(new Error("Upload failed."));
         xhr.send(file);
       });
-      const messageId = await send({ channelId, body: `Shared ${file.name}` });
-      await attach({ storageId, name: file.name, size: file.size, contentType: file.type || "application/octet-stream", messageId });
-      toast.success("File uploaded.");
+      const contentType = file.type || "application/octet-stream";
+      const previewUrl = contentType.startsWith("image/")
+        ? URL.createObjectURL(file)
+        : undefined;
+      setPending((prev) => [...prev, { storageId, name: file.name, size: file.size, contentType, previewUrl }]);
+      toast.success(`${file.name} is ready — press Send to post it.`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed.");
     } finally { setUploadPct(null); }
@@ -143,7 +204,7 @@ export default function ChannelView({
       className="fc-conversation"
       onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) upload(f); }}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); Array.from(e.dataTransfer.files ?? []).forEach(stageFile); }}
     >
       <header className="fc-conversation-head">
         <span className="fc-head-icon"><Hash size={20} /></span>
@@ -178,6 +239,7 @@ export default function ChannelView({
           return (
             <article
               key={m._id}
+              id={`msg-${m._id}`}
               className={`fc-message ${longPressFor === m._id ? "menu-open" : ""}`}
               tabIndex={0}
               onContextMenu={(e) => { e.preventDefault(); setMenuFor(m._id); }}
@@ -205,11 +267,17 @@ export default function ChannelView({
                 <p className="fc-text">{renderMentions(m.body)}</p>
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
-                    {m.attachments.map((a) => (
-                      <a key={a._id} href={a.url ?? "#"} target="_blank" rel="noreferrer noopener" className="fc-attachment">
-                        {a.isImage && a.url ? <img src={a.url} alt={a.name} loading="lazy" /> : <span className="fc-file"><FileText size={16} /> {a.name}</span>}
-                      </a>
-                    ))}
+                    {m.attachments.map((a) => {
+                      // Audio plays inline straight from storage — no external tab.
+                      if (isAudio(a.contentType, a.name) && a.url) {
+                        return <AudioPlayer key={a._id} url={a.url} name={a.name} size={a.size} contentType={a.contentType} />;
+                      }
+                      return (
+                        <a key={a._id} href={a.url ?? "#"} target="_blank" rel="noreferrer noopener" className="fc-attachment">
+                          {a.isImage && a.url ? <img src={a.url} alt={a.name} loading="lazy" /> : <span className="fc-file"><FileText size={16} /> {a.name}</span>}
+                        </a>
+                      );
+                    })}
                   </div>
                 )}
                 <div className="fc-reactions">
@@ -231,8 +299,6 @@ export default function ChannelView({
                     {mine && <button onClick={() => { setEditing({ id: m._id, body: m.body }); setDraft(m.body); setReplyTo(null); setMenuFor(null); }}><Pencil size={13} /> Edit</button>}
                     <button onClick={() => { pin({ messageId: m._id, pinned: !m.pinned }).catch(() => {}); setMenuFor(null); }}><Pin size={13} /> {m.pinned ? "Unpin" : "Pin"}</button>
                     <button onClick={async () => { try { await navigator.clipboard.writeText(m.body); toast.success("Copied."); } catch { toast.error("Couldn't copy."); } setMenuFor(null); }}><Copy size={13} /> Copy text</button>
-                    <button onClick={async () => { try { await navigator.clipboard.writeText(`${window.location.origin}/dashboard?channel=${m.channelId}&message=${m._id}`); toast.success("Message link copied."); } catch { toast.error("Couldn't copy."); } setMenuFor(null); }}><Link2 size={13} /> Copy message link</button>
-                    <button onClick={async () => { try { await navigator.clipboard.writeText(m._id); toast.success("Message ID copied."); } catch { toast.error("Couldn't copy."); } setMenuFor(null); }}><Copy size={13} /> Copy message ID</button>
                     {/* Delete for me is always available and only affects this user. */}
                     <button onClick={async () => { try { await deleteForMe({ messageId: m._id }); toast.success("Message hidden for you only."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setMenuFor(null); }}>
                       <Trash2 size={13} /> Delete for me
@@ -261,9 +327,26 @@ export default function ChannelView({
           {replyTo && <div className="fc-reply-bar"><Reply size={13} /> Replying to <strong>{replyTo.author}</strong><button aria-label="Cancel reply" onClick={() => setReplyTo(null)}><X size={14} /></button></div>}
           {editing && <div className="fc-reply-bar edit"><Pencil size={13} /> Editing message<button aria-label="Cancel edit" onClick={() => { setEditing(null); setDraft(""); }}><X size={14} /></button></div>}
           {uploadPct !== null && <div className="fc-upload"><span style={{ width: `${uploadPct}%` }} /> Uploading… {uploadPct}%</div>}
+          {/* Pending attachments sit ABOVE the input so the text box stays usable. */}
+          {pending.length > 0 && (
+            <div className="fc-pending" role="list" aria-label="Pending attachments">
+              {pending.map((p, i) => (
+                <div className="fc-pending-item" role="listitem" key={`${p.storageId}-${i}`}>
+                  {p.previewUrl
+                    ? <img className="fc-pending-thumb" src={p.previewUrl} alt="" />
+                    : <span className="fc-pending-icon">{isAudio(p.contentType, p.name) ? <Music size={16} /> : <FileText size={16} />}</span>}
+                  <span className="fc-pending-text">
+                    <strong>{p.name}</strong>
+                    <small>{fileSize(p.size)} · not sent yet</small>
+                  </span>
+                  <button type="button" aria-label={`Remove ${p.name}`} onClick={() => removePending(i)}><X size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
           {emojiOpen && <div className="fc-emoji-picker">{EMOJIS.map((e) => <button key={e} onClick={() => { setDraft(draft + e); setEmojiOpen(false); }}>{e}</button>)}</div>}
           <form className="fc-composer" onSubmit={submit}>
-            <input ref={fileInput} type="file" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
+            <input ref={fileInput} type="file" multiple hidden onChange={(e) => { Array.from(e.target.files ?? []).forEach(stageFile); e.target.value = ""; }} />
             <button type="button" title="Attach a file" aria-label="Attach a file" onClick={() => fileInput.current?.click()}><Paperclip size={19} /></button>
             <button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => setEmojiOpen((v) => !v)}><Smile size={19} /></button>
             <input
@@ -272,10 +355,10 @@ export default function ChannelView({
               disabled={busy}
               maxLength={4000}
               onChange={(e) => { setDraft(e.target.value); onType(e.target.value); }}
-              onPaste={(e) => { const f = e.clipboardData.files?.[0]; if (f) { e.preventDefault(); upload(f); } }}
+              onPaste={(e) => { const files = Array.from(e.clipboardData.files ?? []); if (files.length) { e.preventDefault(); files.forEach(stageFile); } }}
               placeholder={editing ? "Edit your message…" : `Message #${channelName}`}
             />
-            <button type="submit" disabled={!draft.trim() || busy} aria-label="Send message"><Send size={18} /></button>
+            <button type="submit" disabled={(!draft.trim() && pending.length === 0) || busy} aria-label="Send message"><Send size={18} /></button>
           </form>
           <div className="fc-composer-note"><span>Enter to send · Use @ to mention</span><span className="fc-receipt"><CheckCheck size={13} /> Live</span></div>
         </div>

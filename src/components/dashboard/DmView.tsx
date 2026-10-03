@@ -5,25 +5,41 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, EmptyState } from "./ui";
+import AudioPlayer from "./AudioPlayer";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
 import { toast } from "sonner";
-import { AtSign, Check, CheckCheck, Copy, Download, FileText, Flag, MessageCircle, MonitorUp, MoreVertical, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
+import { AtSign, Check, CheckCheck, Copy, Download, FileText, Flag, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
 
 const EMOJIS = ["😀", "😂", "🙌", "❤️", "🔥", "👍", "🎉", "👋", "✨", "😮", "😢", "🙏"];
 const REACTIONS = ["👍", "❤️", "😂", "🔥", "🎉"];
 const MAX_BYTES = 10 * 1024 * 1024;
+
+type PendingAttachment = { storageId: Id<"_storage">; name: string; size: number; contentType: string; previewUrl?: string };
+
+const isAudio = (contentType: string, name: string) =>
+  contentType.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(name);
+
+function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
 
 export default function DmView({
   conversationId,
   myUserId,
   onOpenProfile,
   onStartCall,
+  highlightMessageId,
+  onHighlightHandled,
 }: {
   conversationId: Id<"dmConversations">;
   myUserId: string;
   onOpenProfile: (userId: string) => void;
   onStartCall: (media: "voice" | "video") => void;
+  highlightMessageId?: string | null;
+  onHighlightHandled?: () => void;
 }) {
   const conversations = useQuery(api.dms.listConversations, {});
   const convo = conversations?.find((c) => c.conversationId === conversationId);
@@ -53,6 +69,7 @@ export default function DmView({
   const [busy, setBusy] = useState(false);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [showGroupPanel, setShowGroupPanel] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -60,6 +77,17 @@ export default function DmView({
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, conversationId]);
   useEffect(() => { markRead({ conversationId }).catch(() => {}); setSearch(""); setReplyTo(null); setEditing(null); }, [conversationId, markRead]);
+
+  // Scroll to and flash a message opened from a notification.
+  useEffect(() => {
+    if (!highlightMessageId || !messages) return;
+    const el = document.getElementById(`msg-${highlightMessageId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("fc-message-flash");
+    const t = window.setTimeout(() => { el.classList.remove("fc-message-flash"); onHighlightHandled?.(); }, 2400);
+    return () => window.clearTimeout(t);
+  }, [highlightMessageId, messages, onHighlightHandled]);
 
   // Play the message SFX on send and when the other person's message arrives.
   const { play: playSound } = useMessageSound();
@@ -75,17 +103,36 @@ export default function DmView({
 
   const title = convo?.type === "group" ? convo.name : convo?.members[0]?.displayName ?? "Conversation";
 
+  function clearPending() {
+    setPending((prev) => { prev.forEach((p) => p.previewUrl && URL.revokeObjectURL(p.previewUrl)); return []; });
+  }
+
+  function removePending(index: number) {
+    setPending((prev) => {
+      const next = [...prev];
+      const [gone] = next.splice(index, 1);
+      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+      return next;
+    });
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!draft.trim() || busy) return;
+    if ((!draft.trim() && pending.length === 0) || busy) return;
     setBusy(true);
     try {
       if (editing) {
         await edit({ messageId: editing.id, body: draft });
         setEditing(null);
       } else {
-        await send({ conversationId, body: draft, replyToId: replyTo?.id });
+        // Only sent here, on explicit Send; staged attachments ride along.
+        const fallback = pending.length ? `Shared ${pending.map((p) => p.name).join(", ").slice(0, 120)}` : "";
+        const messageId = await send({ conversationId, body: draft.trim() || fallback, replyToId: replyTo?.id });
+        for (const att of pending) {
+          await attach({ storageId: att.storageId, name: att.name, size: att.size, contentType: att.contentType, dmMessageId: messageId });
+        }
         setReplyTo(null);
+        clearPending();
       }
       playSound();
       stopTyping();
@@ -97,8 +144,8 @@ export default function DmView({
     }
   }
 
-  /** Upload with progress; validates size before sending. */
-  async function upload(file: File) {
+  /** Upload the bytes to storage and STAGE the file — nothing is sent yet. */
+  async function stageFile(file: File) {
     if (file.size > MAX_BYTES) { toast.error("Files must be 10 MB or smaller."); return; }
     setUploadPct(0);
     try {
@@ -116,9 +163,10 @@ export default function DmView({
         xhr.onerror = () => reject(new Error("Upload failed."));
         xhr.send(file);
       });
-      const messageId = await send({ conversationId, body: `Shared ${file.name}` });
-      await attach({ storageId, name: file.name, size: file.size, contentType: file.type || "application/octet-stream", dmMessageId: messageId });
-      toast.success("File uploaded.");
+      const contentType = file.type || "application/octet-stream";
+      const previewUrl = contentType.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+      setPending((prev) => [...prev, { storageId, name: file.name, size: file.size, contentType, previewUrl }]);
+      toast.success(`${file.name} is ready — press Send to post it.`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed.");
     } finally {
@@ -131,7 +179,7 @@ export default function DmView({
       className="fc-conversation"
       onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) upload(f); }}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); Array.from(e.dataTransfer.files ?? []).forEach(stageFile); }}
     >
       <header className="fc-conversation-head">
         <span className="fc-head-icon">{convo?.type === "group" ? <Users size={20} /> : <AtSign size={20} />}</span>
@@ -197,7 +245,7 @@ export default function DmView({
           const mine = m.userId === myUserId;
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
           return (
-            <article key={m._id} className="fc-message" tabIndex={0}>
+            <article key={m._id} id={`msg-${m._id}`} className="fc-message" tabIndex={0}>
               <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} url={m.authorAvatarUrl} />
               <div className="fc-message-body">
                 <div className="fc-message-top">
@@ -221,15 +269,21 @@ export default function DmView({
                 )}
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
-                    {m.attachments.map((a) => (
-                      <a key={a._id} href={a.url ?? "#"} target="_blank" rel="noreferrer noopener" className="fc-attachment">
-                        {a.contentType.startsWith("image/") && a.url ? (
-                          <img src={a.url} alt={a.name} loading="lazy" />
-                        ) : (
-                          <span className="fc-file"><FileText size={16} /> {a.name} <Download size={13} /></span>
-                        )}
-                      </a>
-                    ))}
+                    {m.attachments.map((a) => {
+                      // Audio plays inline straight from storage — no external tab.
+                      if (isAudio(a.contentType, a.name) && a.url) {
+                        return <AudioPlayer key={a._id} url={a.url} name={a.name} size={a.size} contentType={a.contentType} />;
+                      }
+                      return (
+                        <a key={a._id} href={a.url ?? "#"} target="_blank" rel="noreferrer noopener" className="fc-attachment">
+                          {a.contentType.startsWith("image/") && a.url ? (
+                            <img src={a.url} alt={a.name} loading="lazy" />
+                          ) : (
+                            <span className="fc-file"><FileText size={16} /> {a.name} <Download size={13} /></span>
+                          )}
+                        </a>
+                      );
+                    })}
                   </div>
                 )}
                 <div className="fc-reactions">
@@ -285,13 +339,30 @@ export default function DmView({
         {uploadPct !== null && (
           <div className="fc-upload"><span style={{ width: `${uploadPct}%` }} /> Uploading… {uploadPct}%</div>
         )}
+        {/* Pending attachments sit ABOVE the input so the text box stays usable. */}
+        {pending.length > 0 && (
+          <div className="fc-pending" role="list" aria-label="Pending attachments">
+            {pending.map((p, i) => (
+              <div className="fc-pending-item" role="listitem" key={`${p.storageId}-${i}`}>
+                {p.previewUrl
+                  ? <img className="fc-pending-thumb" src={p.previewUrl} alt="" />
+                  : <span className="fc-pending-icon">{isAudio(p.contentType, p.name) ? <Music size={16} /> : <FileText size={16} />}</span>}
+                <span className="fc-pending-text">
+                  <strong>{p.name}</strong>
+                  <small>{fileSize(p.size)} · not sent yet</small>
+                </span>
+                <button type="button" aria-label={`Remove ${p.name}`} onClick={() => removePending(i)}><X size={14} /></button>
+              </div>
+            ))}
+          </div>
+        )}
         {emojiOpen && (
           <div className="fc-emoji-picker">
             {EMOJIS.map((e) => <button key={e} onClick={() => { setDraft(draft + e); setEmojiOpen(false); }}>{e}</button>)}
           </div>
         )}
         <form className="fc-composer" onSubmit={submit}>
-          <input ref={fileInput} type="file" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
+          <input ref={fileInput} type="file" multiple hidden onChange={(e) => { Array.from(e.target.files ?? []).forEach(stageFile); e.target.value = ""; }} />
           <button type="button" title="Attach a file" aria-label="Attach a file" onClick={() => fileInput.current?.click()}><Paperclip size={19} /></button>
           <button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => setEmojiOpen((v) => !v)}><Smile size={19} /></button>
           <input
@@ -300,10 +371,10 @@ export default function DmView({
             disabled={busy}
             maxLength={4000}
             onChange={(e) => { setDraft(e.target.value); onType(e.target.value); }}
-            onPaste={(e) => { const f = e.clipboardData.files?.[0]; if (f) { e.preventDefault(); upload(f); } }}
+            onPaste={(e) => { const files = Array.from(e.clipboardData.files ?? []); if (files.length) { e.preventDefault(); files.forEach(stageFile); } }}
             placeholder={editing ? "Edit your message…" : `Message ${title}`}
           />
-          <button type="submit" disabled={!draft.trim() || busy} aria-label="Send message"><Send size={18} /></button>
+          <button type="submit" disabled={(!draft.trim() && pending.length === 0) || busy} aria-label="Send message"><Send size={18} /></button>
         </form>
         <div className="fc-composer-note">
           <span>Enter to send · Drag and drop or paste to upload</span>
