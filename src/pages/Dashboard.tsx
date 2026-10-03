@@ -15,6 +15,7 @@ import DiscoverView from "@/components/dashboard/DiscoverView";
 import SearchView from "@/components/dashboard/SearchView";
 import ProfileDrawer from "@/components/dashboard/ProfileDrawer";
 import SettingsPanel from "@/components/dashboard/SettingsPanel";
+import CommunitySettings from "@/components/dashboard/CommunitySettings";
 import { Avatar, colorFor, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { toast } from "sonner";
 import {
@@ -58,6 +59,7 @@ export default function Dashboard() {
   const [conversationId, setConversationId] = useState<Id<"dmConversations"> | null>(null);
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [communitySettingsOpen, setCommunitySettingsOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
@@ -204,6 +206,9 @@ export default function Dashboard() {
           <>
             <div className="fc-sidebar-head">
               <span className="fc-sidebar-title">{details.server.name}</span>
+              {details.permissions.includes("manageCommunity") && (
+                <button aria-label="Community settings" title="Community settings" onClick={() => setCommunitySettingsOpen(true)}><Settings size={16} /></button>
+              )}
               <button className="fc-close-mobile" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={17} /></button>
             </div>
             <div className="fc-sidebar-banner">
@@ -389,6 +394,9 @@ export default function Dashboard() {
         <ProfileDrawer userId={profileUserId} onClose={() => setProfileUserId(null)} onMessage={(id) => { openConversation(id as Id<"dmConversations">); setProfileUserId(null); }} />
       )}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {communitySettingsOpen && communityId && (
+        <CommunitySettings serverId={communityId} onClose={() => setCommunitySettingsOpen(false)} />
+      )}
 
       {inCall && (
         <div className="fc-call-overlay">

@@ -466,6 +466,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-modal-form label { font-size: 12px; font-weight: 600; color: #a79fd0; }
 .fc-checkbox-row { flex-direction: row !important; align-items: center; gap: 8px; font-weight: 400 !important; color: #b7b1cc !important; }
 .fc-checkbox-row input { width: 15px; height: 15px; accent-color: #8b5cf6; }
+.fc-select { background: #1e1d28; color: #eeecf6; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+.fc-visibility-note { font-size: 12px; line-height: 1.7; padding: 11px 13px; border-radius: 10px; }
+.fc-visibility-note.public { background: rgba(61,220,151,.1); border: 1px solid rgba(61,220,151,.3); color: #9fe8c4; }
+.fc-visibility-note.private { background: rgba(245,196,81,.1); border: 1px solid rgba(245,196,81,.3); color: #f0d79a; }
+.fc-settings-actions { display: flex; gap: 10px; margin-top: 6px; }
+.fc-inline-code { padding: 2px 7px; border-radius: 6px; background: rgba(139,92,246,.16); color: #c3b1f7; font-size: 12px; user-select: all; }
 @media (max-width: 1000px) { .fc-members { display: none; } .fc-sidebar { width: 210px; } }
 @media (max-width: 760px) {
   .fc-rail.hide-mobile { display: none; }

@@ -248,7 +248,8 @@ export const discover = query({
     const term = q?.trim().toLowerCase();
     const out = [];
     for (const server of all) {
-      if (category && server.category !== category) continue;
+      // Communities without an explicit category belong to "General".
+      if (category && (server.category ?? "General") !== category) continue;
       if (term && !`${server.name} ${server.description} ${(server.tags ?? []).join(" ")}`.toLowerCase().includes(term)) continue;
       const members = await ctx.db.query("memberships").withIndex("by_server", (x) => x.eq("serverId", server._id)).collect();
       out.push({
