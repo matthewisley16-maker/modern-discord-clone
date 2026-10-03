@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/input-otp";
 
 import { useAuth } from "@/hooks/use-auth";
-import { GatherMark } from "./Landing";
+import { FreecordMark } from "./Landing";
 import { ArrowRight, Loader2, Mail, UserX } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -110,7 +110,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   };
 
   return (
-    <div className="auth-gather min-h-screen flex flex-col">
+    <div className="auth-freecord min-h-screen flex flex-col">
 
       
       {/* Auth Content */}
@@ -121,7 +121,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
             <>
               <CardHeader className="text-center">
               <div className="flex justify-center">
-                    <button type="button" aria-label="Gather home" onClick={() => navigate("/")}><GatherMark /></button>
+                    <button type="button" aria-label="Freecord home" onClick={() => navigate("/")}><FreecordMark /></button>
                   </div>
                 <CardTitle className="text-xl">Your people are waiting.</CardTitle>
                 <CardDescription>

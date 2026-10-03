@@ -17,7 +17,7 @@ async function member(ctx: QueryCtx, serverId: Id<"servers">) {
 async function nameOf(ctx: QueryCtx, id: Id<"users">) {
   const profile = await ctx.db.query("profiles").withIndex("by_user", q => q.eq("userId", id)).unique();
   const user = await ctx.db.get(id);
-  return profile?.displayName || user?.name || "Gather member";
+  return profile?.displayName || user?.name || "Freecord member";
 }
 function clean(value: string, max: number) {
   const text = value.trim();
