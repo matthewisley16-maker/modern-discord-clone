@@ -5,7 +5,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
 import { toast } from "sonner";
-import { Mic, MicOff, MonitorUp, PhoneOff, Video, VideoOff, VolumeX } from "lucide-react";
+import { Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Video, VideoOff, VolumeX, X } from "lucide-react";
 
 const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 const SPEAK_THRESHOLD = 0.045; // RMS above this counts as speech
@@ -20,7 +20,8 @@ const SPEAK_HOLD_MS = 350; // keep the ring on briefly after speech stops
  * ring stays in sync for everyone in the channel.
  *
  * Audio is transmitted peer-to-peer over WebRTC; signalling is relayed through
- * Convex.
+ * Convex. The component stays mounted across navigation, so `minimized` only
+ * changes what is drawn — the call itself keeps running.
  */
 export default function VoicePanel({
   channelId,
@@ -28,12 +29,18 @@ export default function VoicePanel({
   myUserId,
   onLeave,
   onOpenProfile,
+  minimized = false,
+  onMinimize,
+  onExpand,
 }: {
   channelId: Id<"channels">;
   channelName: string;
   myUserId: string;
   onLeave: () => void;
   onOpenProfile: (userId: string) => void;
+  minimized?: boolean;
+  onMinimize?: () => void;
+  onExpand?: () => void;
 }) {
   const details = useQuery(api.voice.voiceChannelDetails, { channelId });
   const signals = useQuery(api.communities.pollSignals, { channelId });
@@ -202,6 +209,11 @@ export default function VoicePanel({
       if (p.userId === myUserId) continue;
       if (!peers.current.has(p.userId)) createPeer(p.userId, myUserId < p.userId);
     }
+    // Drop peer connections for people who left (no ghost streams/tiles).
+    const present = new Set(details.participants.map((p) => p.userId as string));
+    for (const [id, pc] of peers.current) {
+      if (!present.has(id)) { pc.close(); peers.current.delete(id); }
+    }
   }, [details, myUserId, mediaReady]);
 
   // Deafen silences every remote participant without changing their streams.
@@ -298,7 +310,6 @@ export default function VoicePanel({
       localVideoRef.current.srcObject = localStream.current ?? videoStream;
       void localVideoRef.current.play().catch(() => {});
     }
-    if (muted) track.enabled = true; // camera is independent of mic mute
 
     for (const [remoteId, pc] of peers.current) {
       const sender = pc.getSenders().find((s) => s.track?.kind === "video");
@@ -342,93 +353,148 @@ export default function VoicePanel({
   const statusLabel = connection === "connected" ? "Voice Connected" : connection === "connecting" ? "Connecting…" : "Connection Lost";
 
   return (
-    <div className="vp-panel" role="dialog" aria-label={`${channelName} voice`}>
-      <header className="vp-head">
-        <div>
-          <p className="vp-title">{channelName}</p>
-          <p className={`vp-status ${connection}`}>
-            <span className="vp-dot" /> {statusLabel} · {participants.length}{details?.userLimit ? `/${details.userLimit}` : ""}
-          </p>
-        </div>
-        <Button size="sm" variant="destructive" onClick={onLeave}><PhoneOff className="mr-1 h-4 w-4" /> Disconnect</Button>
-      </header>
+    <>
+      {/* Always-mounted remote audio sinks so the call keeps playing even while
+          the full interface is minimized. */}
+      <div className="vp-sinks" aria-hidden="true">
+        {participants.filter((p) => p.userId !== myUserId).map((p) => (
+          <audio
+            key={p.userId}
+            autoPlay
+            playsInline
+            ref={(el) => { if (el) { audioEls.current.set(p.userId, el); const s = remoteStreams[p.userId]; if (s) el.srcObject = s; el.muted = deafened; } }}
+          />
+        ))}
+      </div>
 
-      <div className="vp-grid">
-        {participants.map((p) => {
-          const isSelf = p.userId === myUserId;
-          const stream = remoteStreams[p.userId];
-          // My own video shows as soon as I enable it; others' video shows when
-          // their session reports video: true.
-          const showVideo = isSelf ? videoOn : p.video;
-          return (
-            <div key={p.userId} className={`vp-tile ${p.speaking ? "speaking" : ""} ${isSelf ? "self" : ""}`}>
-              <div className="vp-media">
-                {showVideo ? (
-                  <video
-                    className="vp-video"
-                    autoPlay
-                    playsInline
-                    muted={isSelf}
-                    ref={(el) => {
-                      if (!el) return;
-                      if (isSelf) {
-                        localVideoRef.current = el;
-                        el.srcObject = localStream.current;
-                        void el.play().catch(() => {});
-                      } else {
-                        videoEls.current.set(p.userId, el);
-                        el.srcObject = stream ?? null;
-                        void el.play().catch(() => {});
-                      }
-                    }}
-                  />
-                ) : (
-                  <span className="vp-avatar-holder">
-                    <ProfileAvatar name={p.name} url={p.avatarUrl} size={64} showPresence={false} />
-                    {p.speaking && <span className="vp-speaking-ring" aria-hidden="true" />}
-                  </span>
-                )}
-              </div>
-              <button className="vp-name-btn" onClick={() => onOpenProfile(p.userId)}>
-                <span className="vp-name">{p.name}{isSelf ? " (you)" : ""}</span>
-              </button>
-              <span className="vp-flags">
-                {p.deafened ? <VolumeX size={13} aria-label="Deafened" /> : p.muted ? <MicOff size={13} aria-label="Muted" /> : null}
-                {p.speaking && <em className="vp-speaking-text">speaking</em>}
+      {minimized ? (
+        <div className="vp-mini" role="region" aria-label={`${channelName} call`} onClick={onExpand} title="Open the call">
+          <div className="vp-mini-head">
+            <span className="vp-mini-title"><span className={`vp-mini-dot ${connection}`} /> {channelName}</span>
+            <button className="vp-mini-x" aria-label="Leave call" onClick={(e) => { e.stopPropagation(); onLeave(); }}><X size={14} /></button>
+          </div>
+          <div className="vp-mini-avs">
+            {participants.slice(0, 5).map((p) => (
+              <span key={p.userId} className={`vp-mini-av ${p.speaking ? "speaking" : ""}`}>
+                <ProfileAvatar name={p.name} url={p.avatarUrl} size={26} showPresence={false} />
               </span>
-              {/* Remote audio sink — never plays my own microphone back. */}
-              {!isSelf && (
-                <audio
-                  ref={(el) => { if (el) { audioEls.current.set(p.userId, el); const s = remoteStreams[p.userId]; if (s) el.srcObject = s; el.muted = deafened; } }}
-                  autoPlay
-                  playsInline
-                />
-              )}
+            ))}
+            {participants.length > 5 && <span className="vp-mini-more">+{participants.length - 5}</span>}
+            <span className="vp-mini-count">{participants.length}</span>
+          </div>
+          {videoOn && (
+            <video
+              className="vp-mini-cam"
+              autoPlay
+              playsInline
+              muted
+              ref={(el) => { if (el) { el.srcObject = localStream.current; void el.play().catch(() => {}); } }}
+            />
+          )}
+          <div className="vp-mini-controls" onClick={(e) => e.stopPropagation()}>
+            <button className={muted ? "active" : ""} onClick={toggleMute} aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>
+              {muted ? <MicOff size={16} /> : <Mic size={16} />}
+            </button>
+            <button className={videoOn ? "active" : ""} onClick={toggleVideo} aria-label="Toggle camera" title="Toggle camera">
+              {videoOn ? <Video size={16} /> : <VideoOff size={16} />}
+            </button>
+            <button className={deafened ? "active" : ""} onClick={toggleDeafen} aria-label="Toggle deafen" title="Deafen">
+              <VolumeX size={16} />
+            </button>
+            <button onClick={onExpand} aria-label="Open the call" title="Open the call"><Maximize2 size={16} /></button>
+            <button className="danger" onClick={onLeave} aria-label="Leave the call" title="Leave the call"><PhoneOff size={16} /></button>
+          </div>
+        </div>
+      ) : (
+        <div className="fc-call-overlay" role="dialog" aria-label={`${channelName} voice`}>
+          <div className="vp-panel">
+            <header className="vp-head">
+              <div>
+                <p className="vp-title">{channelName}</p>
+                <p className={`vp-status ${connection}`}>
+                  <span className="vp-dot" /> {statusLabel} · {participants.length}{details?.userLimit ? `/${details.userLimit}` : ""}
+                </p>
+              </div>
+              <div className="vp-head-actions">
+                {onMinimize && (
+                  <Button size="sm" variant="outline" onClick={onMinimize} title="Minimize — stay connected while you use Freecord">
+                    <Minimize2 className="mr-1 h-4 w-4" /> Minimize
+                  </Button>
+                )}
+                <Button size="sm" variant="destructive" onClick={onLeave}><PhoneOff className="mr-1 h-4 w-4" /> Disconnect</Button>
+              </div>
+            </header>
+
+            <div className="vp-grid">
+              {participants.map((p) => {
+                const isSelf = p.userId === myUserId;
+                const stream = remoteStreams[p.userId];
+                const showVideo = isSelf ? videoOn : p.video;
+                return (
+                  <div key={p.userId} className={`vp-tile ${p.speaking ? "speaking" : ""} ${isSelf ? "self" : ""}`}>
+                    <div className="vp-media">
+                      {showVideo ? (
+                        <video
+                          className="vp-video"
+                          autoPlay
+                          playsInline
+                          muted={isSelf}
+                          ref={(el) => {
+                            if (!el) return;
+                            if (isSelf) {
+                              localVideoRef.current = el;
+                              el.srcObject = localStream.current;
+                              void el.play().catch(() => {});
+                            } else {
+                              videoEls.current.set(p.userId, el);
+                              el.srcObject = stream ?? null;
+                              void el.play().catch(() => {});
+                            }
+                          }}
+                        />
+                      ) : (
+                        <span className="vp-avatar-holder">
+                          <ProfileAvatar name={p.name} url={p.avatarUrl} size={64} showPresence={false} />
+                          {p.speaking && <span className="vp-speaking-ring" aria-hidden="true" />}
+                        </span>
+                      )}
+                    </div>
+                    <button className="vp-name-btn" onClick={() => onOpenProfile(p.userId)}>
+                      <span className="vp-name">{p.name}{isSelf ? " (you)" : ""}</span>
+                    </button>
+                    <span className="vp-flags">
+                      {p.deafened ? <VolumeX size={13} aria-label="Deafened" /> : p.muted ? <MicOff size={13} aria-label="Muted" /> : null}
+                      {p.video && <Video size={13} aria-label="Camera on" />}
+                      {p.speaking && <em className="vp-speaking-text">speaking</em>}
+                    </span>
+                  </div>
+                );
+              })}
+              {participants.length === 0 && <p className="fc-muted">Connecting to the channel…</p>}
             </div>
-          );
-        })}
-        {participants.length === 0 && <p className="fc-muted">Connecting to the channel…</p>}
-      </div>
 
-      {/* Local mic level meter — proves the speaking detection is live. */}
-      <div className="vp-meter" aria-hidden="true">
-        <span style={{ width: `${Math.round(level * 100)}%` }} className={speakingRef.current ? "on" : ""} />
-      </div>
+            {/* Local mic level meter — proves the speaking detection is live. */}
+            <div className="vp-meter" aria-hidden="true">
+              <span style={{ width: `${Math.round(level * 100)}%` }} className={speakingRef.current ? "on" : ""} />
+            </div>
 
-      <footer className="vp-controls">
-        <button className={muted ? "active" : ""} onClick={toggleMute} aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>
-          {muted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-        </button>
-        <button className={deafened ? "active" : ""} onClick={toggleDeafen} aria-label={deafened ? "Undeafen" : "Deafen"} title={deafened ? "Undeafen" : "Deafen"}>
-          <VolumeX className="h-5 w-5" />
-        </button>
-        <button className={videoOn ? "active" : ""} onClick={toggleVideo} aria-label="Toggle camera" title="Toggle camera">
-          {videoOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
-        </button>
-        <button className={sharing ? "active" : ""} onClick={toggleScreen} aria-label="Share screen" title="Share screen">
-          <MonitorUp className="h-5 w-5" />
-        </button>
-      </footer>
-    </div>
+            <footer className="vp-controls">
+              <button className={muted ? "active" : ""} onClick={toggleMute} aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>
+                {muted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+              </button>
+              <button className={deafened ? "active" : ""} onClick={toggleDeafen} aria-label={deafened ? "Undeafen" : "Deafen"} title={deafened ? "Undeafen" : "Deafen"}>
+                <VolumeX className="h-5 w-5" />
+              </button>
+              <button className={videoOn ? "active" : ""} onClick={toggleVideo} aria-label="Toggle camera" title="Toggle camera">
+                {videoOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+              </button>
+              <button className={sharing ? "active" : ""} onClick={toggleScreen} aria-label="Share screen" title="Share screen">
+                <MonitorUp className="h-5 w-5" />
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

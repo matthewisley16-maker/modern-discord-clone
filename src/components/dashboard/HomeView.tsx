@@ -4,16 +4,18 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Avatar, EmptyState, SectionHeader, formatLastSeen } from "./ui";
 import { toast } from "sonner";
-import { Check, MessageCircle, UserPlus, Users, X } from "lucide-react";
+import { Check, MessageCircle, Phone, UserPlus, Users, Video, X } from "lucide-react";
 
 export default function HomeView({
   onOpenProfile,
   onMessage,
   onDiscover,
+  onCall,
 }: {
   onOpenProfile: (id: string) => void;
   onMessage: (id: Id<"dmConversations">) => void;
   onDiscover: () => void;
+  onCall?: (userId: string, media: "voice" | "video") => void;
 }) {
   const friends = useQuery(api.social.listFriends, {});
   const requests = useQuery(api.social.listRequests, {});
@@ -91,9 +93,17 @@ export default function HomeView({
                   <small>{f.presence === "offline" ? formatLastSeen(f.lastSeen) : f.customStatus || `@${f.username}`}</small>
                 </span>
               </button>
-              <Button size="sm" variant="outline" onClick={() => run("Conversation opened", async () => { const id = await startDirect({ userId: f.userId as Id<"users"> }); onMessage(id); })}>
-                <MessageCircle className="mr-1 h-4 w-4" /> Message
-              </Button>
+              <div className="fc-row-actions">
+                <Button size="sm" variant="outline" onClick={() => run("Conversation opened", async () => { const id = await startDirect({ userId: f.userId as Id<"users"> }); onMessage(id); })}>
+                  <MessageCircle className="mr-1 h-4 w-4" /> Message
+                </Button>
+                {onCall && (
+                  <>
+                    <Button size="sm" variant="outline" aria-label="Voice call" title="Voice call" onClick={() => onCall(f.userId, "voice")}><Phone className="h-4 w-4" /></Button>
+                    <Button size="sm" variant="outline" aria-label="Video call" title="Video call" onClick={() => onCall(f.userId, "video")}><Video className="h-4 w-4" /></Button>
+                  </>
+                )}
+              </div>
             </div>
           ))
         )}

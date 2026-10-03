@@ -454,8 +454,20 @@ const schema = defineSchema(
       conversationId: v.optional(v.id("dmConversations")),
       channelId: v.optional(v.id("channels")),
       media: v.union(v.literal("voice"), v.literal("video")),
-      status: v.union(v.literal("ringing"), v.literal("accepted"), v.literal("declined"), v.literal("missed")),
-    }).index("by_to", ["toId", "status"]),
+      status: v.union(
+        v.literal("ringing"),
+        v.literal("accepted"),
+        v.literal("declined"),
+        v.literal("missed"),
+        v.literal("cancelled"),
+        v.literal("ended"),
+        v.literal("failed"),
+      ),
+      startedAt: v.optional(v.number()),
+      endedAt: v.optional(v.number()),
+    })
+      .index("by_to", ["toId", "status"])
+      .index("by_from", ["fromId"]),
 
     /** WebRTC signaling for a DM/group call, scoped to the conversation. */
     dmCallSignals: defineTable({

@@ -1,7 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { currentUserId, displayNameOf, notify } from "./lib";
+import { avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify } from "./lib";
 import type { Id } from "./_generated/dataModel";
 
 /** Invite someone to a DM voice/video call. */
@@ -14,6 +14,8 @@ export const inviteCall = mutation({
   handler: async (ctx, { toId, conversationId, media }) => {
     const me = await currentUserId(ctx);
     if (me === toId) throw new Error("You can't call yourself.");
+    // Respect existing block rules — blocked users cannot call each other.
+    if (await isBlockedEitherWay(ctx, me, toId)) throw new Error("You can't call this user.");
     // Only one ringing invite per caller/recipient pair.
     const existing = await ctx.db
       .query("callInvites")
@@ -28,6 +30,7 @@ export const inviteCall = mutation({
       conversationId,
       media,
       status: "ringing",
+      startedAt: Date.now(),
     });
     await notify(
       ctx,
@@ -48,16 +51,51 @@ export const respondCall = mutation({
     const me = await currentUserId(ctx);
     const invite = await ctx.db.get(inviteId);
     if (!invite || invite.toId !== me) throw new Error("Call not found.");
-    await ctx.db.patch(inviteId, { status: accept ? "accepted" : "declined" });
+    if (invite.status !== "ringing") return;
+    await ctx.db.patch(inviteId, { status: accept ? "accepted" : "declined", ...(accept ? { startedAt: Date.now() } : { endedAt: Date.now() }) });
     await notify(
       ctx,
       invite.fromId,
       "call",
       accept ? "Call accepted" : "Call declined",
       `${await displayNameOf(ctx, me)} ${accept ? "accepted" : "declined"} your call.`,
-      "/dashboard",
+      invite.conversationId ? `?dm=${invite.conversationId}` : "/dashboard",
       me,
     );
+  },
+});
+
+/** The caller gives up before the recipient answers. */
+export const timeoutCall = mutation({
+  args: { inviteId: v.id("callInvites") },
+  handler: async (ctx, { inviteId }) => {
+    const me = await currentUserId(ctx);
+    const invite = await ctx.db.get(inviteId);
+    if (!invite || invite.fromId !== me || invite.status !== "ringing") return;
+    await ctx.db.patch(inviteId, { status: "missed", endedAt: Date.now() });
+    const theirs = await ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", invite.toId)).collect();
+    const pending = theirs
+      .filter((n) => n.type === "call" && n.title.startsWith("Incoming"))
+      .sort((a, b) => b._creationTime - a._creationTime)[0];
+    if (pending) await ctx.db.patch(pending._id, { title: "Missed call", read: false });
+  },
+});
+
+/** Either participant ends an accepted (or still ringing) call for good. */
+export const endCall = mutation({
+  args: { inviteId: v.id("callInvites"), reason: v.optional(v.string()) },
+  handler: async (ctx, { inviteId }) => {
+    const me = await currentUserId(ctx);
+    const invite = await ctx.db.get(inviteId);
+    if (!invite) return;
+    if (invite.fromId !== me && invite.toId !== me) throw new Error("Call not found.");
+    if (invite.status === "ended" || invite.status === "declined" || invite.status === "missed") return;
+    // A call that is accepted and then ended is "ended"; one ended while still
+    // ringing is treated as "missed" for the recipient.
+    const finalStatus = invite.status === "accepted" ? "ended" : "missed";
+    await ctx.db.patch(inviteId, { status: finalStatus, endedAt: Date.now() });
+    const other = invite.fromId === me ? invite.toId : invite.fromId;
+    await notify(ctx, other, "call", finalStatus === "ended" ? "Call ended" : "Missed call", `${await displayNameOf(ctx, me)} ${finalStatus === "ended" ? "ended the call" : "cancelled the call"}.`, invite.conversationId ? `?dm=${invite.conversationId}` : "/dashboard", me);
   },
 });
 
@@ -67,7 +105,7 @@ export const cancelCall = mutation({
     const me = await currentUserId(ctx);
     const invite = await ctx.db.get(inviteId);
     if (!invite || invite.fromId !== me) return;
-    await ctx.db.patch(inviteId, { status: "missed" });
+    await ctx.db.patch(inviteId, { status: "cancelled", endedAt: Date.now() });
     // Rewrite the recipient's "Incoming call" notification to a missed call so
     // they are never left with a stale, ringing notification.
     const theirs = await ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", invite.toId)).collect();
@@ -133,8 +171,10 @@ export const incomingCall = query({
       inviteId: invite._id,
       fromId: invite.fromId,
       fromName: await displayNameOf(ctx, invite.fromId),
+      fromAvatarUrl: await avatarUrlOf(ctx, invite.fromId),
       media: invite.media,
       conversationId: invite.conversationId ?? null,
+      createdAt: invite._creationTime,
     };
   },
 });
@@ -149,7 +189,13 @@ export const outgoingCall = query({
     const recent = mine
       .filter((c) => c.fromId === me)
       .sort((a, b) => b._creationTime - a._creationTime)[0];
-    if (!recent || Date.now() - recent._creationTime > 120_000) return null;
+    if (!recent) return null;
+    // A ringing call expires 60s after it was placed; an accepted call stays
+    // valid for the whole call; a finished call lingers briefly so the caller
+    // can see "declined/ended" before it clears.
+    const since = recent.endedAt ?? recent._creationTime;
+    const ttl = recent.status === "ringing" ? 60_000 : recent.status === "accepted" ? 3_600_000 : 20_000;
+    if (Date.now() - since > ttl) return null;
     return {
       inviteId: recent._id,
       toId: recent.toId,
@@ -157,6 +203,7 @@ export const outgoingCall = query({
       media: recent.media,
       status: recent.status,
       conversationId: recent.conversationId ?? null,
+      createdAt: recent._creationTime,
     };
   },
 });

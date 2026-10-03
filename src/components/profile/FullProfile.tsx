@@ -8,18 +8,20 @@ import ProfileEffect from "./ProfileEffect";
 import FollowListModal from "./FollowListModal";
 import { BADGES, nameStyle, plateStyle } from "@/lib/cosmetics";
 import { toast } from "sonner";
-import { ArrowLeft, MessageCircle, UserCheck, UserPlus } from "lucide-react";
+import { ArrowLeft, MessageCircle, Phone, UserCheck, UserPlus, Video } from "lucide-react";
 
 export default function FullProfile({
   userId,
   onBack,
   onMessage,
   onOpenProfile,
+  onCall,
 }: {
   userId: string;
   onBack: () => void;
   onMessage: (userId: string) => void;
   onOpenProfile?: (userId: string) => void;
+  onCall?: (userId: string, media: "voice" | "video") => void;
 }) {
   const profile = useQuery(api.profiles.getProfile, { userId: userId as Id<"users"> });
   const appearance = useQuery(api.profiles.getAppearance, {});
@@ -116,6 +118,16 @@ export default function FullProfile({
                 try { const id = await startDirect({ userId: profile.userId as Id<"users"> }); onMessage(id); }
                 catch (e) { toast.error(e instanceof Error ? e.message : "Failed"); }
               }}><MessageCircle className="mr-1 h-4 w-4" /> Message</Button>
+              {onCall && (
+                <>
+                  <Button size="sm" variant="outline" aria-label="Voice call" title="Voice call" onClick={() => onCall(profile.userId, "voice")}>
+                    <Phone className="mr-1 h-4 w-4" /> Call
+                  </Button>
+                  <Button size="sm" variant="outline" aria-label="Video call" title="Video call" onClick={() => onCall(profile.userId, "video")}>
+                    <Video className="mr-1 h-4 w-4" /> Video
+                  </Button>
+                </>
+              )}
             </>
           )}
         </div>

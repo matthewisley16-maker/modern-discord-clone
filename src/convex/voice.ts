@@ -2,10 +2,23 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { audit, avatarUrlOf, currentUserId, displayNameOf, hasPermission, isTimedOut, membershipOf, notify, requireMember, requirePermission } from "./lib";
+import type { Ctx } from "./lib";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 
 const channelTypeArg = v.union(v.literal("text"), v.literal("voice"), v.literal("video"));
+
+/**
+ * Is this user's client still around? Uses the same presence heartbeat as the
+ * rest of the app: an explicit disconnect or a stale heartbeat (>2 min) means
+ * the tab is gone, so their voice session must not linger as a ghost.
+ */
+async function isSessionLive(ctx: Ctx, userId: Id<"users">): Promise<boolean> {
+  const presence = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+  if (!presence) return true; // never punish a user we have no presence record for
+  if (presence.connected === false) return false;
+  return Date.now() - presence.lastSeen <= 120_000;
+}
 
 /** Can the viewer see this channel? Private channels need an allowed role. */
 async function canViewChannel(ctx: QueryCtx, channelId: Id<"channels">, userId: Id<"users">) {
@@ -254,6 +267,8 @@ export const channelTree = query({
     const sessions = await ctx.db.query("voiceSessions").collect();
     const byChannel: Record<string, { userId: string; name: string; avatarUrl: string | null; muted: boolean; deafened: boolean; speaking: boolean; video: boolean; screen: boolean }[]> = {};
     for (const s of sessions) {
+      // Skip ghosts whose client is gone (explicit disconnect or stale heartbeat).
+      if (!(await isSessionLive(ctx, s.userId))) continue;
       const list = (byChannel[s.channelId as string] ??= []);
       list.push({
         userId: s.userId,
@@ -296,10 +311,16 @@ export const joinVoiceChecked = mutation({
     if (!viewable) throw new ConvexError("You don't have access to this voice channel.");
 
     // User limit (server-enforced so it can't be bypassed from the client).
+    // Ghost sessions from closed tabs are cleared first so they never hold a slot.
     const sessions = await ctx.db.query("voiceSessions").withIndex("by_channel", (q) => q.eq("channelId", channelId)).collect();
+    let liveCount = 0;
+    for (const s of sessions) {
+      if (s.userId !== userId && !(await isSessionLive(ctx, s.userId))) { await ctx.db.delete(s._id); continue; }
+      liveCount++;
+    }
     const limit = channel.userLimit ?? 0;
     const alreadyIn = sessions.some((s) => s.userId === userId);
-    if (limit > 0 && !alreadyIn && sessions.length >= limit) {
+    if (limit > 0 && !alreadyIn && liveCount >= limit) {
       throw new ConvexError("Voice channel is full.");
     }
 
@@ -411,7 +432,10 @@ export const voiceChannelDetails = query({
     if (!channel) return null;
     const viewable = await canViewChannel(ctx, channelId, userId);
     if (!viewable) return null;
-    const sessions = await ctx.db.query("voiceSessions").withIndex("by_channel", (q) => q.eq("channelId", channelId)).collect();
+    const rawSessions = await ctx.db.query("voiceSessions").withIndex("by_channel", (q) => q.eq("channelId", channelId)).collect();
+    const live = [];
+    for (const s of rawSessions) if (await isSessionLive(ctx, s.userId)) live.push(s);
+    const sessions = live;
     const participants = await Promise.all(
       sessions
         .sort((a, b) => a.joinedAt - b.joinedAt)

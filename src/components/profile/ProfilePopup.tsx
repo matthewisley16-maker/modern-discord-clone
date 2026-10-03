@@ -9,7 +9,7 @@ import FollowListModal from "./FollowListModal";
 import { BADGES, nameStyle, plateStyle } from "@/lib/cosmetics";
 import { formatLastSeen } from "@/components/dashboard/ui";
 import { toast } from "sonner";
-import { BellOff, Copy, Flag, MessageCircle, MoreHorizontal, ShieldOff, UserCheck, UserPlus, X } from "lucide-react";
+import { BellOff, Copy, Flag, MessageCircle, MoreHorizontal, Phone, ShieldOff, UserCheck, UserPlus, Video, X } from "lucide-react";
 
 export default function ProfilePopup({
   userId,
@@ -17,12 +17,14 @@ export default function ProfilePopup({
   onClose,
   onMessage,
   onViewFull,
+  onCall,
 }: {
   userId: string;
   serverId?: Id<"servers">;
   onClose: () => void;
   onMessage: (userId: string) => void;
   onViewFull: (userId: string) => void;
+  onCall?: (userId: string, media: "voice" | "video") => void;
 }) {
   const profile = useQuery(api.profiles.getProfile, { userId: userId as Id<"users">, serverId });
   const appearance = useQuery(api.profiles.getAppearance, {});
@@ -180,6 +182,16 @@ export default function ProfilePopup({
             <Button size="sm" variant="outline" onClick={() => run("Conversation opened", async () => { const id = await startDirect({ userId: profile.userId as Id<"users"> }); onMessage(id); })}>
               <MessageCircle className="mr-1 h-4 w-4" /> Message
             </Button>
+            {onCall && (
+              <>
+                <Button size="sm" variant="outline" aria-label="Voice call" title="Voice call" onClick={() => onCall(profile.userId, "voice")}>
+                  <Phone className="mr-1 h-4 w-4" /> Call
+                </Button>
+                <Button size="sm" variant="outline" aria-label="Video call" title="Video call" onClick={() => onCall(profile.userId, "video")}>
+                  <Video className="mr-1 h-4 w-4" /> Video
+                </Button>
+              </>
+            )}
             <div className="pf-more">
               <Button size="sm" variant="ghost" aria-label="More options" onClick={() => setMenuOpen((v) => !v)}><MoreHorizontal className="h-4 w-4" /></Button>
               {menuOpen && (

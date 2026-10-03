@@ -20,6 +20,8 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
   const revokeSession = useMutation(api.users.revokeSession);
   const revokeOthers = useMutation(api.users.revokeOtherSessions);
   const deleteAccount = useMutation(api.users.deleteAccount);
+  const setUsername = useMutation(api.users.setUsername);
+  const setDisplayNameOnly = useMutation(api.users.setDisplayName);
 
   const appearance = useQuery(api.profiles.getAppearance, {});
   const updateAppearance = useMutation(api.profiles.updateAppearance);
@@ -30,6 +32,16 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
   const [customStatus, setCustomStatus] = useState(me?.profile?.customStatus ?? "");
   const [confirmName, setConfirmName] = useState("");
   const [busy, setBusy] = useState(false);
+  // Separate identity fields — editing one never overwrites the other.
+  const [usernameDraft, setUsernameDraft] = useState("");
+  const [usernameTouched, setUsernameTouched] = useState(false);
+  useEffect(() => {
+    if (!usernameTouched && me?.username) setUsernameDraft(me.username);
+  }, [me?.username, usernameTouched]);
+  const usernameCheck = useQuery(
+    api.users.usernameAvailable,
+    usernameDraft.trim() ? { username: usernameDraft.trim() } : "skip",
+  );
 
   const s = me?.settings;
 
@@ -60,6 +72,25 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
       await updateProfile({ displayName, bio, customStatus });
       toast.success("Profile saved.");
     } catch (e) { toast.error(e instanceof Error ? e.message : "Could not save."); }
+    finally { setBusy(false); }
+  }
+
+  async function saveUsername() {
+    setBusy(true);
+    try {
+      await setUsername({ username: usernameDraft.trim() });
+      toast.success("Username updated.");
+      setUsernameTouched(false);
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Could not update username."); }
+    finally { setBusy(false); }
+  }
+
+  async function saveDisplayName() {
+    setBusy(true);
+    try {
+      await setDisplayNameOnly({ displayName: displayName.trim() });
+      toast.success("Display name updated.");
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Could not update display name."); }
     finally { setBusy(false); }
   }
 
@@ -217,7 +248,37 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
           {tab === "Account" && (
             <section className="fc-settings-section">
               <h3><Mail size={16} /> Account</h3>
-              <p className="fc-muted">Username: <strong>@{me?.username}</strong></p>
+
+              <span className="fc-field-label">Username — your unique identifier</span>
+              <div className="fc-input-prefixed">
+                <span aria-hidden="true">@</span>
+                <Input
+                  value={usernameDraft}
+                  maxLength={24}
+                  disabled={busy}
+                  aria-label="Username"
+                  onChange={(e) => { setUsernameTouched(true); setUsernameDraft(e.target.value.toLowerCase()); }}
+                />
+              </div>
+              {usernameTouched && usernameDraft.trim() && (
+                usernameCheck && !usernameCheck.available
+                  ? <p className="text-xs text-destructive">{usernameCheck.reason ?? "That username isn't available."}</p>
+                  : <p className="fc-muted">@{usernameDraft.trim()} is available.</p>
+              )}
+              <Button
+                onClick={saveUsername}
+                disabled={busy || !usernameTouched || !usernameCheck?.available || usernameDraft.trim() === (me?.username ?? "")}
+              >{busy ? "Saving…" : "Change username"}</Button>
+              <p className="fc-muted">Unique across Freecord. Changing it never changes your display name.</p>
+
+              <span className="fc-field-label">Display name — what everyone sees</span>
+              <Input value={displayName} maxLength={40} disabled={busy} aria-label="Display name" onChange={(e) => setDisplayName(e.target.value)} />
+              <Button
+                variant="outline"
+                onClick={saveDisplayName}
+                disabled={busy || !displayName.trim() || displayName.trim() === (me?.profile?.displayName ?? "")}
+              >{busy ? "Saving…" : "Change display name"}</Button>
+              <p className="fc-muted">Display names don't need to be unique. Your email is never shown as your name.</p>
               <div className="fc-note">
                 <p><strong>Email is optional.</strong> Adding one lets you recover your account and sign in with an email code. You never need one to use Freecord.</p>
                 <p className="fc-muted">Your current email: {me?.email ? me.email : "none"}</p>

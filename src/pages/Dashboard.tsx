@@ -44,6 +44,8 @@ export default function Dashboard() {
 
   const setStatus = useMutation(api.profiles.setPresence);
   const heartbeat = useMutation(api.profiles.heartbeat);
+  // Guarantees every account has a unique username AND a display name (email-only, legacy, etc.).
+  const ensureIdentity = useMutation(api.users.ensureIdentity);
   const disconnect = useMutation(api.profiles.disconnect);
   const appearance = useQuery(api.profiles.getAppearance, {});
   const createChannelFull = useMutation(api.voice.createChannelFull);
@@ -67,6 +69,9 @@ export default function Dashboard() {
   const respondCall = useMutation(api.calls.respondCall);
   const cancelCall = useMutation(api.calls.cancelCall);
   const inviteCall = useMutation(api.calls.inviteCall);
+  const endCall = useMutation(api.calls.endCall);
+  const timeoutCall = useMutation(api.calls.timeoutCall);
+  const startDirect = useMutation(api.dms.startDirect);
   const setMuted = useMutation(api.dms.setMuted);
   const setPinned = useMutation(api.dms.setPinned);
 
@@ -113,11 +118,17 @@ export default function Dashboard() {
   const [inCall, setInCall] = useState<{ channelId: Id<"channels">; name: string } | null>(null);
   // An accepted DM/group call that is actually connected (real WebRTC audio).
   const [dmCall, setDmCall] = useState<{
+    inviteId: Id<"callInvites">;
     conversationId: Id<"dmConversations">;
     peerId: Id<"users">;
     name: string;
     media: "voice" | "video";
   } | null>(null);
+  // Which call UI is showing: full screen or the floating minimized window.
+  // Minimizing never touches the connection — the panel stays mounted.
+  const [callMinimized, setCallMinimized] = useState(false);
+  // Which voice channels show their full participant list in the sidebar.
+  const [expandedVoice, setExpandedVoice] = useState<Record<string, boolean>>({});
   const joinVoiceChecked = useMutation(api.voice.joinVoiceChecked);
   // Reactive channel tree: categories, ordering, and live voice participants.
   const channelTree = useQuery(api.voice.channelTree, communityId ? { serverId: communityId } : "skip");
@@ -129,6 +140,7 @@ export default function Dashboard() {
 
   // Presence heartbeat so others see us online, and resume any voice session.
   useEffect(() => {
+    ensureIdentity({}).catch(() => {});
     heartbeat({}).catch(() => {});
     const t = setInterval(() => heartbeat({}).catch(() => {}), 30_000);
     // Soft-disconnect on unload so presence and typing clear promptly.
@@ -358,6 +370,13 @@ export default function Dashboard() {
     }
   }
 
+  const activeCall = Boolean(inCall || dmCall);
+
+  /** Minimize (never disconnect) the active call when navigating elsewhere. */
+  function minimizeCall() {
+    if (activeCall) setCallMinimized(true);
+  }
+
   async function startDmCall(media: "voice" | "video") {
     if (!conversationId) return;
     const convo = conversations?.find((c) => c.conversationId === conversationId);
@@ -369,6 +388,25 @@ export default function Dashboard() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not start the call.");
     }
+  }
+
+  /** Start a call with any user straight from a profile, friends list or member list. */
+  async function callUser(userId: string, media: "voice" | "video") {
+    try {
+      const convo = await startDirect({ userId: userId as Id<"users"> });
+      await inviteCall({ toId: userId as Id<"users">, conversationId: convo, media });
+      toast.success("Calling…");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not start the call.");
+    }
+  }
+
+  /** End the accepted DM call for both sides and clean up local media. */
+  async function endDmCall() {
+    const inviteId = dmCall?.inviteId;
+    setDmCall(null);
+    setCallMinimized(false);
+    if (inviteId) { try { await endCall({ inviteId }); } catch { /* already ended */ } }
   }
 
   /** A single channel row, with voice participants and drag-and-drop reordering. */
@@ -388,10 +426,11 @@ export default function Dashboard() {
       >
         <button
           className={`fc-channel ${!isVoice && channel?._id === c._id ? "active" : ""} ${isVoice && inCall?.channelId === c._id ? "in-voice" : ""}`}
-          onClick={() => { if (isVoice) joinVoice(c._id, c.name); else { setChannelId(c._id); setMobileNav(false); } }}
+          onClick={() => { if (isVoice) joinVoice(c._id, c.name); else { setChannelId(c._id); setMobileNav(false); minimizeCall(); } }}
         >
           {isVoice ? (c.isPrivate ? <Lock size={15} /> : <Volume2 size={17} />) : <Hash size={17} />}
           <span className="fc-channel-name">{c.name}</span>
+          {isVoice && participants.length > 0 && <span className="fc-voice-count">{participants.length}</span>}
           {isVoice && (c.userLimit ?? 0) > 0 && (
             <span className={`fc-channel-limit ${participants.length >= (c.userLimit ?? 0) ? "full" : ""}`}>{participants.length}/{c.userLimit}</span>
           )}
@@ -410,17 +449,28 @@ export default function Dashboard() {
           </div>
         )}
         {isVoice && participants.length > 0 && (
-          <ul className="fc-voice-people">
-            {participants.map((p) => (
-              <li key={p.userId} className={p.speaking ? "speaking" : ""}>
-                <button className="fc-voice-person" onClick={() => setProfileUserId(p.userId)}>
-                  <Avatar name={p.name} presence={p.speaking ? "online" : undefined} size={22} url={p.avatarUrl} />
-                  <span className={p.speaking ? "talk" : ""}>{p.name}</span>
-                  {p.deafened ? <span className="fc-mute-flag">🔇</span> : p.muted ? <span className="fc-mute-flag">🎙️</span> : null}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className={`fc-voice-people ${expandedVoice[c._id] ? "expanded" : ""}`}>
+              {(expandedVoice[c._id] ? participants : participants.slice(0, 4)).map((p) => (
+                <li key={p.userId} className={p.speaking ? "speaking" : ""}>
+                  <button className="fc-voice-person" onClick={() => setProfileUserId(p.userId)}>
+                    <Avatar name={p.name} presence={p.speaking ? "online" : undefined} size={22} url={p.avatarUrl} />
+                    <span className={p.speaking ? "talk" : ""}>{p.name}</span>
+                    {p.deafened ? <span className="fc-mute-flag" title="Deafened">🔇</span> : p.muted ? <span className="fc-mute-flag" title="Muted">🎙️</span> : null}
+                    {p.video && <span className="fc-mute-flag" title="Camera on">📹</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {participants.length > 4 && (
+              <button
+                className="fc-voice-more"
+                onClick={() => setExpandedVoice((v) => ({ ...v, [c._id]: !v[c._id] }))}
+              >
+                {expandedVoice[c._id] ? "Show less" : `+${participants.length - 4} more`}
+              </button>
+            )}
+          </>
         )}
       </div>
     );
@@ -433,7 +483,9 @@ export default function Dashboard() {
   // When the person we called accepts, connect the call for real.
   useEffect(() => {
     if (outgoingCall?.status === "accepted" && outgoingCall.conversationId) {
+      setCallMinimized(false);
       setDmCall({
+        inviteId: outgoingCall.inviteId,
         conversationId: outgoingCall.conversationId as Id<"dmConversations">,
         peerId: outgoingCall.toId as Id<"users">,
         name: outgoingCall.toName,
@@ -441,6 +493,44 @@ export default function Dashboard() {
       });
     }
   }, [outgoingCall]);
+
+  // Surface declined/missed/ended outcomes to the caller (once per outcome).
+  const callOutcomeRef = useRef<string>("");
+  useEffect(() => {
+    if (!outgoingCall) return;
+    const key = `${outgoingCall.inviteId}:${outgoingCall.status}`;
+    if (callOutcomeRef.current === key) return;
+    if (outgoingCall.status === "declined") { callOutcomeRef.current = key; toast.error(`${outgoingCall.toName} declined the call.`); }
+    else if (outgoingCall.status === "missed") { callOutcomeRef.current = key; toast.info("No answer. The call was missed."); }
+    else if (outgoingCall.status === "ended" || outgoingCall.status === "cancelled") { callOutcomeRef.current = key; toast.info("Call ended."); }
+  }, [outgoingCall]);
+
+  // Let an unanswered outgoing call time out so it never rings forever.
+  useEffect(() => {
+    if (outgoingCall?.status !== "ringing") return;
+    const ageMs = Date.now() - (outgoingCall.createdAt ?? Date.now());
+    const timer = setTimeout(() => { timeoutCall({ inviteId: outgoingCall.inviteId }).catch(() => {}); }, Math.max(0, 55_000 - ageMs));
+    return () => clearTimeout(timer);
+  }, [outgoingCall, timeoutCall]);
+
+  // Let an unanswered incoming call stop ringing too, so neither side hangs forever.
+  useEffect(() => {
+    if (!incomingCall) return;
+    const ageMs = Date.now() - (incomingCall.createdAt ?? Date.now());
+    const timer = setTimeout(() => { endCall({ inviteId: incomingCall.inviteId }).catch(() => {}); }, Math.max(0, 60_000 - ageMs));
+    return () => clearTimeout(timer);
+  }, [incomingCall, endCall]);
+
+  // Keep the call connected while navigating; auto-minimize once the user moves
+  // away from the call view. Joining does not minimize (the nav signature is
+  // unchanged when the call starts).
+  const navKey = `${section}|${communityId}|${channelId}|${conversationId}`;
+  const navRef = useRef(navKey);
+  useEffect(() => {
+    if (navRef.current === navKey) return;
+    navRef.current = navKey;
+    if (activeCall) setCallMinimized(true);
+  }, [navKey, activeCall]);
 
   const statusMeta = PRESENCE_META[me?.presence ?? "online"] ?? PRESENCE_META.online;
   const hasUnread = (notifications?.unread ?? 0) > 0;
@@ -734,7 +824,7 @@ export default function Dashboard() {
 
         <div className="fc-main-body">
           <div className="fc-main-content">
-            {section === "home" && <HomeView onOpenProfile={setProfileUserId} onMessage={openConversation} onDiscover={() => setSection("discover")} />}
+            {section === "home" && <HomeView onOpenProfile={setProfileUserId} onMessage={openConversation} onDiscover={() => setSection("discover")} onCall={callUser} />}
             {section === "discover" && <DiscoverView onOpenCommunity={openCommunity} onCreate={() => openModal("createCommunity")} onJoinByCode={() => openModal("join")} />}
             {section === "search" && <SearchView query={searchQuery} onOpenProfile={setProfileUserId} onOpenCommunity={openCommunity} />}
             {section === "dms" && (
@@ -794,6 +884,7 @@ export default function Dashboard() {
           onClose={() => setProfileUserId(null)}
           onMessage={(id) => { openConversation(id as Id<"dmConversations">); setProfileUserId(null); }}
           onViewFull={(id) => { setFullProfileUserId(id); setProfileUserId(null); }}
+          onCall={callUser}
         />
       )}
       {fullProfileUserId && (
@@ -803,6 +894,7 @@ export default function Dashboard() {
             onBack={() => setFullProfileUserId(null)}
             onMessage={(id) => { openConversation(id as Id<"dmConversations">); setFullProfileUserId(null); }}
             onOpenProfile={(id) => setFullProfileUserId(id)}
+            onCall={callUser}
           />
         </div>
       )}
@@ -822,57 +914,67 @@ export default function Dashboard() {
       )}
 
       {dmCall && (
-        <div className="fc-call-overlay">
-          <DmCallPanel
-            conversationId={dmCall.conversationId}
-            peerId={dmCall.peerId}
-            peerName={dmCall.name}
-            myUserId={me?.userId ?? ""}
-            media={dmCall.media}
-            onLeave={() => setDmCall(null)}
-          />
-        </div>
+        <DmCallPanel
+          conversationId={dmCall.conversationId}
+          peerId={dmCall.peerId}
+          peerName={dmCall.name}
+          myUserId={me?.userId ?? ""}
+          media={dmCall.media}
+          minimized={callMinimized}
+          onMinimize={() => setCallMinimized(true)}
+          onExpand={() => setCallMinimized(false)}
+          onLeave={endDmCall}
+        />
       )}
 
       {inCall && (
-        <div className="fc-call-overlay">
-          <VoicePanel
-            channelId={inCall.channelId}
-            channelName={inCall.name}
-            myUserId={me?.userId ?? ""}
-            onOpenProfile={setProfileUserId}
-            onLeave={async () => { try { await leaveVoiceSession({}); } catch { /* already left */ } setInCall(null); }}
-          />
-        </div>
+        <VoicePanel
+          channelId={inCall.channelId}
+          channelName={inCall.name}
+          myUserId={me?.userId ?? ""}
+          onOpenProfile={setProfileUserId}
+          minimized={callMinimized}
+          onMinimize={() => setCallMinimized(true)}
+          onExpand={() => setCallMinimized(false)}
+          onLeave={async () => { try { await leaveVoiceSession({}); } catch { /* already left */ } setInCall(null); setCallMinimized(false); }}
+        />
       )}
 
       {/* ---------- Incoming / outgoing call ---------- */}
       {incomingCall && (
-        <div className="fc-call-toast">
-          <Avatar name={incomingCall.fromName} size={38} />
-          <div>
-            <strong>{incomingCall.fromName}</strong>
-            <small>{incomingCall.media === "video" ? "Video call" : "Voice call"} incoming…</small>
+        <div className="fc-incoming-call" role="dialog" aria-label="Incoming call">
+          <div className="fc-incoming-card">
+            <Avatar name={incomingCall.fromName} size={84} url={incomingCall.fromAvatarUrl} />
+            <strong className="fc-incoming-name">{incomingCall.fromName}</strong>
+            <small className="fc-incoming-kind">
+              {incomingCall.media === "video" ? "Incoming Video Call" : "Incoming Voice Call"}
+            </small>
+            <div className="fc-incoming-actions">
+              <Button
+                onClick={async () => {
+                  await respondCall({ inviteId: incomingCall.inviteId, accept: true });
+                  if (incomingCall.conversationId) {
+                    setCallMinimized(false);
+                    setDmCall({
+                      inviteId: incomingCall.inviteId,
+                      conversationId: incomingCall.conversationId as Id<"dmConversations">,
+                      peerId: incomingCall.fromId as Id<"users">,
+                      name: incomingCall.fromName,
+                      media: incomingCall.media,
+                    });
+                  } else {
+                    toast.error("This call has no conversation to connect to.");
+                  }
+                }}
+              >
+                <Phone className="mr-1 h-4 w-4" /> Accept
+              </Button>
+              <Button variant="destructive" onClick={async () => { await respondCall({ inviteId: incomingCall.inviteId, accept: false }); }}>Decline</Button>
+            </div>
           </div>
-          <Button size="sm" onClick={async () => {
-            await respondCall({ inviteId: incomingCall.inviteId, accept: true });
-            if (incomingCall.conversationId) {
-              setDmCall({
-                conversationId: incomingCall.conversationId as Id<"dmConversations">,
-                peerId: incomingCall.fromId as Id<"users">,
-                name: incomingCall.fromName,
-                media: incomingCall.media,
-              });
-            } else {
-              toast.error("This call has no conversation to connect to.");
-            }
-          }}>
-            <Phone className="h-4 w-4" />
-          </Button>
-          <Button size="sm" variant="outline" onClick={async () => { await respondCall({ inviteId: incomingCall.inviteId, accept: false }); }}>Decline</Button>
         </div>
       )}
-      {outgoingCall && outgoingCall.status === "ringing" && (
+      {outgoingCall && outgoingCall.status === "ringing" && !dmCall && (
         <div className="fc-call-toast">
           <div><strong>Calling {outgoingCall.toName}…</strong><small>Waiting for them to answer</small></div>
           <Button size="sm" variant="outline" onClick={() => cancelCall({ inviteId: outgoingCall.inviteId })}>Cancel</Button>

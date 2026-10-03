@@ -555,6 +555,43 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .vp-controls button { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: #1e1d28; color: #d8d4e6; border: 1px solid rgba(255,255,255,.08); }
 .vp-controls button:hover { background: #262335; }
 .vp-controls button.active { background: #8b5cf6; color: #fff; }
+.vp-head-actions { display: flex; gap: 8px; align-items: center; }
+.vp-sinks { position: fixed; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+/* ---- Floating minimized call window (voice + DM) ---- */
+.vp-mini { position: fixed; right: 18px; bottom: 18px; z-index: 95; width: 232px; background: #14141b; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 22px 55px rgba(0,0,0,.6); overflow: hidden; cursor: pointer; }
+.vp-mini-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 11px; background: rgba(255,255,255,.03); }
+.vp-mini-title { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: #eeecf6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vp-mini-dot { width: 8px; height: 8px; border-radius: 50%; background: #f5c451; flex-shrink: 0; }
+.vp-mini-dot.connected { background: #3ddc97; }
+.vp-mini-dot.lost { background: #f0616d; }
+.vp-mini-x { color: #b7b1cc; padding: 2px; border-radius: 6px; flex-shrink: 0; }
+.vp-mini-x:hover { color: #fff; background: rgba(240,97,109,.3); }
+.vp-mini-avs { display: flex; align-items: center; gap: 4px; padding: 8px 11px 6px; }
+.vp-mini-av { border-radius: 50%; overflow: hidden; display: inline-grid; place-items: center; }
+.vp-mini-av.speaking { box-shadow: 0 0 0 2px #3ddc97; }
+.vp-mini-more { font-size: 10px; color: #9b97ad; padding: 2px 6px; border-radius: 999px; background: rgba(255,255,255,.07); }
+.vp-mini-count { margin-left: auto; font-size: 11px; color: #8b87a0; }
+.vp-mini-cam { width: 100%; height: 108px; object-fit: cover; background: #0b0b10; display: block; }
+.vp-mini-controls { display: flex; justify-content: space-between; gap: 4px; padding: 8px 9px; }
+.vp-mini-controls button { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: rgba(255,255,255,.06); color: #d8d4e6; }
+.vp-mini-controls button:hover { background: rgba(255,255,255,.12); }
+.vp-mini-controls button.active { background: #8b5cf6; color: #fff; }
+.vp-mini-controls button.danger { background: rgba(240,97,109,.22); color: #ff8b96; }
+.vp-mini-controls button.danger:hover { background: #f0616d; color: #fff; }
+/* ---- Incoming call screen ---- */
+.fc-incoming-call { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; background: rgba(6,6,10,.72); backdrop-filter: blur(3px); }
+.fc-incoming-card { width: min(330px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 26px 22px; background: #15151d; border: 1px solid rgba(255,255,255,.12); border-radius: 20px; box-shadow: 0 30px 80px rgba(0,0,0,.7); }
+.fc-incoming-name { font-size: 19px; color: #f2f0fa; }
+.fc-incoming-kind { font-size: 12px; color: #9b97ad; letter-spacing: .3px; }
+.fc-incoming-actions { display: flex; gap: 10px; margin-top: 8px; }
+/* ---- Voice channel participant count + expand ---- */
+.fc-voice-count { margin-left: 6px; font-size: 10px; min-width: 17px; text-align: center; padding: 1px 5px; border-radius: 999px; background: rgba(61,220,151,.2); color: #7ff0bd; }
+.fc-voice-people.expanded { max-height: 190px; overflow-y: auto; }
+.fc-voice-more { margin: 0 8px 6px 34px; font-size: 10px; color: #a78bfa; padding: 3px 8px; border-radius: 7px; }
+.fc-voice-more:hover { color: #d6c9ff; background: rgba(139,92,246,.16); }
+/* ---- Prefixed input (settings username) ---- */
+.fc-input-prefixed { display: flex; align-items: center; gap: 6px; }
+.fc-input-prefixed > span { color: #8b87a0; font-size: 14px; }
 
 /* ===== Profile cosmetics ===== */
 .pf-avatar-wrap { position: relative; display: inline-grid; place-items: center; border-radius: 50%; flex-shrink: 0; }
