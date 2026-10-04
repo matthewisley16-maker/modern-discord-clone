@@ -150,6 +150,48 @@ await expectTrue("friend cards carry an avatarUrl", async () => {
   return friends.every((f) => "avatarUrl" in f);
 });
 
+// --- Avatar decorations flow through every surface (own effects included) ---
+await expectOk("A equips an avatar decoration", async () => {
+  await A.client.mutation(api.profiles.updateCustomization, { decorationId: "dec_stars" });
+});
+await expectTrue("channel messages carry the author's decoration", async () => {
+  const msgs = await B.client.query(api.chat.messages, { channelId });
+  return msgs.find((m) => m.body === `hello avatars ${stamp}`)?.authorDecorationId === "dec_stars";
+});
+await expectTrue("DM messages carry the author's decoration", async () => {
+  const convos = await A.client.query(api.dms.listConversations, {});
+  const conversationId = convos[0].conversationId;
+  await A.client.mutation(api.dms.sendMessage, { conversationId, body: `deco ${stamp}` });
+  const msgs = await A.client.query(api.dms.messages, { conversationId });
+  return msgs.find((m) => m.body === `deco ${stamp}`)?.authorDecorationId === "dec_stars";
+});
+await expectTrue("DM sidebar card carries the decoration", async () => {
+  const convos = await B.client.query(api.dms.listConversations, {});
+  const aCard = convos.flatMap((c) => c.members).find((m) => m.userId === A.userId);
+  return aCard?.decorationId === "dec_stars";
+});
+await expectTrue("community member list carries the decoration", async () => {
+  const d = await B.client.query(api.communities.details, { serverId });
+  return d.members.find((m) => m.userId === A.userId)?.decorationId === "dec_stars";
+});
+await expectTrue("users.me exposes the decoration for the Dashboard", async () => {
+  const me = await A.client.query(api.users.me, {});
+  return me.profile?.decorationId === "dec_stars";
+});
+await expectTrue("changing the decoration updates messages immediately", async () => {
+  await A.client.mutation(api.profiles.updateCustomization, { decorationId: "dec_crown" });
+  const msgs = await B.client.query(api.chat.messages, { channelId });
+  return msgs.find((m) => m.body === `hello avatars ${stamp}`)?.authorDecorationId === "dec_crown";
+});
+await expectTrue("removing the decoration clears it everywhere", async () => {
+  await A.client.mutation(api.profiles.updateCustomization, { decorationId: "" });
+  const msgs = await B.client.query(api.chat.messages, { channelId });
+  const d = await B.client.query(api.communities.details, { serverId });
+  // "" and null both mean "no decoration" — the value must simply be cleared.
+  return !msgs.find((m) => m.body === `hello avatars ${stamp}`)?.authorDecorationId
+    && !d.members.find((m) => m.userId === A.userId)?.decorationId;
+});
+
 // Clean up the test community so it never lingers in the database.
 try { await A.client.mutation(api.communities.deleteCommunity, { serverId }); } catch {}
 
