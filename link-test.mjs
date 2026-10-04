@@ -1,6 +1,6 @@
 // Unit tests for the message link/mention tokenizer (src/lib/message-links.ts).
 // Run: bun link-test.mjs
-import { splitMessageBody } from "./src/lib/message-links.ts";
+import { splitMessageBody, gifUrlsIn } from "./src/lib/message-links.ts";
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -44,6 +44,17 @@ check("mentions and links coexist", (() => {
   const u = segs.find((s) => s.kind === "url");
   return m?.value === "@alice" && u?.value === "https://x.io/p";
 })());
+
+// --- Inline GIF links (zero-setup animated rendering) ---
+check("direct .gif link is detected", gifUrlsIn("https://cdn.example.com/cat.gif").length === 1);
+check("gif link with query string is detected", gifUrlsIn("https://cdn.example.com/cat.gif?x=1&y=2")[0] === "https://cdn.example.com/cat.gif?x=1&y=2");
+check("bare www gif link becomes https", gifUrlsIn("www.example.com/a.gif")[0] === "https://www.example.com/a.gif");
+check("non-gif link is ignored", gifUrlsIn("https://example.com/cat.png").length === 0);
+check("provider page url is not embedded", gifUrlsIn("https://giphy.com/gifs/cat-abc123").length === 0);
+check("gif link mixed with text + caption works", gifUrlsIn("look https://cdn.example.com/a.gif lol").length === 1);
+check("duplicate gif links are de-duplicated", gifUrlsIn("https://x.io/a.gif https://x.io/a.gif").length === 1);
+check("at most four gifs per message", gifUrlsIn([1,2,3,4,5,6].map((n) => `https://x.io/${n}.gif`).join(" ")).length === 4);
+check("javascript: is never a gif link", gifUrlsIn("javascript:alert(1).gif").length === 0);
 
 check("segments reassemble to the original body (nothing lost)", (() => {
   const samples = [

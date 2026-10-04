@@ -10,7 +10,9 @@ import { Avatar, EmptyState } from "./ui";
 import MediaAttachment from "./MediaAttachment";
 import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
+import InlineGif from "./InlineGif";
 import MentionText from "./MentionText";
+import { gifUrlsIn } from "@/lib/message-links";
 import { useMentions } from "@/hooks/use-mentions";
 import { toast } from "sonner";
 import { CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
@@ -252,6 +254,7 @@ export default function ChannelView({
         {visible?.map((m) => {
           const mine = m.userId === myUserId;
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
+          const inlineGifs = gifUrlsIn(m.body);
           return (
             <article
               key={m._id}
@@ -284,6 +287,11 @@ export default function ChannelView({
                   <MentionText body={m.body} mentions={m.mentionUsers} onOpenProfile={onOpenProfile} />
                 )}
                 {m.gif && <GifMessage gif={m.gif} />}
+                {inlineGifs.length > 0 && (
+                  <div className="fc-attachments">
+                    {inlineGifs.map((u) => <InlineGif key={u} url={u} />)}
+                  </div>
+                )}
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
                     {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}

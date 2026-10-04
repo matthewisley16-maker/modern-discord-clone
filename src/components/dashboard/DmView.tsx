@@ -9,7 +9,9 @@ import { Avatar, EmptyState } from "./ui";
 import MediaAttachment from "./MediaAttachment";
 import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
+import InlineGif from "./InlineGif";
 import MentionText from "./MentionText";
+import { gifUrlsIn } from "@/lib/message-links";
 import { useMentions } from "@/hooks/use-mentions";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
@@ -257,6 +259,7 @@ export default function DmView({
         {messages?.map((m) => {
           const mine = m.userId === myUserId;
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
+          const inlineGifs = gifUrlsIn(m.body);
           return (
             <article key={m._id} id={`msg-${m._id}`} className="fc-message" tabIndex={0}>
               <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} url={m.authorAvatarUrl} decorationId={m.authorDecorationId} />
@@ -283,6 +286,11 @@ export default function DmView({
                   )
                 )}
                 {m.gif && <GifMessage gif={m.gif} />}
+                {inlineGifs.length > 0 && (
+                  <div className="fc-attachments">
+                    {inlineGifs.map((u) => <InlineGif key={u} url={u} />)}
+                  </div>
+                )}
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
                     {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}

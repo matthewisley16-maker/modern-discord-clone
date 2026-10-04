@@ -19,6 +19,26 @@ const TOKEN = /(https?:\/\/[^\s<]+|www\.[^\s<]+)|(@[a-z0-9._]{2,24})/gi;
 // Punctuation that commonly trails a URL but is not part of it.
 const TRAILING = /[.,!?;:)\]}>"']+$/;
 
+// A direct link to an animated image, e.g. https://site/a.gif or .../a.gif?x=1.
+const GIF_LINK = /\.gif(?:[?#][^\s]*)?$/i;
+
+/**
+ * Direct animated-image (`.gif`) links inside a message, de-duplicated.
+ *
+ * These can be rendered inline as real animated GIFs with no provider or API
+ * key involved. Only `http(s)` links ending in `.gif` qualify, so a page URL
+ * (like a provider's share page) is never embedded or navigated to.
+ */
+export function gifUrlsIn(body: string): string[] {
+  const out: string[] = [];
+  for (const seg of splitMessageBody(body)) {
+    if (seg.kind !== "url") continue;
+    if (!GIF_LINK.test(seg.href)) continue;
+    if (!out.includes(seg.href)) out.push(seg.href);
+  }
+  return out.slice(0, 4); // never let one message explode into dozens of GIFs
+}
+
 export function splitMessageBody(body: string): Segment[] {
   const out: Segment[] = [];
   let last = 0;
