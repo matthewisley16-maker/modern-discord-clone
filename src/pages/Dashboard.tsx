@@ -71,6 +71,7 @@ export default function Dashboard() {
   const inviteCall = useMutation(api.calls.inviteCall);
   const endCall = useMutation(api.calls.endCall);
   const timeoutCall = useMutation(api.calls.timeoutCall);
+  const clearConversationSignals = useMutation(api.calls.clearConversationSignals);
   const startDirect = useMutation(api.dms.startDirect);
   const setMuted = useMutation(api.dms.setMuted);
   const setPinned = useMutation(api.dms.setPinned);
@@ -128,6 +129,8 @@ export default function Dashboard() {
   // Which call UI is showing: full screen or the floating minimized window.
   // Minimizing never touches the connection — the panel stays mounted.
   const [callMinimized, setCallMinimized] = useState(false);
+  // Live status of the accepted DM call, so we notice a remote hang-up.
+  const callStatus = useQuery(api.calls.getCall, dmCall ? { inviteId: dmCall.inviteId } : "skip");
   // Which voice channels show their full participant list in the sidebar.
   const [expandedVoice, setExpandedVoice] = useState<Record<string, boolean>>({});
   const joinVoiceChecked = useMutation(api.voice.joinVoiceChecked);
@@ -405,9 +408,13 @@ export default function Dashboard() {
   /** End the accepted DM call for both sides and clean up local media. */
   async function endDmCall() {
     const inviteId = dmCall?.inviteId;
+    const conversationId = dmCall?.conversationId;
     setDmCall(null);
     setCallMinimized(false);
     if (inviteId) { try { await endCall({ inviteId }); } catch { /* already ended */ } }
+    // Drop any signaling left in the conversation so the next call starts clean
+    // and a stale offer can never revive the connection we just closed.
+    if (conversationId) { try { await clearConversationSignals({ conversationId }); } catch { /* noop */ } }
   }
 
   /** A single channel row, with voice participants and drag-and-drop reordering. */
@@ -495,6 +502,21 @@ export default function Dashboard() {
       });
     }
   }, [outgoingCall]);
+
+  // If the other side hangs up (or the call ends/is declined), tear the local
+  // call down immediately — otherwise the peer connection would linger as a
+  // ghost call with live audio/video.
+  const endedCallRef = useRef<string>("");
+  useEffect(() => {
+    if (!dmCall || !callStatus) return;
+    if (callStatus.status === "ringing" || callStatus.status === "accepted") return;
+    const key = `${callStatus._id}:${callStatus.status}`;
+    if (endedCallRef.current === key) return;
+    endedCallRef.current = key;
+    toast.info(callStatus.status === "declined" ? "Call declined." : "Call ended.");
+    void endDmCall();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dmCall, callStatus]);
 
   // Surface declined/missed/ended outcomes to the caller (once per outcome).
   const callOutcomeRef = useRef<string>("");
@@ -930,13 +952,13 @@ export default function Dashboard() {
         />
       )}
 
-      {dmCall && (
+      {dmCall && me?.userId && (
         <DmCallPanel
           conversationId={dmCall.conversationId}
           peerId={dmCall.peerId}
           peerName={dmCall.name}
           peerUsername={dmCall.username}
-          myUserId={me?.userId ?? ""}
+          myUserId={me.userId}
           media={dmCall.media}
           minimized={callMinimized}
           onMinimize={() => setCallMinimized(true)}

@@ -70,6 +70,9 @@ export default function VoicePanel({
   const audioEls = useRef<Map<string, HTMLAudioElement>>(new Map());
   const videoEls = useRef<Map<string, HTMLVideoElement>>(new Map());
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  // Throttles the mic-level meter so it does not re-render the whole grid 60×/s.
+  const lastLevelRef = useRef(0);
+  const lastLevelAtRef = useRef(0);
 
   async function getMic(withVideo: boolean) {
     try {
@@ -122,9 +125,14 @@ export default function VoicePanel({
             const rms = Math.sqrt(sum / buffer.length);
             const micMuted = localStream.current?.getAudioTracks().every((t) => !t.enabled) ?? false;
             const talking = !micMuted && rms > SPEAK_THRESHOLD;
-            setLevel(Math.min(1, rms * 8));
-
             const now = Date.now();
+            const nextLevel = Math.min(1, rms * 8);
+            if (now - lastLevelAtRef.current > 100 || Math.abs(nextLevel - lastLevelRef.current) > 0.08) {
+              lastLevelAtRef.current = now;
+              lastLevelRef.current = nextLevel;
+              setLevel(nextLevel);
+            }
+
             if (talking) lastSpokeRef.current = now;
             const shouldSpeak = talking || now - lastSpokeRef.current < SPEAK_HOLD_MS;
 
@@ -151,6 +159,8 @@ export default function VoicePanel({
       if (speakingRef.current) { speakingRef.current = false; setSpeaking({ speaking: false }).catch(() => {}); }
       peers.current.forEach((pc) => pc.close());
       peers.current.clear();
+      videoEls.current.clear();
+      audioEls.current.clear();
       localStream.current?.getTracks().forEach((t) => t.stop());
       localStream.current = null;
     };
@@ -176,28 +186,33 @@ export default function VoicePanel({
 
     const remote = new MediaStream();
     pc.ontrack = (e) => {
-      e.streams[0]?.getTracks().forEach((t) => remote.addTrack(t));
+      e.streams[0]?.getTracks().forEach((t) => { if (!remote.getTracks().some((x) => x.id === t.id)) remote.addTrack(t); });
       attachRemote(remoteId, remote);
     };
     pc.onicecandidate = (e) => {
       if (e.candidate) sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "candidate", payload: JSON.stringify(e.candidate) }).catch(() => {});
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-        setConnection("lost");
-        // Attempt a clean reconnect.
-        setTimeout(() => { peers.current.delete(remoteId); createPeer(remoteId, initiator); }, 1500);
-      } else if (pc.connectionState === "connected") {
+      if (pc.connectionState === "connected") {
         setConnection("connected");
+      } else if (pc.connectionState === "failed") {
+        // Only a REAL failure triggers recovery. `disconnected` is routinely
+        // transient during ICE, and acting on it (recreating the peer) is what
+        // made the video repeatedly flash video → black → video.
+        setConnection("lost");
+        try { pc.restartIce?.(); } catch { /* older browsers */ }
       }
+      // `disconnected` is deliberately ignored — a healthy connection recovers.
     };
     if (initiator) {
       pc.onnegotiationneeded = async () => {
+        if (pc.signalingState !== "stable") return;
         try {
           const offer = await pc.createOffer();
+          if (pc.signalingState !== "stable") return;
           await pc.setLocalDescription(offer);
-          await sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "offer", payload: JSON.stringify(offer) });
-        } catch { /* retried on reconnect */ }
+          await sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "offer", payload: JSON.stringify(pc.localDescription) });
+        } catch { /* retried on the next negotiationneeded */ }
       };
     }
     return pc;
@@ -226,13 +241,13 @@ export default function VoicePanel({
     (async () => {
       for (const s of signals) {
         try {
-          const pc = createPeer(s.fromUserId, false);
+          const pc = createPeer(s.fromUserId, myUserId < s.fromUserId);
           const data = JSON.parse(s.payload);
           if (s.kind === "offer") {
             await pc.setRemoteDescription(new RTCSessionDescription(data));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await sendSignal({ channelId, toUserId: s.fromUserId as Id<"users">, kind: "answer", payload: JSON.stringify(answer) });
+            await sendSignal({ channelId, toUserId: s.fromUserId as Id<"users">, kind: "answer", payload: JSON.stringify(pc.localDescription) });
           } else if (s.kind === "answer") {
             if (pc.signalingState !== "stable") await pc.setRemoteDescription(new RTCSessionDescription(data));
           } else if (s.kind === "candidate") {
@@ -362,7 +377,13 @@ export default function VoicePanel({
             key={p.userId}
             autoPlay
             playsInline
-            ref={(el) => { if (el) { audioEls.current.set(p.userId, el); const s = remoteStreams[p.userId]; if (s) el.srcObject = s; el.muted = deafened; } }}
+            ref={(el) => {
+              if (!el) { audioEls.current.delete(p.userId); return; }
+              audioEls.current.set(p.userId, el);
+              const s = remoteStreams[p.userId];
+              if (s && el.srcObject !== s) el.srcObject = s;
+              el.muted = deafened;
+            }}
           />
         ))}
       </div>
@@ -388,7 +409,11 @@ export default function VoicePanel({
               autoPlay
               playsInline
               muted
-              ref={(el) => { if (el) { el.srcObject = localStream.current; void el.play().catch(() => {}); } }}
+              ref={(el) => {
+                if (!el) return;
+                const s = localStream.current;
+                if (s && el.srcObject !== s) { el.srcObject = s; void el.play().catch(() => {}); }
+              }}
             />
           )}
           <div className="vp-mini-controls" onClick={(e) => e.stopPropagation()}>
@@ -433,26 +458,27 @@ export default function VoicePanel({
                 return (
                   <div key={p.userId} className={`vp-tile ${p.speaking ? "speaking" : ""} ${isSelf ? "self" : ""}`}>
                     <div className="vp-media">
-                      {showVideo ? (
-                        <video
-                          className="vp-video"
-                          autoPlay
-                          playsInline
-                          muted={isSelf}
-                          ref={(el) => {
-                            if (!el) return;
-                            if (isSelf) {
-                              localVideoRef.current = el;
-                              el.srcObject = localStream.current;
-                              void el.play().catch(() => {});
-                            } else {
-                              videoEls.current.set(p.userId, el);
-                              el.srcObject = stream ?? null;
-                              void el.play().catch(() => {});
-                            }
-                          }}
-                        />
-                      ) : (
+                      {/* Kept mounted for the whole call; visibility is CSS-only,
+                          so toggling a camera never remounts the element. */}
+                      <video
+                        className={`vp-video ${showVideo ? "" : "off"}`}
+                        autoPlay
+                        playsInline
+                        muted
+                        ref={(el) => {
+                          if (!el) return;
+                          if (isSelf) {
+                            localVideoRef.current = el;
+                            const s = localStream.current;
+                            if (s && el.srcObject !== s) el.srcObject = s;
+                          } else {
+                            videoEls.current.set(p.userId, el);
+                            const s = stream ?? null;
+                            if (el.srcObject !== s) el.srcObject = s;
+                          }
+                        }}
+                      />
+                      {!showVideo && (
                         <span className="vp-avatar-holder">
                           <ProfileAvatar name={p.name} url={p.avatarUrl} size={64} showPresence={false} />
                           {p.speaking && <span className="vp-speaking-ring" aria-hidden="true" />}

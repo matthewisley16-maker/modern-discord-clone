@@ -31,15 +31,19 @@ type View = "compact" | "float" | "full";
  * A real 1:1 call inside a DM conversation, rendered as a DRAGGABLE floating
  * window for both audio and video calls.
  *
- * Media lifecycle is deliberately stable:
- *  - `getUserMedia` runs exactly once (guarded by `initRef`).
- *  - One `RTCPeerConnection` per call; `ontrack` is registered once.
- *  - The `<video>` elements are mounted for the whole call and only ever have
+ * The media lifecycle is deliberately stable, because rebuilding it is exactly
+ * what makes the video flash between frames and black:
+ *  - `getUserMedia` runs exactly once per call (guarded by `initRef`).
+ *  - Exactly one `RTCPeerConnection` exists for the call; it is never recreated
+ *    for mute / camera / minimize / drag / navigation.
+ *  - Perfect-negotiation handles the initial offer AND every later
+ *    renegotiation (camera added), so there is no offer loop and no glare.
+ *  - The `<video>` elements are mounted for the whole call and only ever get
  *    `srcObject` assigned when the actual stream instance changes.
- *  - Camera/mic toggles operate on the existing tracks' `enabled` flag.
- *  - Cleanup only happens when the component actually unmounts (call ended).
- * Because of this, navigating, minimizing, dragging or muting never restarts
- * video.
+ *  - Camera toggles use `RTCRtpSender.replaceTrack()`; the microphone toggle
+ *    only touches the audio track. Neither restarts the connection.
+ *  - Teardown happens only when the component unmounts (the call really ended),
+ *    never on a rerender.
  */
 export default function DmCallPanel({
   conversationId,
@@ -80,9 +84,13 @@ export default function DmCallPanel({
   const [view, setView] = useState<View>(minimized ? "compact" : "float");
   const [pos, setPos] = useState<{ x: number; y: number } | null>(savedPos);
   const [dragging, setDragging] = useState(false);
+  // Flips to true once the peer connection exists, so the signaling effect
+  // processes anything that arrived while we were still acquiring media.
+  const [pcReady, setPcReady] = useState(false);
 
   // Streams are held in state so the video elements can attach in an effect —
-  // the only thing that ever reassigns `srcObject`.
+  // the only thing that ever reassigns `srcObject`. The instances are stable
+  // for the whole call.
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
@@ -90,10 +98,28 @@ export default function DmCallPanel({
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const initRef = useRef(false);
+  // Perfect-negotiation bookkeeping.
+  const makingOfferRef = useRef(false);
+  const ignoreOfferRef = useRef(false);
+  const politeRef = useRef(false);
   const processedSignals = useRef<Set<string>>(new Set());
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
   const remoteDescSet = useRef(false);
   const restartCount = useRef(0);
+  const disposedRef = useRef(false);
+  // Debounces "remote video went away" so a transient mute never flickers the
+  // avatar over a live frame.
+  const hideRemoteTimer = useRef<number | null>(null);
+
+  // Latest props/values in refs so the init effect never needs to rerun.
+  const peerIdRef = useRef(peerId);
+  const myUserIdRef = useRef(myUserId);
+  const mediaRef = useRef(media);
+  const sendSignalRef = useRef(sendSignal);
+  useEffect(() => { peerIdRef.current = peerId; }, [peerId]);
+  useEffect(() => { myUserIdRef.current = myUserId; }, [myUserId]);
+  useEffect(() => { mediaRef.current = media; }, [media]);
+  useEffect(() => { sendSignalRef.current = sendSignal; }, [sendSignal]);
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -101,17 +127,28 @@ export default function DmCallPanel({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
 
-  // Keep the latest mutation in a ref so it never forces the init effect to rerun.
-  const sendSignalRef = useRef(sendSignal);
-  useEffect(() => { sendSignalRef.current = sendSignal; }, [sendSignal]);
-
   const send = useCallback((to: Id<"users">, kind: "offer" | "answer" | "candidate", payload: string) => {
     return sendSignalRef.current({ conversationId, toUserId: to, kind, payload }).catch(() => {});
   }, [conversationId]);
 
+  // ---- Recompute whether the remote is actually sending live video ----
+  // Showing video is immediate; hiding it is debounced so a momentary mute
+  // cannot make the remote tile flash between the camera and the avatar.
   const refreshRemoteVideo = useCallback(() => {
     const rs = remoteStreamRef.current;
-    setRemoteHasVideo(Boolean(rs && rs.getVideoTracks().some((t) => t.readyState === "live")));
+    const live = Boolean(rs && rs.getVideoTracks().some((t) => t.readyState === "live" && !t.muted));
+    if (live) {
+      if (hideRemoteTimer.current !== null) { clearTimeout(hideRemoteTimer.current); hideRemoteTimer.current = null; }
+      setRemoteHasVideo((prev) => (prev ? prev : true));
+      return;
+    }
+    if (hideRemoteTimer.current !== null) return;
+    hideRemoteTimer.current = window.setTimeout(() => {
+      hideRemoteTimer.current = null;
+      const rs2 = remoteStreamRef.current;
+      const stillLive = Boolean(rs2 && rs2.getVideoTracks().some((t) => t.readyState === "live" && !t.muted));
+      if (!stillLive) setRemoteHasVideo(false);
+    }, 500);
   }, []);
 
   // ---- Call duration once connected ----
@@ -124,7 +161,7 @@ export default function DmCallPanel({
   // ---- Speaker mute on the always-mounted remote audio sink ----
   useEffect(() => { if (audioEl.current) audioEl.current.muted = speakerMuted; }, [speakerMuted]);
 
-  // ---- Attach streams to the (permanent) video elements ----
+  // ---- Attach streams to the (permanent) media elements ----
   useEffect(() => {
     const el = localVideoRef.current;
     if (el && el.srcObject !== localStream) { el.srcObject = localStream; safePlay(el); }
@@ -139,9 +176,13 @@ export default function DmCallPanel({
   // ---- Acquire local media + build the peer connection exactly once ----
   useEffect(() => {
     if (initRef.current) return;
+    if (!myUserIdRef.current) return; // wait until we know who we are
     initRef.current = true;
-    let disposed = false;
-    const wantVideo = media === "video";
+    disposedRef.current = false;
+    const peer = peerIdRef.current;
+    const wantVideo = mediaRef.current === "video";
+    // The peer with the larger id is the polite one and yields on glare.
+    politeRef.current = myUserIdRef.current > peer;
 
     // One persistent remote stream; incoming tracks are added to it in place.
     const remote = new MediaStream();
@@ -168,7 +209,7 @@ export default function DmCallPanel({
           } catch { stream = null; }
         }
       }
-      if (disposed) { stream?.getTracks().forEach((t) => t.stop()); return; }
+      if (disposedRef.current) { stream?.getTracks().forEach((t) => t.stop()); return; }
       if (!stream) {
         setConnection("lost");
         setCameraError(permissionDenied ? "Microphone permission was denied." : "Could not access your microphone or camera.");
@@ -183,9 +224,8 @@ export default function DmCallPanel({
 
       const pc = new RTCPeerConnection(ICE);
       pcRef.current = pc;
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
 
-      // Registered exactly once.
+      // Registered exactly once per connection.
       pc.ontrack = (e) => {
         const rs = remoteStreamRef.current;
         if (!rs) return;
@@ -199,38 +239,52 @@ export default function DmCallPanel({
         refreshRemoteVideo();
       };
       pc.onicecandidate = (e) => {
-        if (e.candidate) send(peerId, "candidate", JSON.stringify(e.candidate));
+        if (e.candidate) send(peer, "candidate", JSON.stringify(e.candidate));
+      };
+      // Perfect negotiation: any track/ICE change produces exactly one offer.
+      pc.onnegotiationneeded = async () => {
+        if (disposedRef.current) return;
+        try {
+          makingOfferRef.current = true;
+          const offer = await pc.createOffer();
+          if (disposedRef.current || pc.signalingState !== "stable") return;
+          await pc.setLocalDescription(offer);
+          await send(peer, "offer", JSON.stringify(pc.localDescription));
+        } catch { /* a later negotiationneeded retries */ }
+        finally { makingOfferRef.current = false; }
       };
       pc.onconnectionstatechange = () => {
         const st = pc.connectionState;
-        if (st === "connected") setConnection("connected");
+        if (st === "connected") { restartCount.current = 0; setConnection("connected"); }
         else if (st === "failed") {
           setConnection("lost");
-          if (restartCount.current < 3) { restartCount.current += 1; try { pc.restartIce?.(); } catch { /* older browsers */ } }
+          if (restartCount.current < 3) {
+            restartCount.current += 1;
+            try { pc.restartIce?.(); } catch { /* older browsers */ }
+          }
         }
-        // "disconnected" is often transient — do not tear anything down for it.
+        // "disconnected" is often transient — never tear anything down for it.
       };
       pc.oniceconnectionstatechange = () => {
         if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") setConnection("connected");
         else if (pc.iceConnectionState === "failed") {
           setConnection("lost");
-          if (restartCount.current < 3) { restartCount.current += 1; try { pc.restartIce?.(); } catch { /* noop */ } }
+          if (restartCount.current < 3) {
+            restartCount.current += 1;
+            try { pc.restartIce?.(); } catch { /* noop */ }
+          }
         }
       };
 
-      // The user with the smaller id initiates, so both sides agree on who offers.
-      if (myUserId < peerId) {
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await send(peerId, "offer", JSON.stringify(offer));
-        } catch { /* retried when the other side signals */ }
-      }
+      // Adding the tracks triggers onnegotiationneeded → exactly one offer.
+      stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
+      setPcReady(true);
     })();
 
     return () => {
-      disposed = true;
+      disposedRef.current = true;
       initRef.current = false;
+      setPcReady(false);
       try { pcRef.current?.close(); } catch { /* noop */ }
       pcRef.current = null;
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -239,16 +293,19 @@ export default function DmCallPanel({
       processedSignals.current.clear();
       pendingCandidates.current = [];
       remoteDescSet.current = false;
+      makingOfferRef.current = false;
+      ignoreOfferRef.current = false;
       restartCount.current = 0;
+      if (hideRemoteTimer.current !== null) { clearTimeout(hideRemoteTimer.current); hideRemoteTimer.current = null; }
     };
-    // Intentionally stable: a call's identity never changes while it is mounted.
-  }, [conversationId, peerId, myUserId, media, send, refreshRemoteVideo]);
+    // Intentionally stable for the whole call: deps never change mid-call.
+  }, [conversationId, send, refreshRemoteVideo]);
 
   // ---- Apply incoming signaling (each message exactly once) ----
   useEffect(() => {
-    if (!signals || !pcRef.current) return;
+    if (!signals || !pcReady) return;
     const pc = pcRef.current;
-    const polite = myUserId > peerId;
+    if (!pc) return;
     (async () => {
       for (const s of signals) {
         if (processedSignals.current.has(s._id)) continue;
@@ -256,58 +313,73 @@ export default function DmCallPanel({
         try {
           const data = JSON.parse(s.payload);
           if (s.kind === "offer") {
-            // Perfect-negotiation glare handling: the polite peer yields.
-            if (pc.signalingState !== "stable" && polite) {
-              await clearSignal({ signalId: s._id });
-              continue;
-            }
+            const offerCollision = makingOfferRef.current || pc.signalingState !== "stable";
+            ignoreOfferRef.current = !politeRef.current && offerCollision;
+            if (ignoreOfferRef.current) { await clearSignal({ signalId: s._id }); continue; }
             await pc.setRemoteDescription(new RTCSessionDescription(data));
             remoteDescSet.current = true;
-            for (const c of pendingCandidates.current.splice(0)) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* noop */ } }
+            for (const c of pendingCandidates.current.splice(0)) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* noop */ }
+            }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await send(s.fromUserId as Id<"users">, "answer", JSON.stringify(answer));
+            await send(s.fromUserId as Id<"users">, "answer", JSON.stringify(pc.localDescription));
           } else if (s.kind === "answer") {
             if (pc.signalingState === "have-local-offer") {
               await pc.setRemoteDescription(new RTCSessionDescription(data));
               remoteDescSet.current = true;
-              for (const c of pendingCandidates.current.splice(0)) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* noop */ } }
+              for (const c of pendingCandidates.current.splice(0)) {
+                try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* noop */ }
+              }
             }
           } else if (s.kind === "candidate") {
-            if (remoteDescSet.current) { try { await pc.addIceCandidate(new RTCIceCandidate(data)); } catch { /* noop */ } }
-            else pendingCandidates.current.push(data);
+            if (remoteDescSet.current) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(data)); }
+              catch { if (!ignoreOfferRef.current) { /* transient */ } }
+            } else {
+              pendingCandidates.current.push(data);
+            }
           }
         } catch { /* ignore out-of-order signaling */ }
-        await clearSignal({ signalId: s._id });
+        try { await clearSignal({ signalId: s._id }); } catch { /* noop */ }
       }
     })();
-  }, [signals, clearSignal, send, myUserId, peerId]);
+  }, [signals, pcReady, clearSignal, send]);
 
   // ---- Controls (operate on existing tracks; never rebuild the connection) ----
   function toggleMute() {
     const next = !muted;
     setMuted(next);
+    // Only the microphone track is touched — video and the connection are untouched.
     localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !next));
+  }
+
+  /**
+   * The video sender is the one carrying a video track, or — once the camera
+   * was turned off with `replaceTrack(null)` — the sender with no track at all
+   * (the audio sender always keeps its track).
+   */
+  function findVideoSender(pc: RTCPeerConnection): RTCRtpSender | undefined {
+    return pc.getSenders().find((s) => s.track?.kind === "video") ?? pc.getSenders().find((s) => s.track === null);
   }
 
   async function toggleCamera() {
     const pc = pcRef.current;
     if (!pc) return;
     const stream = localStreamRef.current;
-    const existing = stream?.getVideoTracks()[0];
+    const videoSender = findVideoSender(pc);
 
-    if (cameraOn && existing) {
-      existing.enabled = false; // keep the track and connection alive
+    if (cameraOn) {
+      // Turning OFF: stop sending video and release the camera (LED off). The
+      // peer connection, the microphone and remote audio are untouched.
+      if (videoSender) { try { await videoSender.replaceTrack(null); } catch { /* noop */ } }
+      const existing = stream?.getVideoTracks()[0];
+      if (existing) { try { existing.stop(); } catch { /* noop */ } stream?.removeTrack(existing); }
       setCameraOn(false);
       return;
     }
-    if (existing && existing.readyState === "live") {
-      existing.enabled = true;
-      setCameraOn(true);
-      setCameraError(null);
-      return;
-    }
 
+    // Turning ON: acquire a fresh camera track and swap it into the sender.
     setCameraError(null);
     try {
       const vs = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -316,17 +388,13 @@ export default function DmCallPanel({
       let s = stream;
       if (!s) { s = new MediaStream(); localStreamRef.current = s; setLocalStream(s); }
       s.addTrack(track);
-      const sender = pc.getSenders().find((x) => x.track?.kind === "video");
-      if (sender) {
+      if (videoSender) {
         // Replace in place — no renegotiation and no flicker on the remote side.
-        await sender.replaceTrack(track);
+        await videoSender.replaceTrack(track);
       } else {
+        // No video sender yet (a voice call turning on video): addTrack triggers
+        // onnegotiationneeded, which perfect-negotiation answers exactly once.
         pc.addTrack(track, s);
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await send(peerId, "offer", JSON.stringify(offer));
-        } catch { /* renegotiation retried */ }
       }
       setCameraOn(true);
     } catch (err) {
@@ -339,7 +407,7 @@ export default function DmCallPanel({
   // ---- Keep the view in sync with the external minimize flag (nav changes) ----
   useEffect(() => {
     setView((v) => {
-      if (minimized) return v === "full" ? "compact" : v === "compact" ? "compact" : "compact";
+      if (minimized) return "compact";
       return v === "compact" ? "float" : v;
     });
   }, [minimized]);
@@ -399,7 +467,8 @@ export default function DmCallPanel({
 
   return (
     <>
-      {/* Always-mounted audio sink so audio keeps playing in every view. */}
+      {/* Always-mounted audio sink so remote audio keeps playing in every view,
+          including the minimized window where the video stage is hidden. */}
       <audio ref={audioEl} autoPlay playsInline style={{ display: "none" }} />
 
       <div
@@ -439,9 +508,10 @@ export default function DmCallPanel({
           <div className="fc-callwin-stage">
             <div className="fc-callwin-remote">
               <video
-                className={`fc-callwin-video ${remoteHasVideo ? "" : "hidden"}`}
+                className={`fc-callwin-video ${remoteHasVideo ? "" : "off"}`}
                 autoPlay
                 playsInline
+                muted
                 ref={remoteVideoRef}
               />
               {!remoteHasVideo && (
@@ -451,8 +521,10 @@ export default function DmCallPanel({
               <span className="fc-callwin-timer">{connection === "connected" ? fmtDuration(seconds) : label}</span>
             </div>
             <div className="fc-callwin-local">
-              <video className={`fc-callwin-selfvideo ${cameraOn ? "" : "hidden"}`} autoPlay playsInline muted ref={localVideoRef} />
-              {cameraOn && <span className="fc-callwin-tag">You</span>}
+              <video className={`fc-callwin-selfvideo ${cameraOn ? "" : "off"}`} autoPlay playsInline muted ref={localVideoRef} />
+              {cameraOn
+                ? <span className="fc-callwin-tag">You</span>
+                : <span className="fc-callwin-selfav"><ProfileAvatar name="You" size={28} showPresence={false} /></span>}
             </div>
             {cameraError && <p className="fc-callwin-camerr">{cameraError}</p>}
           </div>

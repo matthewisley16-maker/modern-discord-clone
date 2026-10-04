@@ -136,6 +136,25 @@ await expectTrue("the call ends and A sees it", async () => {
   const out = await A.client.query(api.calls.outgoingCall, {});
   return out && out.status === "ended";
 });
+// Both participants can watch a single call's live status, which is what lets
+// one side notice the other hanging up (no ghost calls).
+await expectTrue("B can read the call status and sees it ended", async () => {
+  const c = await B.client.query(api.calls.getCall, { inviteId });
+  return c && c._id === inviteId && c.fromId === A.userId && c.toId === B.userId && c.status === "ended";
+});
+await expectTrue("a non-participant cannot read the call status", async () => {
+  const c = await C.client.query(api.calls.getCall, { inviteId });
+  return c === null;
+});
+// Stale signaling must not survive a call, or the next call could renegotiate
+// against an old offer.
+await expectOk("A leaves an offer behind", () => A.client.mutation(api.calls.sendDmSignal, { conversationId: convoId, toUserId: B.userId, kind: "offer", payload: JSON.stringify({ type: "offer", sdp: "stale" }) }));
+await expectOk("ending clears the conversation's signaling", () => A.client.mutation(api.calls.clearConversationSignals, { conversationId: convoId }));
+await expectTrue("no stale signaling remains after the call", async () => {
+  const sigs = await B.client.query(api.calls.pollDmSignals, { conversationId: convoId });
+  return sigs.length === 0;
+});
+await expectError("an oversized signal payload is rejected", () => A.client.mutation(api.calls.sendDmSignal, { conversationId: convoId, toUserId: B.userId, kind: "offer", payload: "x".repeat(60_001) }));
 
 // ---- Missed call via timeout ----
 let invite2;

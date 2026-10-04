@@ -130,6 +130,7 @@ export const sendDmSignal = mutation({
       .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", me))
       .unique();
     if (!member) throw new Error("You're not part of this conversation.");
+    if (payload.length > 60_000) throw new Error("Signal payload too large.");
     await ctx.db.insert("dmCallSignals", { conversationId, fromUserId: me, toUserId, kind, payload });
   },
 });
@@ -141,7 +142,33 @@ export const pollDmSignals = query({
     const me = await getAuthUserId(ctx);
     if (!me) return [];
     const rows = await ctx.db.query("dmCallSignals").withIndex("by_to", (q) => q.eq("toUserId", me)).collect();
-    return rows.filter((r) => r.conversationId === conversationId);
+    // Oldest first so offers/answers/candidates are applied in the order they
+    // were produced — out-of-order application is what causes renegotiation.
+    return rows
+      .filter((r) => r.conversationId === conversationId)
+      .sort((a, b) => a._creationTime - b._creationTime);
+  },
+});
+
+/**
+ * Live status of a single call, for both participants. Lets the callee notice
+ * when the caller hangs up (and vice-versa) so no ghost call is left running.
+ */
+export const getCall = query({
+  args: { inviteId: v.id("callInvites") },
+  handler: async (ctx, { inviteId }) => {
+    const me = await getAuthUserId(ctx);
+    if (!me) return null;
+    const invite = await ctx.db.get(inviteId);
+    if (!invite || (invite.fromId !== me && invite.toId !== me)) return null;
+    return {
+      _id: invite._id,
+      status: invite.status,
+      media: invite.media,
+      conversationId: invite.conversationId ?? null,
+      fromId: invite.fromId,
+      toId: invite.toId,
+    };
   },
 });
 
@@ -152,6 +179,28 @@ export const clearDmSignal = mutation({
     const signal = await ctx.db.get(signalId);
     if (!signal || signal.toUserId !== me) return;
     await ctx.db.delete(signalId);
+  },
+});
+
+/**
+ * Purge any lingering signaling rows for a conversation I'm part of. Called
+ * when a call ends so the next call starts from a clean slate (no stale
+ * offers/candidates that would trigger a renegotiation).
+ */
+export const clearConversationSignals = mutation({
+  args: { conversationId: v.id("dmConversations") },
+  handler: async (ctx, { conversationId }) => {
+    const me = await currentUserId(ctx);
+    const member = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", me))
+      .unique();
+    if (!member) return;
+    const rows = await ctx.db
+      .query("dmCallSignals")
+      .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+      .collect();
+    for (const r of rows) await ctx.db.delete(r._id);
   },
 });
 
