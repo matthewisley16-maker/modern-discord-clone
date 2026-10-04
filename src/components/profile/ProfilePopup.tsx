@@ -71,6 +71,7 @@ export default function ProfilePopup({
     <div className="pf-popup" ref={ref} role="dialog" aria-label={`${profile.displayName}'s profile`}>
       <button className="pf-popup-close" aria-label="Close profile" onClick={onClose}><X size={16} /></button>
 
+      <div className="pf-popup-scroll">
       <div className="pf-popup-banner" style={{ background: themeColors ? `linear-gradient(135deg, ${themeColors.primary}, ${themeColors.background})` : undefined }}>
         {profile.bannerUrl && <img src={profile.bannerUrl} alt="" />}
         <ProfileEffect effectId={profile.effectId} reducedMotion={appearance?.reducedMotion} density={12} />
@@ -223,6 +224,7 @@ export default function ProfilePopup({
             <Button size="sm" variant="outline" onClick={() => onViewFull(profile.userId)}>View full profile</Button>
           </div>
         )}
+      </div>
       </div>
 
       {followList && (

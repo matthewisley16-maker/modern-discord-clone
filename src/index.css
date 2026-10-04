@@ -745,7 +745,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .pf-badges-lg .pf-badge { font-size: 11px; padding: 5px 11px; }
 .pf-activity { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; color: #c9c5da; }
 .pf-activity-label { font-size: 10px; color: #8b87a0; text-transform: capitalize; }
-.pf-popup { position: fixed; z-index: 88; width: min(340px, calc(100vw - 24px)); right: 18px; bottom: 18px; background: #14141b; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.65); overflow: hidden; isolation: isolate; }
+/* The popout is a flex column capped to the viewport (18px breathing room top
+   and bottom). The banner + body live in an inner scroll container, so tall
+   profiles scroll inside the card instead of overflowing the window. Short
+   profiles keep their natural compact height. */
+.pf-popup { position: fixed; z-index: 88; width: min(340px, calc(100vw - 24px)); right: 18px; bottom: 18px; max-height: calc(100vh - 36px); max-height: calc(100dvh - 36px); display: flex; flex-direction: column; background: #14141b; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.65); overflow: hidden; isolation: isolate; }
+.pf-popup-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
 .pf-popup-close { position: absolute; top: 10px; right: 10px; z-index: 3; color: #d8d4e6; background: rgba(0,0,0,.4); border-radius: 8px; padding: 4px; }
 .pf-popup-banner { position: relative; z-index: 1; isolation: isolate; height: clamp(78px, 22vw, 108px); background: linear-gradient(135deg,#7c5cf6,#1b1a24); overflow: hidden; }
 .pf-popup-banner img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
