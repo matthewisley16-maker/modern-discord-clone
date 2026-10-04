@@ -670,21 +670,24 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 /* ---- Animated decorations (particle systems around the avatar) ---- */
 .pf-deco { position: absolute; left: 50%; top: 50%; width: var(--box); height: var(--box); transform: translate(-50%, -50%); pointer-events: none; }
 .pf-deco-inner { position: absolute; inset: 0; }
-.pf-deco-p { position: absolute; display: block; width: var(--sz); height: var(--sz); background: var(--c); opacity: var(--o); will-change: transform, opacity; }
-.pf-deco-loop { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 2px solid; border-radius: 50%; border-right-color: transparent; border-bottom-color: transparent; animation-name: pf-deco-rotate; animation-timing-function: linear; animation-iteration-count: infinite; }
+/* Particles are positioned by an explicit ring point (left/top + negative
+   margin). Transform is left free for the animation, so motion never overrides
+   placement — this is what keeps every shape on the outer edge. */
+.pf-deco-p { position: absolute; display: block; width: var(--sz); height: var(--sz); margin-left: calc(var(--sz) / -2); margin-top: calc(var(--sz) / -2); background: var(--c); opacity: var(--o); will-change: transform, opacity; }
+.pf-deco-loop { position: absolute; left: 50%; top: 50%; translate: -50% -50%; border: 2px solid; border-radius: 50%; border-right-color: transparent; border-bottom-color: transparent; animation-name: pf-deco-rotate; animation-timing-function: linear; animation-iteration-count: infinite; }
 @keyframes pf-deco-rotate { to { transform: rotate(360deg); } }
 .pf-deco-orbit .pf-deco-inner { animation: pf-deco-rotate var(--spin) linear infinite; }
-.pf-deco-orbit .pf-deco-p { left: 50%; top: 50%; margin-left: calc(var(--sz) / -2); margin-top: calc(var(--sz) / -2); transform: rotate(var(--a)) translateX(var(--r)); animation: pf-deco-twinkle var(--dur) ease-in-out infinite var(--delay); }
-.pf-deco-twinkle .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-twinkle var(--dur) ease-in-out infinite var(--delay); }
-@keyframes pf-deco-twinkle { 0%, 100% { transform: scale(.45); opacity: calc(var(--o) * .3); } 50% { transform: scale(1.15); opacity: var(--o); } }
-.pf-deco-rise .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-rise var(--dur) linear infinite var(--delay); }
-@keyframes pf-deco-rise { 0% { transform: translateY(55%) scale(.5); opacity: 0; } 15% { opacity: var(--o); } 100% { transform: translateY(calc(-1 * var(--box))) scale(1.1); opacity: 0; } }
-.pf-deco-fall .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-fall var(--dur) linear infinite var(--delay); }
-@keyframes pf-deco-fall { 0% { transform: translateY(calc(-1 * var(--box) * .55)) rotate(0); opacity: 0; } 12% { opacity: var(--o); } 100% { transform: translateY(calc(var(--box) * .6)) rotate(var(--rot)); opacity: 0; } }
-.pf-deco-drift .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-drift var(--dur) ease-in-out infinite var(--delay); }
-@keyframes pf-deco-drift { 0%, 100% { transform: translate3d(calc(var(--box) * -.07), 0, 0) scale(.85); opacity: calc(var(--o) * .5); } 50% { transform: translate3d(calc(var(--box) * .07), calc(var(--box) * -.05), 0) scale(1.12); opacity: var(--o); } }
-.pf-deco-pulse .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-pulse var(--dur) ease-in-out infinite var(--delay); }
-@keyframes pf-deco-pulse { 0%, 100% { transform: scale(.65); opacity: calc(var(--o) * .3); } 50% { transform: scale(1.15); opacity: var(--o); } }
+.pf-deco-orbit .pf-deco-p,
+.pf-deco-twinkle .pf-deco-p { animation: pf-deco-twinkle var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-deco-twinkle { 0%, 100% { transform: scale(.5); opacity: calc(var(--o) * .35); } 50% { transform: scale(1.08); opacity: var(--o); } }
+.pf-deco-rise .pf-deco-p { animation: pf-deco-rise var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-deco-rise { 0% { transform: translateY(var(--amp)); opacity: 0; } 22% { opacity: var(--o); } 100% { transform: translateY(calc(-1 * var(--amp))); opacity: 0; } }
+.pf-deco-fall .pf-deco-p { animation: pf-deco-fall var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-deco-fall { 0% { transform: translateY(calc(-1 * var(--amp))); opacity: 0; } 22% { opacity: var(--o); } 100% { transform: translateY(var(--amp)) rotate(var(--rot)); opacity: 0; } }
+.pf-deco-drift .pf-deco-p { animation: pf-deco-drift var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-deco-drift { 0%, 100% { transform: translate3d(calc(-1 * var(--amp)), 0, 0) scale(.9); opacity: calc(var(--o) * .55); } 50% { transform: translate3d(var(--amp), calc(-1 * var(--amp) * .6), 0) scale(1.1); opacity: var(--o); } }
+.pf-deco-pulse .pf-deco-p { animation: pf-deco-pulse var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-deco-pulse { 0%, 100% { transform: scale(.7); opacity: calc(var(--o) * .35); } 50% { transform: scale(1.15); opacity: var(--o); } }
 /* Reduced motion: shapes stay put but are visible, nothing animates. */
 .pf-deco.reduced *, .pf-effect.reduced *, .pf-effect-glow.reduced, .pf-effect-aurora.reduced { animation: none !important; }
 
@@ -704,22 +707,26 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .s-cloud { border-radius: 50%; filter: blur(3px); }
 .s-bar { width: 6%; height: 26%; border-radius: 1px; }
 
-/* ---- Animated banner effects (behind banner content) ---- */
-.pf-effect { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
-.pf-fx-p { position: absolute; display: block; width: var(--sz); height: var(--sz); background: var(--c); opacity: var(--o); will-change: transform, opacity; }
+/* ---- Animated banner effects ----
+   A dedicated, self-clipping layer sized to the banner. Particles are sized as
+   a small percentage of the banner height (via aspect-ratio), never the
+   viewport, so the effect scales with the banner and can't become huge. */
+.pf-effect { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 2; }
+.pf-fx-p { position: absolute; display: block; height: calc(var(--sz) * 1%); width: auto; aspect-ratio: 1 / 1; background: var(--c); opacity: var(--o); will-change: transform, opacity, top; }
+.pf-fx-p.s-bar { width: calc(var(--sz) * .4 * 1%); height: calc(var(--sz) * 3.2 * 1%); aspect-ratio: auto; }
 .pf-fx-drift .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-drift var(--dur) ease-in-out infinite var(--delay); }
-@keyframes pf-fx-drift { 0%, 100% { transform: translate3d(-16px, 0, 0) scale(.8); opacity: calc(var(--o) * .4); } 50% { transform: translate3d(16px, -12px, 0) scale(1.12); opacity: var(--o); } }
+@keyframes pf-fx-drift { 0%, 100% { transform: translate3d(-6px, 0, 0) scale(.8); opacity: calc(var(--o) * .4); } 50% { transform: translate3d(6px, -5px, 0) scale(1.1); opacity: var(--o); } }
 .pf-fx-twinkle .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-twinkle var(--dur) ease-in-out infinite var(--delay); }
 @keyframes pf-fx-twinkle { 0%, 100% { transform: scale(.3); opacity: 0; } 50% { transform: scale(1); opacity: var(--o); } }
 .pf-fx-fall .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-fall var(--dur) linear infinite var(--delay); }
-@keyframes pf-fx-fall { 0% { transform: translateY(-160%) rotate(0); opacity: 0; } 12% { opacity: var(--o); } 100% { transform: translateY(260%) rotate(var(--rot)); opacity: 0; } }
+@keyframes pf-fx-fall { 0% { top: -14%; transform: rotate(0); opacity: 0; } 12% { opacity: var(--o); } 100% { top: 114%; transform: rotate(var(--rot)); opacity: 0; } }
 .pf-fx-rise .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-rise var(--dur) linear infinite var(--delay); }
-@keyframes pf-fx-rise { 0% { transform: translateY(180%) scale(.5); opacity: 0; } 14% { opacity: var(--o); } 100% { transform: translateY(-300%) scale(1.1); opacity: 0; } }
+@keyframes pf-fx-rise { 0% { top: 114%; transform: scale(.5); opacity: 0; } 14% { opacity: var(--o); } 100% { top: -14%; transform: scale(1.1); opacity: 0; } }
 .pf-fx-digital .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-digital var(--dur) linear infinite var(--delay); }
-@keyframes pf-fx-digital { 0% { transform: translateY(-180%) scaleY(.4); opacity: 0; } 22% { opacity: var(--o); } 100% { transform: translateY(340%) scaleY(1.5); opacity: 0; } }
-.pf-effect-glow { position: absolute; inset: 0; pointer-events: none; z-index: 0; background: radial-gradient(circle at 50% 0%, rgba(139,92,246,.5), transparent 65%); animation: pf-glow 3.2s ease-in-out infinite; }
+@keyframes pf-fx-digital { 0% { top: -18%; transform: scaleY(.3); opacity: 0; } 12% { opacity: var(--o); } 100% { top: 118%; transform: scaleY(1.6); opacity: 0; } }
+.pf-effect-glow { position: absolute; inset: 0; pointer-events: none; z-index: 2; background: radial-gradient(circle at 50% 0%, rgba(139,92,246,.5), transparent 65%); animation: pf-glow 3.2s ease-in-out infinite; }
 @keyframes pf-glow { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
-.pf-effect-aurora { position: absolute; inset: 0; pointer-events: none; z-index: 0; background: linear-gradient(120deg, rgba(52,211,153,.35), rgba(139,92,246,.35), rgba(34,211,238,.3)); background-size: 220% 220%; animation: pf-aurora 9s ease infinite; }
+.pf-effect-aurora { position: absolute; inset: 0; pointer-events: none; z-index: 2; background: linear-gradient(120deg, rgba(52,211,153,.35), rgba(139,92,246,.35), rgba(34,211,238,.3)); background-size: 220% 220%; animation: pf-aurora 9s ease infinite; }
 @keyframes pf-aurora { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
 @media (prefers-reduced-motion: reduce) {
   .pf-deco *, .pf-effect * { animation: none !important; }
@@ -738,17 +745,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .pf-badges-lg .pf-badge { font-size: 11px; padding: 5px 11px; }
 .pf-activity { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; color: #c9c5da; }
 .pf-activity-label { font-size: 10px; color: #8b87a0; text-transform: capitalize; }
-.pf-popup { position: fixed; z-index: 88; width: min(340px, calc(100vw - 24px)); right: 18px; bottom: 18px; background: #14141b; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.65); overflow: hidden; }
+.pf-popup { position: fixed; z-index: 88; width: min(340px, calc(100vw - 24px)); right: 18px; bottom: 18px; background: #14141b; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.65); overflow: hidden; isolation: isolate; }
 .pf-popup-close { position: absolute; top: 10px; right: 10px; z-index: 3; color: #d8d4e6; background: rgba(0,0,0,.4); border-radius: 8px; padding: 4px; }
-.pf-popup-banner { position: relative; isolation: isolate; height: clamp(78px, 22vw, 108px); background: linear-gradient(135deg,#7c5cf6,#1b1a24); overflow: hidden; }
+.pf-popup-banner { position: relative; z-index: 1; isolation: isolate; height: clamp(78px, 22vw, 108px); background: linear-gradient(135deg,#7c5cf6,#1b1a24); overflow: hidden; }
 .pf-popup-banner img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
 .pf-popup-body { padding: 0 18px 18px; }
-.pf-popup-avatar-row { display: flex; align-items: flex-end; justify-content: space-between; margin-top: -38px; }
+.pf-popup-avatar-row { position: relative; z-index: 4; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: -38px; }
 .pf-presence-label { font-size: 10px; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.07); color: #b7b1cc; }
 .pf-presence-label.online { color: #3ddc97; }
 .pf-presence-label.dnd { color: #f0616d; }
 .pf-presence-label.idle { color: #f5c451; }
-.pf-popup-names { margin-top: 10px; }
+.pf-popup-names { position: relative; z-index: 5; margin-top: 10px; }
 .pf-popup-actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .pf-follow-tag { display: inline-block; margin-top: 8px; font-size: 10px; font-weight: 600; letter-spacing: .3px; padding: 3px 10px; border-radius: 999px; background: rgba(139,92,246,.18); color: #c4b5f7; }
 .pf-follow-stats { display: flex; gap: 6px; margin-top: 12px; }
@@ -819,19 +826,22 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .pf-more-menu button { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; padding: 7px 9px; border-radius: 6px; font-size: 12px; color: #c9c5da; }
 .pf-more-menu button:hover { background: rgba(255,255,255,.06); }
 .pf-more-menu button.danger { color: #f0616d; }
-.pf-page-banner { position: relative; isolation: isolate; height: clamp(140px, 26vw, 230px); border-radius: 16px; overflow: hidden; background: linear-gradient(135deg,#7c5cf6,#1b1a24); }
+/* Scoped profile stacking context: background → banner(1) → banner effect(2,
+   inside banner) → avatar/head(4) → nameplate & names(5). No global z-index. */
+.pf-page { position: relative; isolation: isolate; }
+.pf-page-banner { position: relative; z-index: 1; isolation: isolate; height: clamp(140px, 26vw, 230px); border-radius: 16px; overflow: hidden; background: linear-gradient(135deg,#7c5cf6,#1b1a24); }
 .pf-page-banner img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
-.pf-page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: -54px; padding: 0 8px; }
-.pf-page-actions { display: flex; gap: 8px; }
-.pf-page-names { margin: 12px 0 0 8px; }
+.pf-page-head { position: relative; z-index: 4; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: -54px; padding: 0 8px; }
+.pf-page-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pf-page-names { position: relative; z-index: 5; margin: 12px 0 0 8px; }
 .pf-back { margin-bottom: 12px; }
 .pf-widget-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 14px; }
 .pf-widget { border: 1px solid rgba(255,255,255,.07); border-radius: 14px; background: #14141b; padding: 16px; margin-top: 12px; }
 .pf-widget h3 { font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: #8b87a0; margin-bottom: 8px; }
-.pf-preview { border-radius: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,.09); margin-bottom: 20px; background: #0b0b10; }
-.pf-preview-banner { position: relative; isolation: isolate; height: clamp(78px, 22vw, 108px); background: linear-gradient(135deg,#7c5cf6,#1b1a24); overflow: hidden; }
+.pf-preview { position: relative; isolation: isolate; border-radius: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,.09); margin-bottom: 20px; background: #0b0b10; }
+.pf-preview-banner { position: relative; z-index: 1; isolation: isolate; height: clamp(78px, 22vw, 108px); background: linear-gradient(135deg,#7c5cf6,#1b1a24); overflow: hidden; }
 .pf-preview-banner img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
-.pf-preview-body { display: flex; align-items: center; gap: 14px; padding: 0 18px; margin-top: -28px; }
+.pf-preview-body { position: relative; z-index: 4; display: flex; align-items: center; gap: 14px; padding: 0 18px; margin-top: -28px; }
 .pf-preview-note { font-size: 10px; color: #7c7890; padding: 12px 18px; }
 .pf-swatch-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .pf-swatch { width: 74px; height: 46px; border-radius: 10px; border: 2px solid transparent; display: grid; place-items: end center; padding-bottom: 4px; }

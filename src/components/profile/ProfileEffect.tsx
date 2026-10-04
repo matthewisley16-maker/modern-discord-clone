@@ -69,7 +69,9 @@ export default function ProfileEffect({
       y: `${Math.round(4 + rand() * 88)}%`,
       delay: `${(rand() * (cfg.maxDur / 2)).toFixed(2)}s`,
       dur: `${(cfg.minDur + rand() * (cfg.maxDur - cfg.minDur)).toFixed(2)}s`,
-      sz: `${(cfg.scale ? cfg.scale * 100 : 100) * (0.4 + rand() * 0.9)}%`,
+      // Height as a small percentage of the banner — the CSS derives width from
+      // aspect-ratio, so the effect scales with the banner, never the viewport.
+      sz: ((cfg.scale ?? 1) * (3.5 + rand() * 4)).toFixed(1),
       rot: `${Math.round(-260 + rand() * 520)}deg`,
       color: cfg.alt && cfg.alt.length ? cfg.alt[i % cfg.alt.length] : cfg.color,
       opacity: (0.35 + rand() * 0.55).toFixed(2),
