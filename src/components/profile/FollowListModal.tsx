@@ -14,6 +14,7 @@ type Card = {
   displayName: string;
   avatarColor: string;
   avatarUrl: string | null;
+  decorationId: string | null;
   presence: string;
   lastSeen?: number | null;
   customStatus: string;
@@ -124,7 +125,7 @@ export default function FollowListModal({
           {rows.map((card) => (
             <div key={card.userId} className="fc-follow-row">
               <button className="fc-follow-person" onClick={() => onOpenProfile(card.userId)}>
-                <Avatar name={card.displayName} color={card.avatarColor} presence={card.presence} url={card.avatarUrl} size={38} lastSeen={card.lastSeen} />
+                <Avatar name={card.displayName} color={card.avatarColor} presence={card.presence} url={card.avatarUrl} size={38} lastSeen={card.lastSeen} decorationId={card.decorationId} />
                 <span className="fc-follow-text">
                   <span className="fc-follow-name">
                     {card.displayName}

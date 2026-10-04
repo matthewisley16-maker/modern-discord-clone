@@ -341,5 +341,8 @@ await expectError("unauthenticated user cannot read messages", async () => {
   await anon.query(api.chat.messages, { channelId });
 });
 
+// Clean up the test community so it never lingers in the database.
+try { await A.client.mutation(api.communities.deleteCommunity, { serverId }); } catch {}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -92,6 +92,7 @@ export default function FullProfile({
           presence={profile.presence}
           frameId={profile.frameId}
           decorationId={profile.decorationId}
+          reducedMotion={appearance?.reducedMotion}
           size={108}
         />
         <div className="pf-page-actions">

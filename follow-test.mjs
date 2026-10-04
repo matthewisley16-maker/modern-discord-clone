@@ -136,5 +136,22 @@ await expectError("nobody can follow C when followPrivacy is none", () =>
 // --- Cannot follow yourself ---
 await expectError("A cannot follow themselves", () => A.client.mutation(api.social.follow, { userId: A.userId }));
 
+// --- Profile themes resolve to real colours (theme + decoration system) ---
+await expectOk("A selects a profile theme", () => A.client.mutation(api.profiles.updateCustomization, { theme: "theme_ocean" }));
+await expectTrue("the chosen theme exposes its palette", async () => {
+  const p = await A.client.query(api.profiles.getProfile, { userId: A.userId });
+  return p.theme === "theme_ocean" && p.themeColors?.primary === "#0ea5e9";
+});
+await expectTrue("an explicit custom palette is preserved", async () => {
+  await A.client.mutation(api.profiles.updateCustomization, { themeColors: { primary: "#ff0000", accent: "#00ff00", background: "#000000" } });
+  const p = await A.client.query(api.profiles.getProfile, { userId: A.userId });
+  return p.themeColors?.primary === "#ff0000";
+});
+await expectOk("A picks avatar cosmetics", () => A.client.mutation(api.profiles.updateCustomization, { decorationId: "dec_stars", frameId: "frame_neon", effectId: "effect_snow" }));
+await expectTrue("cosmetics persist on the profile", async () => {
+  const p = await A.client.query(api.profiles.getProfile, { userId: A.userId });
+  return p.decorationId === "dec_stars" && p.frameId === "frame_neon" && p.effectId === "effect_snow";
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

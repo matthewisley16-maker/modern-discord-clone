@@ -680,6 +680,13 @@ export default function Dashboard() {
                 ))}
               </>
             )}
+            {communities && communities.length === 0 && (
+              <div className="fc-communities-empty">
+                <strong>No communities yet</strong>
+                <small>Create a community or join one to get started.</small>
+                <button className="fc-cm-add" onClick={() => openModal("createCommunity")}><Plus size={13} /> Create a community</button>
+              </div>
+            )}
             {!details.isOwner && (
               <button className="fc-leave-btn" onClick={async () => {
                 try { await leaveCommunity({ serverId: communityId! }); toast.success("You left the community."); setCommunityId(null); setSection("home"); }
@@ -716,6 +723,13 @@ export default function Dashboard() {
                   </button>
                 ))}
               </>
+            )}
+            {communities && communities.length === 0 && (
+              <div className="fc-communities-empty">
+                <strong>No communities yet</strong>
+                <small>Create a community or join one to get started.</small>
+                <button className="fc-cm-add" onClick={() => openModal("createCommunity")}><Plus size={13} /> Create a community</button>
+              </div>
             )}
 
             <div className="fc-sidebar-section"><span>CONVERSATIONS</span></div>
@@ -867,7 +881,7 @@ export default function Dashboard() {
               <div className="fc-members-head">MEMBERS — {details.members.length}</div>
               {details.members.map((m) => (
                 <button key={m.userId} className="fc-member" onClick={() => setProfileUserId(m.userId)}>
-                  <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={30} url={m.avatarUrl} lastSeen={m.lastSeen} />
+                  <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={30} url={m.avatarUrl} lastSeen={m.lastSeen} decorationId={m.decorationId} />
                   <span>
                     <strong>{m.displayName}</strong>
                     <small>{m.presence === "offline" ? formatLastSeen(m.lastSeen) : m.role === "owner" ? "Owner" : m.role}</small>

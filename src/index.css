@@ -249,6 +249,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-invite-btn:hover { background: rgba(139,92,246,.2); }
 .fc-leave-btn { margin: 8px 12px 0; padding: 8px; font-size: 11px; color: #f0616d; }
 .fc-sidebar-empty { padding: 10px 16px; font-size: 12px; color: #7c7890; line-height: 1.6; }
+.fc-communities-empty { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px 4px; }
+.fc-communities-empty strong { font-size: 12.5px; color: #c9c5da; }
+.fc-communities-empty small { font-size: 11px; color: #7c7890; line-height: 1.5; }
+.fc-communities-empty .fc-cm-add { align-self: flex-start; margin-top: 6px; }
 .fc-dm-row { display: flex; align-items: center; }
 .fc-dm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 1px 8px; padding: 7px 9px; border-radius: 8px; color: #b7b1cc; font-size: 13px; text-align: left; }
 .fc-dm:hover { background: rgba(255,255,255,.05); color: #e5e0ff; }
@@ -298,9 +302,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-row-main strong { display: block; font-size: 13px; color: #eeecf6; }
 .fc-row-main small { display: block; font-size: 11px; color: #8b87a0; margin-top: 2px; }
 .fc-row-actions { display: flex; gap: 6px; }
-.fc-avatar { position: relative; display: grid; place-items: center; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; flex-shrink: 0; overflow: visible; }
+.fc-avatar { position: relative; display: grid; place-items: center; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; flex-shrink: 0; overflow: visible; isolation: isolate; }
 .fc-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
-.fc-avatar i { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #121218; }
+.fc-avatar i { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #121218; z-index: 3; }
 .fc-empty { text-align: center; padding: 60px 20px; color: #8b87a0; }
 .fc-empty svg { margin: 0 auto 12px; color: #a78bfa; }
 .fc-empty h3 { font-size: 16px; color: #e9e6f5; margin-bottom: 6px; }
@@ -358,6 +362,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-mention { color: #c4b5f7; background: rgba(139,92,246,.16); border-radius: 4px; padding: 0 4px; }
 .fc-mention-link { color: #cfc2ff; background: rgba(139,92,246,.24); border-radius: 4px; padding: 0 4px; font: inherit; cursor: pointer; transition: background .14s, color .14s; }
 .fc-mention-link:hover { background: rgba(139,92,246,.45); color: #fff; text-decoration: underline; }
+/* Links inside messages: clearly clickable, open in a new tab. */
+.fc-link { color: #7fc4ff; text-decoration: underline; text-decoration-color: rgba(127,196,255,.4); text-underline-offset: 2px; overflow-wrap: anywhere; transition: color .14s, text-decoration-color .14s; }
+.fc-link:hover { color: #b9e0ff; text-decoration-color: #b9e0ff; }
+.fc-link:focus-visible { outline: 2px solid #7fc4ff; outline-offset: 1px; border-radius: 3px; }
 .fc-mention-menu { position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px; max-height: 260px; overflow-y: auto; background: #1b1a24; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 5px; box-shadow: 0 -14px 44px rgba(0,0,0,.62); z-index: 60; }
 .fc-mention-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 7px 9px; border-radius: 8px; }
 .fc-mention-item.active, .fc-mention-item:hover { background: rgba(139,92,246,.18); }
@@ -617,7 +625,20 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-callwin-controls button.active { background: #8b5cf6; color: #fff; }
 .fc-callwin-controls button.danger { background: rgba(240,97,109,.22); color: #ff8b96; }
 .fc-callwin-controls button.danger:hover { background: #f0616d; color: #fff; }
-@media (max-width: 520px) { .fc-callwin { width: min(260px, calc(100vw - 16px)); } .fc-callwin.compact { width: min(210px, calc(100vw - 16px)); } }
+.fc-callwin-body { display: flex; flex-direction: column; min-height: 0; }
+.fc-callwin.compact .fc-callwin-body { display: block; }
+.fc-callwin.compact .fc-callwin-stage { display: none; }
+.fc-callwin:not(.compact) .fc-callwin-compact-row { display: none; }
+.fc-callwin-camerr { position: absolute; left: 10px; right: 10px; bottom: 10px; font-size: 11px; color: #ffb4bd; background: rgba(240,97,109,.18); border: 1px solid rgba(240,97,109,.35); border-radius: 10px; padding: 8px 10px; text-align: center; }
+/* Full-screen view keeps the same <video> elements mounted — only layout changes. */
+.fc-callwin.full { position: fixed; inset: 0; right: auto; bottom: auto; width: 100%; height: 100%; border-radius: 0; border: none; z-index: 100; }
+.fc-callwin.full .fc-callwin-head { cursor: default; }
+.fc-callwin.full .fc-callwin-body { flex: 1; min-height: 0; }
+.fc-callwin.full .fc-callwin-stage { flex: 1; min-height: 0; display: flex; }
+.fc-callwin.full .fc-callwin-remote { flex: 1; aspect-ratio: auto; }
+.fc-callwin.full .fc-callwin-selfvideo { width: clamp(120px, 22vw, 220px); }
+.fc-callwin.full .fc-callwin-controls { justify-content: center; gap: 10px; }
+@media (max-width: 520px) { .fc-callwin { width: min(260px, calc(100vw - 16px)); } .fc-callwin.compact { width: min(210px, calc(100vw - 16px)); } .fc-callwin.full .fc-callwin-selfvideo { width: 110px; } }
 /* ---- Incoming call screen ---- */
 .fc-incoming-call { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; background: rgba(6,6,10,.72); backdrop-filter: blur(3px); }
 .fc-incoming-card { width: min(330px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 26px 22px; background: #15151d; border: 1px solid rgba(255,255,255,.12); border-radius: 20px; box-shadow: 0 30px 80px rgba(0,0,0,.7); }
@@ -634,23 +655,75 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-input-prefixed > span { color: #8b87a0; font-size: 14px; }
 
 /* ===== Profile cosmetics ===== */
-.pf-avatar-wrap { position: relative; display: inline-grid; place-items: center; border-radius: 50%; flex-shrink: 0; }
+.pf-avatar-wrap { position: relative; display: inline-grid; place-items: center; border-radius: 50%; flex-shrink: 0; isolation: isolate; overflow: visible; }
 .pf-frame { position: absolute; inset: -3px; border-radius: 50%; }
 .pf-frame.animated { animation: pf-frame-spin 6s linear infinite; }
 @keyframes pf-frame-spin { to { filter: hue-rotate(360deg); } }
 .pf-avatar { position: absolute; inset: 0; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; overflow: hidden; }
 .pf-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
-.pf-decoration { position: absolute; top: -6px; right: -6px; font-size: 14px; line-height: 1; }
-.pf-decoration.animated { animation: pf-dec-bob 2.4s ease-in-out infinite; }
-@keyframes pf-dec-bob { 0%,100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-3px) rotate(6deg); } }
-.pf-presence { position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #121218; }
-.pf-effect { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
-.pf-particle { position: absolute; top: -10%; color: rgba(255,255,255,.75); animation-name: pf-fall; animation-timing-function: linear; animation-iteration-count: infinite; }
-@keyframes pf-fall { 0% { transform: translateY(-10%) rotate(0); opacity: 0; } 15% { opacity: .9; } 100% { transform: translateY(320%) rotate(220deg); opacity: 0; } }
-.pf-effect-glow { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 50% 0%, rgba(139,92,246,.5), transparent 65%); animation: pf-glow 3.2s ease-in-out infinite; }
-@keyframes pf-glow { 0%,100% { opacity: .45; } 50% { opacity: .9; } }
-.pf-effect-aurora { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(120deg, rgba(52,211,153,.35), rgba(139,92,246,.35), rgba(34,211,238,.3)); background-size: 220% 220%; animation: pf-aurora 9s ease infinite; }
-@keyframes pf-aurora { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+/* Scoped layer order: frame → avatar → decoration → presence. No global z-index. */
+.pf-layer-frame { z-index: 0; }
+.pf-layer-avatar { z-index: 1; }
+.pf-deco { z-index: 2; }
+.pf-layer-presence { z-index: 3; position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #121218; }
+
+/* ---- Animated decorations (particle systems around the avatar) ---- */
+.pf-deco { position: absolute; left: 50%; top: 50%; width: var(--box); height: var(--box); transform: translate(-50%, -50%); pointer-events: none; }
+.pf-deco-inner { position: absolute; inset: 0; }
+.pf-deco-p { position: absolute; display: block; width: var(--sz); height: var(--sz); background: var(--c); opacity: var(--o); will-change: transform, opacity; }
+.pf-deco-loop { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 2px solid; border-radius: 50%; border-right-color: transparent; border-bottom-color: transparent; animation-name: pf-deco-rotate; animation-timing-function: linear; animation-iteration-count: infinite; }
+@keyframes pf-deco-rotate { to { transform: rotate(360deg); } }
+.pf-deco-orbit .pf-deco-inner { animation: pf-deco-rotate var(--spin) linear infinite; }
+.pf-deco-orbit .pf-deco-p { left: 50%; top: 50%; margin-left: calc(var(--sz) / -2); margin-top: calc(var(--sz) / -2); transform: rotate(var(--a)) translateX(var(--r)); animation: pf-deco-twinkle var(--dur) ease-in-out infinite var(--delay); }
+.pf-deco-twinkle .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-twinkle var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-deco-twinkle { 0%, 100% { transform: scale(.45); opacity: calc(var(--o) * .3); } 50% { transform: scale(1.15); opacity: var(--o); } }
+.pf-deco-rise .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-rise var(--dur) linear infinite var(--delay); }
+@keyframes pf-deco-rise { 0% { transform: translateY(55%) scale(.5); opacity: 0; } 15% { opacity: var(--o); } 100% { transform: translateY(calc(-1 * var(--box))) scale(1.1); opacity: 0; } }
+.pf-deco-fall .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-fall var(--dur) linear infinite var(--delay); }
+@keyframes pf-deco-fall { 0% { transform: translateY(calc(-1 * var(--box) * .55)) rotate(0); opacity: 0; } 12% { opacity: var(--o); } 100% { transform: translateY(calc(var(--box) * .6)) rotate(var(--rot)); opacity: 0; } }
+.pf-deco-drift .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-drift var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-deco-drift { 0%, 100% { transform: translate3d(calc(var(--box) * -.07), 0, 0) scale(.85); opacity: calc(var(--o) * .5); } 50% { transform: translate3d(calc(var(--box) * .07), calc(var(--box) * -.05), 0) scale(1.12); opacity: var(--o); } }
+.pf-deco-pulse .pf-deco-p { left: var(--x); top: var(--y); animation: pf-deco-pulse var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-deco-pulse { 0%, 100% { transform: scale(.65); opacity: calc(var(--o) * .3); } 50% { transform: scale(1.15); opacity: var(--o); } }
+/* Reduced motion: shapes stay put but are visible, nothing animates. */
+.pf-deco.reduced *, .pf-effect.reduced *, .pf-effect-glow.reduced, .pf-effect-aurora.reduced { animation: none !important; }
+
+/* ---- Decoration shapes (pure CSS, no emoji) ---- */
+.s-dot { border-radius: 50%; }
+.s-square { border-radius: 2px; }
+.s-ring { border-radius: 50%; background: transparent; border: 1.5px solid var(--c); }
+.s-star { clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); }
+.s-leaf { border-radius: 60% 4% 60% 4%; }
+.s-blossom { border-radius: 50% 4% 50% 4%; }
+.s-flame { border-radius: 50% 50% 45% 45% / 70% 70% 35% 35%; }
+.s-bolt { clip-path: polygon(58% 0%, 18% 56%, 44% 56%, 34% 100%, 84% 42%, 54% 42%); }
+.s-flake { clip-path: polygon(50% 0%, 58% 40%, 100% 50%, 58% 60%, 50% 100%, 42% 60%, 0% 50%, 42% 40%); }
+.s-crown { clip-path: polygon(0% 100%, 0% 24%, 22% 58%, 50% 0%, 78% 58%, 100% 24%, 100% 100%); }
+.s-pumpkin { border-radius: 44% / 52%; }
+.s-heart { clip-path: polygon(50% 100%, 8% 55%, 0% 30%, 14% 6%, 38% 0%, 50% 16%, 62% 0%, 86% 6%, 100% 30%, 92% 55%); }
+.s-cloud { border-radius: 50%; filter: blur(3px); }
+.s-bar { width: 6%; height: 26%; border-radius: 1px; }
+
+/* ---- Animated banner effects (behind banner content) ---- */
+.pf-effect { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+.pf-fx-p { position: absolute; display: block; width: var(--sz); height: var(--sz); background: var(--c); opacity: var(--o); will-change: transform, opacity; }
+.pf-fx-drift .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-drift var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-fx-drift { 0%, 100% { transform: translate3d(-16px, 0, 0) scale(.8); opacity: calc(var(--o) * .4); } 50% { transform: translate3d(16px, -12px, 0) scale(1.12); opacity: var(--o); } }
+.pf-fx-twinkle .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-twinkle var(--dur) ease-in-out infinite var(--delay); }
+@keyframes pf-fx-twinkle { 0%, 100% { transform: scale(.3); opacity: 0; } 50% { transform: scale(1); opacity: var(--o); } }
+.pf-fx-fall .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-fall var(--dur) linear infinite var(--delay); }
+@keyframes pf-fx-fall { 0% { transform: translateY(-160%) rotate(0); opacity: 0; } 12% { opacity: var(--o); } 100% { transform: translateY(260%) rotate(var(--rot)); opacity: 0; } }
+.pf-fx-rise .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-rise var(--dur) linear infinite var(--delay); }
+@keyframes pf-fx-rise { 0% { transform: translateY(180%) scale(.5); opacity: 0; } 14% { opacity: var(--o); } 100% { transform: translateY(-300%) scale(1.1); opacity: 0; } }
+.pf-fx-digital .pf-fx-p { left: var(--x); top: var(--y); animation: pf-fx-digital var(--dur) linear infinite var(--delay); }
+@keyframes pf-fx-digital { 0% { transform: translateY(-180%) scaleY(.4); opacity: 0; } 22% { opacity: var(--o); } 100% { transform: translateY(340%) scaleY(1.5); opacity: 0; } }
+.pf-effect-glow { position: absolute; inset: 0; pointer-events: none; z-index: 0; background: radial-gradient(circle at 50% 0%, rgba(139,92,246,.5), transparent 65%); animation: pf-glow 3.2s ease-in-out infinite; }
+@keyframes pf-glow { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
+.pf-effect-aurora { position: absolute; inset: 0; pointer-events: none; z-index: 0; background: linear-gradient(120deg, rgba(52,211,153,.35), rgba(139,92,246,.35), rgba(34,211,238,.3)); background-size: 220% 220%; animation: pf-aurora 9s ease infinite; }
+@keyframes pf-aurora { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@media (prefers-reduced-motion: reduce) {
+  .pf-deco *, .pf-effect * { animation: none !important; }
+}
 .pf-name { font-size: 19px; font-weight: 700; display: inline-block; }
 .pf-plate { padding: 1px 7px; border-radius: 6px; display: inline-block; }
 .pf-handle { font-size: 12px; color: #8b87a0; }
@@ -667,8 +740,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .pf-activity-label { font-size: 10px; color: #8b87a0; text-transform: capitalize; }
 .pf-popup { position: fixed; z-index: 88; width: min(340px, calc(100vw - 24px)); right: 18px; bottom: 18px; background: #14141b; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.65); overflow: hidden; }
 .pf-popup-close { position: absolute; top: 10px; right: 10px; z-index: 3; color: #d8d4e6; background: rgba(0,0,0,.4); border-radius: 8px; padding: 4px; }
-.pf-popup-banner { position: relative; height: 92px; background: linear-gradient(135deg,#7c5cf6,#1b1a24); }
-.pf-popup-banner img { width: 100%; height: 100%; object-fit: cover; }
+.pf-popup-banner { position: relative; isolation: isolate; height: clamp(78px, 22vw, 108px); background: linear-gradient(135deg,#7c5cf6,#1b1a24); overflow: hidden; }
+.pf-popup-banner img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
 .pf-popup-body { padding: 0 18px 18px; }
 .pf-popup-avatar-row { display: flex; align-items: flex-end; justify-content: space-between; margin-top: -38px; }
 .pf-presence-label { font-size: 10px; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.07); color: #b7b1cc; }
@@ -746,8 +819,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .pf-more-menu button { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; padding: 7px 9px; border-radius: 6px; font-size: 12px; color: #c9c5da; }
 .pf-more-menu button:hover { background: rgba(255,255,255,.06); }
 .pf-more-menu button.danger { color: #f0616d; }
-.pf-page-banner { position: relative; height: 190px; border-radius: 16px; overflow: hidden; background: linear-gradient(135deg,#7c5cf6,#1b1a24); }
-.pf-page-banner img { width: 100%; height: 100%; object-fit: cover; }
+.pf-page-banner { position: relative; isolation: isolate; height: clamp(140px, 26vw, 230px); border-radius: 16px; overflow: hidden; background: linear-gradient(135deg,#7c5cf6,#1b1a24); }
+.pf-page-banner img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
 .pf-page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: -54px; padding: 0 8px; }
 .pf-page-actions { display: flex; gap: 8px; }
 .pf-page-names { margin: 12px 0 0 8px; }
@@ -756,8 +829,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .pf-widget { border: 1px solid rgba(255,255,255,.07); border-radius: 14px; background: #14141b; padding: 16px; margin-top: 12px; }
 .pf-widget h3 { font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: #8b87a0; margin-bottom: 8px; }
 .pf-preview { border-radius: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,.09); margin-bottom: 20px; background: #0b0b10; }
-.pf-preview-banner { position: relative; height: 92px; background: linear-gradient(135deg,#7c5cf6,#1b1a24); }
-.pf-preview-banner img { width: 100%; height: 100%; object-fit: cover; }
+.pf-preview-banner { position: relative; isolation: isolate; height: clamp(78px, 22vw, 108px); background: linear-gradient(135deg,#7c5cf6,#1b1a24); overflow: hidden; }
+.pf-preview-banner img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
 .pf-preview-body { display: flex; align-items: center; gap: 14px; padding: 0 18px; margin-top: -28px; }
 .pf-preview-note { font-size: 10px; color: #7c7890; padding: 12px 18px; }
 .pf-swatch-row { display: flex; flex-wrap: wrap; gap: 8px; }

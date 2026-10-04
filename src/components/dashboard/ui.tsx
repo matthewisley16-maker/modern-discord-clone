@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import ProfileDecoration from "@/components/profile/ProfileDecoration";
 
 export const AVATAR_BG: Record<string, string> = {
   violet: "#7c5cf6", indigo: "#6366f1", sky: "#0ea5e9",
@@ -54,6 +55,8 @@ export function Avatar({
   size = 36,
   url,
   lastSeen,
+  decorationId,
+  reducedMotion,
 }: {
   name: string;
   color?: string;
@@ -61,6 +64,8 @@ export function Avatar({
   size?: number;
   url?: string | null;
   lastSeen?: number | null;
+  decorationId?: string | null;
+  reducedMotion?: boolean;
 }) {
   const key = color ?? colorFor(name);
   const meta = presence ? PRESENCE_META[presence] : undefined;
@@ -68,6 +73,7 @@ export function Avatar({
   return (
     <span className="fc-avatar" style={{ width: size, height: size, background: url ? undefined : AVATAR_BG[key] ?? "#7c5cf6" }} title={title}>
       {url ? <img src={url} alt="" /> : initialsOf(name)}
+      <ProfileDecoration decorationId={decorationId} size={size} reducedMotion={reducedMotion} />
       {meta && <i style={{ background: meta.color }} />}
     </span>
   );

@@ -22,7 +22,7 @@ export const global = query({
     if (!userId || term.length < 1) return empty;
     const want = filter ?? "all";
     const out: {
-      people: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null }[];
+      people: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null; decorationId: string | null }[];
       communities: { serverId: string; name: string; description: string; iconColor: string; memberCount: number }[];
       messages: { messageId: string; body: string; author: string; channelName: string; communityName: string; createdAt: number }[];
       channels: { channelId: string; name: string; communityName: string }[];
@@ -43,6 +43,7 @@ export const global = query({
           displayName: profile.displayName,
           avatarColor: profile.avatarColor ?? "violet",
           avatarUrl: await avatarUrlOf(ctx, profile.userId),
+          decorationId: profile.decorationId ?? null,
         });
         if (out.people.length >= 10) break;
       }

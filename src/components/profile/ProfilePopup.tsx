@@ -85,6 +85,7 @@ export default function ProfilePopup({
             presence={profile.presence}
             frameId={profile.frameId}
             decorationId={profile.decorationId}
+            reducedMotion={appearance?.reducedMotion}
             size={76}
           />
           <span className={`pf-presence-label ${profile.presence}`}>

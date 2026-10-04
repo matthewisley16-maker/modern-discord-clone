@@ -214,5 +214,8 @@ await expectOk("owner deletes a voice channel and occupants are removed", async 
   }
 });
 
+// Clean up the test community so it never lingers in the database.
+try { await A.client.mutation(api.communities.deleteCommunity, { serverId }); } catch {}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

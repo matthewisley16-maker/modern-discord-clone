@@ -22,6 +22,7 @@ async function publicCard(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"
     presence: status,
     lastSeen,
     customStatus: profile?.customStatus ?? "",
+    decorationId: profile?.decorationId ?? null,
   };
 }
 

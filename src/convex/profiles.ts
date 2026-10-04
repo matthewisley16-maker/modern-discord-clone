@@ -16,6 +16,28 @@ const VALID_BADGE = new Set(["badge_early","badge_verified","badge_developer","b
 const VALID_WIDGET = new Set(["about","activity","communities","mutuals","friends","interests","links","stats","custom"]);
 const VISIBILITY = new Set(["everyone","friends","mutual","none"]);
 
+/** Palette for every profile theme, so colours resolve even for legacy rows. */
+const THEME_PALETTE: Record<string, { primary: string; accent: string; background: string }> = {
+  theme_midnight: { primary: "#8b5cf6", accent: "#a78bfa", background: "#0b0b10" },
+  theme_ocean: { primary: "#0ea5e9", accent: "#22d3ee", background: "#06121c" },
+  theme_sunset: { primary: "#f97316", accent: "#fbbf24", background: "#170c08" },
+  theme_forest: { primary: "#10b981", accent: "#6ee7b7", background: "#06120d" },
+  theme_lavender: { primary: "#a78bfa", accent: "#e9d5ff", background: "#120e1c" },
+  theme_cherry: { primary: "#f472b6", accent: "#fda4af", background: "#180a12" },
+  theme_neon: { primary: "#22d3ee", accent: "#a3e635", background: "#050f12" },
+  theme_galaxy: { primary: "#7c3aed", accent: "#c4b5fd", background: "#0a0618" },
+  theme_monochrome: { primary: "#e5e7eb", accent: "#9ca3af", background: "#0a0a0a" },
+  theme_cyber: { primary: "#f472b6", accent: "#22d3ee", background: "#0d0418" },
+  theme_pastel: { primary: "#f9a8d4", accent: "#a5f3fc", background: "#141018" },
+  theme_ember: { primary: "#ef4444", accent: "#fb923c", background: "#160808" },
+  theme_aurora: { primary: "#34d399", accent: "#a78bfa", background: "#06120f" },
+};
+
+/** Resolve the effective palette for a theme id (falls back to Midnight). */
+function themePalette(theme: string | undefined) {
+  return THEME_PALETTE[theme ?? "theme_midnight"] ?? THEME_PALETTE.theme_midnight;
+}
+
 function assertIn(set: Set<string>, value: string | undefined, label: string) {
   if (value !== undefined && value !== "" && !set.has(value)) {
     throw new Error(`Unknown ${label}.`);
@@ -125,7 +147,7 @@ async function buildProfile(ctx: QueryCtx, userId: Id<"users">, viewerId: Id<"us
     interests: profile?.interests ?? [],
     socialLinks: canSee("socialLinks") ? (profile?.socialLinks ?? []) : [],
     theme: profile?.theme ?? "theme_midnight",
-    themeColors: profile?.themeColors ?? null,
+    themeColors: profile?.themeColors ?? themePalette(profile?.theme),
     decorationId: profile?.decorationId ?? null,
     frameId: profile?.frameId ?? null,
     effectId: profile?.effectId ?? null,
@@ -237,7 +259,12 @@ export const updateCustomization = mutation({
     assertIn(VALID_FONT, args.nameFont, "font");
     assertIn(VALID_NAME_EFFECT, args.nameEffect, "name effect");
 
-    if (args.theme !== undefined) patch.theme = args.theme;
+    if (args.theme !== undefined) {
+      patch.theme = args.theme;
+      // Keep the stored palette in sync with the chosen theme (unless the
+      // caller supplied an explicit custom palette below).
+      if (args.themeColors === undefined) patch.themeColors = themePalette(args.theme);
+    }
     if (args.decorationId !== undefined) patch.decorationId = args.decorationId;
     if (args.frameId !== undefined) patch.frameId = args.frameId;
     if (args.effectId !== undefined) patch.effectId = args.effectId;

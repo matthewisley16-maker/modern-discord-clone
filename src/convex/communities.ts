@@ -42,6 +42,7 @@ async function memberCard(ctx: QueryCtx, userId: Id<"users">, role?: string, tim
     displayName: profile?.displayName ?? user?.name ?? "Freecord member",
     avatarColor: profile?.avatarColor ?? "violet",
     avatarUrl: await avatarUrlOf(ctx, userId),
+    decorationId: profile?.decorationId ?? null,
     presence: status,
     lastSeen,
     role: role ?? "member",

@@ -167,5 +167,8 @@ await expectTrue("a non-member gets no server suggestions", async () => {
   return list.length === 0;
 });
 
+// Clean up the test community so it never lingers in the database.
+try { await A.client.mutation(api.communities.deleteCommunity, { serverId }); } catch {}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

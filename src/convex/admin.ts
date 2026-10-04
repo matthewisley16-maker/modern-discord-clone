@@ -1,6 +1,6 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { currentUserId, displayNameOf, audit } from "./lib";
 import { ROLES } from "./schema";
 
@@ -132,6 +132,55 @@ export const resolveReport = mutation({
     await requireAdmin(ctx, userId);
     await ctx.db.patch(reportId, { status });
     await audit(ctx, `report.${status}`, userId, `Report ${reportId} marked ${status}`, "report", reportId);
+  },
+});
+
+/**
+ * Communities created by the automated dev/test scripts. These are matched by
+ * exact name patterns only, so real user communities (whatever they are
+ * called) are never touched. Run once with:
+ *   npx convex run admin:purgeTestCommunities
+ */
+const TEST_COMMUNITY_PATTERNS = [
+  /^Private Guild( [a-z0-9]{6,})?$/i,
+  /^Avatar Guild( [a-z0-9]{6,})?$/i,
+  /^Presence( [a-z0-9]{6,})?$/i,
+  /^Mention Guild( [a-z0-9]{6,})?$/i,
+  /^DelTest( [a-z0-9]{6,})?$/i,
+  /^Leave Test( [a-z0-9]{6,})?$/i,
+  /^Fix Test( [a-z0-9]{6,})?$/i,
+  /^Public Test( [a-z0-9]{6,})?$/i,
+  /^My Public Community( [a-z0-9]{6,})?$/i,
+  /^Secret Hideout [a-z0-9]{6,}$/i,
+];
+
+export const purgeTestCommunities = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const servers = await ctx.db.query("servers").collect();
+    const removed: string[] = [];
+    for (const server of servers) {
+      if (!TEST_COMMUNITY_PATTERNS.some((re) => re.test(server.name))) continue;
+      const channels = await ctx.db.query("channels").withIndex("by_server", (q) => q.eq("serverId", server._id)).collect();
+      for (const channel of channels) {
+        const messages = await ctx.db.query("messages").withIndex("by_channel", (q) => q.eq("channelId", channel._id)).collect();
+        for (const m of messages) {
+          for (const a of await ctx.db.query("attachments").withIndex("by_message", (q) => q.eq("messageId", m._id)).collect()) await ctx.db.delete(a._id);
+          for (const r of await ctx.db.query("reactions").withIndex("by_message", (q) => q.eq("messageId", m._id)).collect()) await ctx.db.delete(r._id);
+          await ctx.db.delete(m._id);
+        }
+        for (const vs of await ctx.db.query("voiceSessions").withIndex("by_channel", (q) => q.eq("channelId", channel._id)).collect()) await ctx.db.delete(vs._id);
+        await ctx.db.delete(channel._id);
+      }
+      for (const cat of await ctx.db.query("channelCategories").withIndex("by_server", (q) => q.eq("serverId", server._id)).collect()) await ctx.db.delete(cat._id);
+      for (const m of await ctx.db.query("memberships").withIndex("by_server", (q) => q.eq("serverId", server._id)).collect()) await ctx.db.delete(m._id);
+      for (const r of await ctx.db.query("communityRoles").withIndex("by_server", (q) => q.eq("serverId", server._id)).collect()) await ctx.db.delete(r._id);
+      for (const i of await ctx.db.query("invites").withIndex("by_server", (q) => q.eq("serverId", server._id)).collect()) await ctx.db.delete(i._id);
+      for (const b of await ctx.db.query("bans").withIndex("by_server", (q) => q.eq("serverId", server._id)).collect()) await ctx.db.delete(b._id);
+      await ctx.db.delete(server._id);
+      removed.push(server.name);
+    }
+    return { removed, count: removed.length };
   },
 });
 

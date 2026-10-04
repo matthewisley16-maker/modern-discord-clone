@@ -373,7 +373,7 @@ export const searchUsers = query({
     const term = q.trim().toLowerCase();
     if (term.length < 1) return [];
     const all = await ctx.db.query("profiles").take(500);
-    const results: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null; presence: string; lastSeen: number | null }[] = [];
+    const results: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null; decorationId: string | null; presence: string; lastSeen: number | null }[] = [];
     for (const profile of all) {
       const user = await ctx.db.get(profile.userId);
       if (!user) continue;
@@ -390,6 +390,7 @@ export const searchUsers = query({
         displayName: profile.displayName,
         avatarColor: profile.avatarColor ?? "violet",
         avatarUrl: await avatarUrlOf(ctx, profile.userId),
+        decorationId: profile.decorationId ?? null,
         presence: status,
         lastSeen,
       });

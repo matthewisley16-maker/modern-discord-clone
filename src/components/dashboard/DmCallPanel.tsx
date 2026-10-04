@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -18,15 +18,28 @@ function fmtDuration(seconds: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/** Play a media element and swallow autoplay rejections (never loops/retries). */
+function safePlay(el: HTMLMediaElement | null) {
+  if (!el) return;
+  const p = el.play();
+  if (p && typeof p.catch === "function") p.catch(() => {});
+}
+
 type View = "compact" | "float" | "full";
 
 /**
  * A real 1:1 call inside a DM conversation, rendered as a DRAGGABLE floating
  * window for both audio and video calls.
  *
- * Audio/video are peer-to-peer over WebRTC; signaling is relayed through Convex
- * scoped to the conversation. The component is mounted at the app shell level
- * and stays mounted while the user navigates, so the call keeps running.
+ * Media lifecycle is deliberately stable:
+ *  - `getUserMedia` runs exactly once (guarded by `initRef`).
+ *  - One `RTCPeerConnection` per call; `ontrack` is registered once.
+ *  - The `<video>` elements are mounted for the whole call and only ever have
+ *    `srcObject` assigned when the actual stream instance changes.
+ *  - Camera/mic toggles operate on the existing tracks' `enabled` flag.
+ *  - Cleanup only happens when the component actually unmounts (call ended).
+ * Because of this, navigating, minimizing, dragging or muting never restarts
+ * video.
  */
 export default function DmCallPanel({
   conversationId,
@@ -62,163 +75,279 @@ export default function DmCallPanel({
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [connection, setConnection] = useState<"connecting" | "connected" | "lost">("connecting");
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [view, setView] = useState<View>(minimized ? "compact" : "float");
   const [pos, setPos] = useState<{ x: number; y: number } | null>(savedPos);
   const [dragging, setDragging] = useState(false);
 
-  const localStream = useRef<MediaStream | null>(null);
+  // Streams are held in state so the video elements can attach in an effect —
+  // the only thing that ever reassigns `srcObject`.
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const audioEl = useRef<HTMLAudioElement | null>(null);
+  const initRef = useRef(false);
+  const processedSignals = useRef<Set<string>>(new Set());
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
+  const remoteDescSet = useRef(false);
+  const restartCount = useRef(0);
+
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const audioEl = useRef<HTMLAudioElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
-  const startedRef = useRef(false);
 
-  // Call duration once connected.
+  // Keep the latest mutation in a ref so it never forces the init effect to rerun.
+  const sendSignalRef = useRef(sendSignal);
+  useEffect(() => { sendSignalRef.current = sendSignal; }, [sendSignal]);
+
+  const send = useCallback((to: Id<"users">, kind: "offer" | "answer" | "candidate", payload: string) => {
+    return sendSignalRef.current({ conversationId, toUserId: to, kind, payload }).catch(() => {});
+  }, [conversationId]);
+
+  const refreshRemoteVideo = useCallback(() => {
+    const rs = remoteStreamRef.current;
+    setRemoteHasVideo(Boolean(rs && rs.getVideoTracks().some((t) => t.readyState === "live")));
+  }, []);
+
+  // ---- Call duration once connected ----
   useEffect(() => {
     if (connection !== "connected") return;
     const t = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(t);
   }, [connection]);
 
-  // Keep speaker mute applied to the (always-mounted) remote audio sink.
+  // ---- Speaker mute on the always-mounted remote audio sink ----
   useEffect(() => { if (audioEl.current) audioEl.current.muted = speakerMuted; }, [speakerMuted]);
 
-  // Acquire local media and build the peer connection once.
+  // ---- Attach streams to the (permanent) video elements ----
   useEffect(() => {
-    let cancelled = false;
+    const el = localVideoRef.current;
+    if (el && el.srcObject !== localStream) { el.srcObject = localStream; safePlay(el); }
+  }, [localStream]);
+  useEffect(() => {
+    const el = remoteVideoRef.current;
+    if (el && el.srcObject !== remoteStream) { el.srcObject = remoteStream; safePlay(el); }
+    const a = audioEl.current;
+    if (a && a.srcObject !== remoteStream) { a.srcObject = remoteStream; safePlay(a); }
+  }, [remoteStream]);
+
+  // ---- Acquire local media + build the peer connection exactly once ----
+  useEffect(() => {
+    if (initRef.current) return;
+    initRef.current = true;
+    let disposed = false;
+    const wantVideo = media === "video";
+
+    // One persistent remote stream; incoming tracks are added to it in place.
+    const remote = new MediaStream();
+    remoteStreamRef.current = remote;
+    setRemoteStream(remote);
+
     (async () => {
       let stream: MediaStream | null = null;
+      let permissionDenied = false;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: media === "video" });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: wantVideo });
       } catch (err) {
         const name = (err as DOMException)?.name;
-        // Audio and video are independent: retry audio-only if video failed.
-        if (media === "video" && name !== "NotAllowedError") {
-          try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); setCameraOn(false); } catch { /* fall through */ }
-        }
-        if (!stream) {
-          toast.error(name === "NotAllowedError" ? "Microphone permission was denied — allow access to talk." : "Could not access your microphone.");
-          setConnection("lost");
-          return;
+        permissionDenied = name === "NotAllowedError" || name === "SecurityError";
+        // Audio and video are independent: fall back to audio-only when the
+        // camera is unavailable but the mic is fine (and vice-versa).
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          if (wantVideo) setCameraError("Camera unavailable — you can retry from the camera button.");
+        } catch {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: wantVideo });
+            setMuted(true);
+          } catch { stream = null; }
         }
       }
-      if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
-      localStream.current = stream;
-      setCameraOn(stream.getVideoTracks().length > 0);
+      if (disposed) { stream?.getTracks().forEach((t) => t.stop()); return; }
+      if (!stream) {
+        setConnection("lost");
+        setCameraError(permissionDenied ? "Microphone permission was denied." : "Could not access your microphone or camera.");
+        toast.error(permissionDenied ? "Microphone permission was denied — allow access to talk." : "Could not access your device.");
+        return;
+      }
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      const hasVideo = stream.getVideoTracks().length > 0;
+      setCameraOn(hasVideo);
+      if (wantVideo && !hasVideo) setCameraError("Camera unavailable — you can retry from the camera button.");
 
       const pc = new RTCPeerConnection(ICE);
       pcRef.current = pc;
       stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
 
-      const remote = new MediaStream();
+      // Registered exactly once.
       pc.ontrack = (e) => {
-        e.streams[0]?.getTracks().forEach((t) => remote.addTrack(t));
-        remoteStreamRef.current = remote;
-        if (audioEl.current) { audioEl.current.srcObject = remote; void audioEl.current.play().catch(() => {}); }
-        if (remoteVideoRef.current) { remoteVideoRef.current.srcObject = remote; void remoteVideoRef.current.play().catch(() => {}); }
-        setRemoteHasVideo(remote.getVideoTracks().length > 0);
+        const rs = remoteStreamRef.current;
+        if (!rs) return;
+        const incoming = e.streams[0]?.getTracks() ?? (e.track ? [e.track] : []);
+        for (const track of incoming) {
+          if (!rs.getTracks().some((x) => x.id === track.id)) rs.addTrack(track);
+          track.onmute = refreshRemoteVideo;
+          track.onunmute = refreshRemoteVideo;
+          track.onended = refreshRemoteVideo;
+        }
+        refreshRemoteVideo();
       };
       pc.onicecandidate = (e) => {
-        if (e.candidate) sendSignal({ conversationId, toUserId: peerId, kind: "candidate", payload: JSON.stringify(e.candidate) }).catch(() => {});
+        if (e.candidate) send(peerId, "candidate", JSON.stringify(e.candidate));
       };
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "connected") setConnection("connected");
-        else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") setConnection("lost");
+        const st = pc.connectionState;
+        if (st === "connected") setConnection("connected");
+        else if (st === "failed") {
+          setConnection("lost");
+          if (restartCount.current < 3) { restartCount.current += 1; try { pc.restartIce?.(); } catch { /* older browsers */ } }
+        }
+        // "disconnected" is often transient — do not tear anything down for it.
+      };
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") setConnection("connected");
+        else if (pc.iceConnectionState === "failed") {
+          setConnection("lost");
+          if (restartCount.current < 3) { restartCount.current += 1; try { pc.restartIce?.(); } catch { /* noop */ } }
+        }
       };
 
       // The user with the smaller id initiates, so both sides agree on who offers.
-      if (myUserId < peerId && !startedRef.current) {
-        startedRef.current = true;
+      if (myUserId < peerId) {
         try {
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
-          await sendSignal({ conversationId, toUserId: peerId, kind: "offer", payload: JSON.stringify(offer) });
+          await send(peerId, "offer", JSON.stringify(offer));
         } catch { /* retried when the other side signals */ }
       }
     })();
 
     return () => {
-      cancelled = true;
-      pcRef.current?.close();
+      disposed = true;
+      initRef.current = false;
+      try { pcRef.current?.close(); } catch { /* noop */ }
       pcRef.current = null;
-      localStream.current?.getTracks().forEach((t) => t.stop());
-      localStream.current = null;
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+      remoteStreamRef.current = null;
+      processedSignals.current.clear();
+      pendingCandidates.current = [];
+      remoteDescSet.current = false;
+      restartCount.current = 0;
     };
-  }, [conversationId, peerId, myUserId, media, sendSignal]);
+    // Intentionally stable: a call's identity never changes while it is mounted.
+  }, [conversationId, peerId, myUserId, media, send, refreshRemoteVideo]);
 
-  // Apply incoming signaling.
+  // ---- Apply incoming signaling (each message exactly once) ----
   useEffect(() => {
     if (!signals || !pcRef.current) return;
+    const pc = pcRef.current;
+    const polite = myUserId > peerId;
     (async () => {
-      const pc = pcRef.current!;
       for (const s of signals) {
+        if (processedSignals.current.has(s._id)) continue;
+        processedSignals.current.add(s._id);
         try {
           const data = JSON.parse(s.payload);
           if (s.kind === "offer") {
+            // Perfect-negotiation glare handling: the polite peer yields.
+            if (pc.signalingState !== "stable" && polite) {
+              await clearSignal({ signalId: s._id });
+              continue;
+            }
             await pc.setRemoteDescription(new RTCSessionDescription(data));
+            remoteDescSet.current = true;
+            for (const c of pendingCandidates.current.splice(0)) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* noop */ } }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await sendSignal({ conversationId, toUserId: s.fromUserId as Id<"users">, kind: "answer", payload: JSON.stringify(answer) });
+            await send(s.fromUserId as Id<"users">, "answer", JSON.stringify(answer));
           } else if (s.kind === "answer") {
-            if (pc.signalingState !== "stable") await pc.setRemoteDescription(new RTCSessionDescription(data));
+            if (pc.signalingState === "have-local-offer") {
+              await pc.setRemoteDescription(new RTCSessionDescription(data));
+              remoteDescSet.current = true;
+              for (const c of pendingCandidates.current.splice(0)) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* noop */ } }
+            }
           } else if (s.kind === "candidate") {
-            await pc.addIceCandidate(new RTCIceCandidate(data));
+            if (remoteDescSet.current) { try { await pc.addIceCandidate(new RTCIceCandidate(data)); } catch { /* noop */ } }
+            else pendingCandidates.current.push(data);
           }
         } catch { /* ignore out-of-order signaling */ }
         await clearSignal({ signalId: s._id });
       }
     })();
-  }, [signals, conversationId, sendSignal, clearSignal]);
+  }, [signals, clearSignal, send, myUserId, peerId]);
 
+  // ---- Controls (operate on existing tracks; never rebuild the connection) ----
   function toggleMute() {
     const next = !muted;
     setMuted(next);
-    localStream.current?.getAudioTracks().forEach((t) => (t.enabled = !next));
+    localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !next));
   }
 
   async function toggleCamera() {
     const pc = pcRef.current;
     if (!pc) return;
-    if (cameraOn) {
-      for (const track of localStream.current?.getVideoTracks() ?? []) {
-        const sender = pc.getSenders().find((s) => s.track === track);
-        if (sender) pc.removeTrack(sender);
-        track.stop();
-        localStream.current?.removeTrack(track);
-      }
-      if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    const stream = localStreamRef.current;
+    const existing = stream?.getVideoTracks()[0];
+
+    if (cameraOn && existing) {
+      existing.enabled = false; // keep the track and connection alive
       setCameraOn(false);
       return;
     }
+    if (existing && existing.readyState === "live") {
+      existing.enabled = true;
+      setCameraOn(true);
+      setCameraError(null);
+      return;
+    }
+
+    setCameraError(null);
     try {
       const vs = await navigator.mediaDevices.getUserMedia({ video: true });
       const track = vs.getVideoTracks()[0];
-      if (!track) return;
-      if (!localStream.current) localStream.current = new MediaStream();
-      localStream.current.addTrack(track);
-      const existing = pc.getSenders().find((s) => s.track?.kind === "video");
-      if (existing) await existing.replaceTrack(track);
-      else pc.addTrack(track, localStream.current);
-      if (localVideoRef.current) { localVideoRef.current.srcObject = localStream.current; void localVideoRef.current.play().catch(() => {}); }
+      if (!track) { setCameraError("No camera was found."); return; }
+      let s = stream;
+      if (!s) { s = new MediaStream(); localStreamRef.current = s; setLocalStream(s); }
+      s.addTrack(track);
+      const sender = pc.getSenders().find((x) => x.track?.kind === "video");
+      if (sender) {
+        // Replace in place — no renegotiation and no flicker on the remote side.
+        await sender.replaceTrack(track);
+      } else {
+        pc.addTrack(track, s);
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          await send(peerId, "offer", JSON.stringify(offer));
+        } catch { /* renegotiation retried */ }
+      }
       setCameraOn(true);
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await sendSignal({ conversationId, toUserId: peerId, kind: "offer", payload: JSON.stringify(offer) });
-      } catch { /* renegotiation retried */ }
     } catch (err) {
       const name = (err as DOMException)?.name;
+      setCameraError(name === "NotAllowedError" ? "Camera permission is required to turn your camera on." : "Could not access your camera.");
       toast.error(name === "NotAllowedError" ? "Camera permission is required to turn your camera on." : "Could not access your camera.");
     }
   }
 
-  // ---- Dragging (header only), clamped to the visible area ----
+  // ---- Keep the view in sync with the external minimize flag (nav changes) ----
+  useEffect(() => {
+    setView((v) => {
+      if (minimized) return v === "full" ? "compact" : v === "compact" ? "compact" : "compact";
+      return v === "compact" ? "float" : v;
+    });
+  }, [minimized]);
+
+  // ---- Dragging (window views only), clamped to the visible area ----
   function startDrag(e: React.PointerEvent) {
-    if ((e.target as HTMLElement).closest("button")) return; // buttons never drag
+    if (view === "full") return;
+    if ((e.target as HTMLElement).closest("button")) return;
     const el = rootRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -266,122 +395,85 @@ export default function DmCallPanel({
 
   const label = connection === "connected" ? "Connected" : connection === "connecting" ? "Connecting…" : "Connection lost";
   const title = media === "video" ? "Video Call" : "Voice Call";
-  const style = pos ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" } : undefined;
-
-  const remoteVideo = (
-    <video
-      className={`fc-callwin-video ${remoteHasVideo ? "" : "hidden"}`}
-      autoPlay
-      playsInline
-      ref={(el) => { if (el) { remoteVideoRef.current = el; el.srcObject = remoteStreamRef.current; void el.play().catch(() => {}); } }}
-    />
-  );
-  const remoteFallback = !remoteHasVideo && (
-    <span className="fc-callwin-avbig"><ProfileAvatar name={peerName} url={peerAvatarUrl} size={view === "full" ? 96 : 60} showPresence={false} /></span>
-  );
-  const localVideo = cameraOn && (
-    <video
-      className="fc-callwin-selfvideo"
-      autoPlay
-      playsInline
-      muted
-      ref={(el) => { if (el) { localVideoRef.current = el; el.srcObject = localStream.current; void el.play().catch(() => {}); } }}
-    />
-  );
-
-  const controls = (
-    <div className="fc-callwin-controls">
-      <button className={muted ? "active" : ""} onClick={toggleMute} aria-label={muted ? "Unmute microphone" : "Mute microphone"} title={muted ? "Unmute" : "Mute"}>
-        {muted ? <MicOff size={16} /> : <Mic size={16} />}
-      </button>
-      <button className={speakerMuted ? "active" : ""} onClick={() => setSpeakerMuted((v) => !v)} aria-label={speakerMuted ? "Turn sound on" : "Mute sound"} title={speakerMuted ? "Sound on" : "Mute sound"}>
-        {speakerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-      </button>
-      <button className={cameraOn ? "active" : ""} onClick={toggleCamera} aria-label="Toggle camera" title="Camera">
-        {cameraOn ? <Video size={16} /> : <VideoOff size={16} />}
-      </button>
-      {view === "full"
-        ? <button onClick={() => setViewAndNotify("float")} aria-label="Shrink call window" title="Shrink"><Minimize2 size={16} /></button>
-        : <button onClick={() => setViewAndNotify("full")} aria-label="Expand call window" title="Expand"><Maximize2 size={16} /></button>}
-      <button className="danger" onClick={onLeave} aria-label="End call" title="End call"><PhoneOff size={16} /></button>
-    </div>
-  );
+  const windowStyle = view === "full" ? undefined : pos ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" } : undefined;
 
   return (
     <>
-      {/* Always-mounted remote audio sink so audio keeps playing in every view. */}
+      {/* Always-mounted audio sink so audio keeps playing in every view. */}
       <audio ref={audioEl} autoPlay playsInline style={{ display: "none" }} />
 
-      {view === "full" ? (
-        <div className="fc-call-overlay" role="dialog" aria-label={`Call with ${peerName}`}>
-          <div className="vp-panel">
-            <header className="vp-head">
-              <div>
-                <p className="vp-title">{title} · {peerName}</p>
-                <p className={`vp-status ${connection}`}><span className="vp-dot" /> {label}{connection === "connected" ? ` · ${fmtDuration(seconds)}` : ""}</p>
-              </div>
-              <div className="vp-head-actions">
-                <Button size="sm" variant="outline" onClick={() => setViewAndNotify("float")}><Minimize2 className="mr-1 h-4 w-4" /> Shrink</Button>
-                <Button size="sm" variant="destructive" onClick={onLeave}><PhoneOff className="mr-1 h-4 w-4" /> End call</Button>
-              </div>
-            </header>
-            <div className="fc-callwin-stage">
-              <div className="fc-callwin-remote">
-                {remoteVideo}
-                {remoteFallback}
-                <span className="fc-callwin-tag">{peerName}{peerUsername ? ` · @${peerUsername}` : ""}</span>
-              </div>
-              <div className="fc-callwin-local">{localVideo}<span className="fc-callwin-tag">You</span></div>
-            </div>
-            {controls}
-          </div>
-        </div>
-      ) : (
-        <div
-          ref={rootRef}
-          className={`fc-callwin ${view === "compact" ? "compact" : ""} ${dragging ? "dragging" : ""} ${pos ? "" : "default-pos"}`}
-          style={style}
-          role="region"
-          aria-label={`Call with ${peerName}`}
-        >
-          <div className="fc-callwin-head" onPointerDown={startDrag} title="Drag to move">
-            <span className="fc-callwin-title">
-              <span className={`vp-mini-dot ${connection}`} />
-              {view === "compact" ? peerName : `${title} · ${peerName}`}
-            </span>
-            <span className="fc-callwin-head-btns">
-              {view === "float" && (
-                <button aria-label="Minimize call window" title="Minimize" onClick={(e) => { e.stopPropagation(); setViewAndNotify("compact"); }}><Minimize2 size={14} /></button>
-              )}
-              {view === "compact" && (
-                <button aria-label="Restore call window" title="Restore" onClick={(e) => { e.stopPropagation(); setViewAndNotify("float"); }}><Maximize2 size={14} /></button>
-              )}
-              <button className="danger" aria-label="End call" title="End call" onClick={(e) => { e.stopPropagation(); onLeave(); }}><X size={14} /></button>
-            </span>
-          </div>
-
-          <div className="fc-callwin-body">
-            {view === "compact" ? (
-              <div className="fc-callwin-compact-row">
-                <ProfileAvatar name={peerName} url={peerAvatarUrl} size={26} showPresence={false} />
-                <span className="fc-callwin-time">{connection === "connected" ? fmtDuration(seconds) : label}</span>
-              </div>
-            ) : (
-              <div className="fc-callwin-stage">
-                <div className="fc-callwin-remote">
-                  {remoteVideo}
-                  {remoteFallback}
-                  <span className="fc-callwin-tag">{peerName}{peerUsername ? ` · @${peerUsername}` : ""}</span>
-                </div>
-                <div className="fc-callwin-local">{localVideo}<span className="fc-callwin-tag">You</span></div>
-                <span className="fc-callwin-timer">{connection === "connected" ? fmtDuration(seconds) : label}</span>
-              </div>
+      <div
+        ref={rootRef}
+        className={`fc-callwin ${view} ${dragging ? "dragging" : ""} ${pos || view === "full" ? "" : "default-pos"}`}
+        style={windowStyle}
+        role="region"
+        aria-label={`Call with ${peerName}`}
+      >
+        <div className="fc-callwin-head" onPointerDown={startDrag} title={view === "full" ? undefined : "Drag to move"}>
+          <span className="fc-callwin-title">
+            <span className={`vp-mini-dot ${connection}`} />
+            {view === "compact" ? peerName : `${title} · ${peerName}`}
+          </span>
+          <span className="fc-callwin-head-btns">
+            {view === "float" && (
+              <button aria-label="Minimize call window" title="Minimize" onClick={(e) => { e.stopPropagation(); setViewAndNotify("compact"); }}><Minimize2 size={14} /></button>
             )}
+            {view === "compact" && (
+              <button aria-label="Restore call window" title="Restore" onClick={(e) => { e.stopPropagation(); setViewAndNotify("float"); }}><Maximize2 size={14} /></button>
+            )}
+            {view === "full" && (
+              <button aria-label="Shrink call window" title="Shrink" onClick={(e) => { e.stopPropagation(); setViewAndNotify("float"); }}><Minimize2 size={14} /></button>
+            )}
+            <button className="danger" aria-label="End call" title="End call" onClick={(e) => { e.stopPropagation(); onLeave(); }}><X size={14} /></button>
+          </span>
+        </div>
+
+        <div className="fc-callwin-body">
+          {/* Compact row — hidden (but kept mounted) via CSS in other views. */}
+          <div className="fc-callwin-compact-row">
+            <ProfileAvatar name={peerName} url={peerAvatarUrl} size={26} showPresence={false} />
+            <span className="fc-callwin-time">{connection === "connected" ? fmtDuration(seconds) : label}</span>
           </div>
 
-          {controls}
+          {/* Stage — always mounted so the <video> elements never unmount. */}
+          <div className="fc-callwin-stage">
+            <div className="fc-callwin-remote">
+              <video
+                className={`fc-callwin-video ${remoteHasVideo ? "" : "hidden"}`}
+                autoPlay
+                playsInline
+                ref={remoteVideoRef}
+              />
+              {!remoteHasVideo && (
+                <span className="fc-callwin-avbig"><ProfileAvatar name={peerName} url={peerAvatarUrl} size={view === "full" ? 96 : 60} showPresence={false} /></span>
+              )}
+              <span className="fc-callwin-tag">{peerName}{peerUsername ? ` · @${peerUsername}` : ""}</span>
+              <span className="fc-callwin-timer">{connection === "connected" ? fmtDuration(seconds) : label}</span>
+            </div>
+            <div className="fc-callwin-local">
+              <video className={`fc-callwin-selfvideo ${cameraOn ? "" : "hidden"}`} autoPlay playsInline muted ref={localVideoRef} />
+              {cameraOn && <span className="fc-callwin-tag">You</span>}
+            </div>
+            {cameraError && <p className="fc-callwin-camerr">{cameraError}</p>}
+          </div>
         </div>
-      )}
+
+        <div className="fc-callwin-controls">
+          <button className={muted ? "active" : ""} onClick={toggleMute} aria-label={muted ? "Unmute microphone" : "Mute microphone"} title={muted ? "Unmute" : "Mute"}>
+            {muted ? <MicOff size={16} /> : <Mic size={16} />}
+          </button>
+          <button className={speakerMuted ? "active" : ""} onClick={() => setSpeakerMuted((v) => !v)} aria-label={speakerMuted ? "Turn sound on" : "Mute sound"} title={speakerMuted ? "Sound on" : "Mute sound"}>
+            {speakerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          </button>
+          <button className={cameraOn ? "active" : ""} onClick={toggleCamera} aria-label="Toggle camera" title="Camera">
+            {cameraOn ? <Video size={16} /> : <VideoOff size={16} />}
+          </button>
+          {view === "full"
+            ? <button onClick={() => setViewAndNotify("float")} aria-label="Shrink call window" title="Shrink"><Minimize2 size={16} /></button>
+            : <button onClick={() => setViewAndNotify("full")} aria-label="Expand call window" title="Expand"><Maximize2 size={16} /></button>}
+          <button className="danger" onClick={onLeave} aria-label="End call" title="End call"><PhoneOff size={16} /></button>
+        </div>
+      </div>
     </>
   );
 }

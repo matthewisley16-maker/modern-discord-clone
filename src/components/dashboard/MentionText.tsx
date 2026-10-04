@@ -1,14 +1,17 @@
 import { useMemo } from "react";
+import type { ReactNode } from "react";
+import { splitMessageBody } from "@/lib/message-links";
 
 export type MentionRef = { username: string; userId: string };
 
-const TOKEN = /(@[a-z0-9._]{2,24})/gi;
-
 /**
- * Renders a message body, turning real @username mentions into bright,
- * clickable buttons that open the user's profile. Unknown tokens (a handle
- * that doesn't exist, or someone who can't see the message) stay as plain,
- * non-clickable styled text so nothing misleading is shown.
+ * Renders a message body, turning:
+ *  - real @username mentions into bright, clickable profile buttons, and
+ *  - web URLs into real, safe links that open in a new tab,
+ * while leaving everything else as plain, escaped text.
+ *
+ * The heavy lifting lives in `splitMessageBody` (unit-tested) so channels, DMs,
+ * replies and threads all render identically.
  */
 export default function MentionText({
   body,
@@ -27,28 +30,46 @@ export default function MentionText({
     return m;
   }, [mentions]);
 
-  const parts = body.split(TOKEN);
-  return (
-    <p className={className ?? "fc-text"}>
-      {parts.map((part, i) => {
-        const match = /^@([a-z0-9._]{2,24})$/i.exec(part);
-        if (!match) return part;
-        const userId = map.get(match[1].toLowerCase());
+  const nodes = useMemo(() => {
+    const out: ReactNode[] = [];
+    let key = 0;
+    for (const seg of splitMessageBody(body)) {
+      if (seg.kind === "text") {
+        out.push(seg.value);
+      } else if (seg.kind === "url") {
+        out.push(
+          <a
+            key={key++}
+            className="fc-link"
+            href={seg.href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {seg.value}
+          </a>,
+        );
+      } else {
+        const userId = map.get(seg.value.slice(1).toLowerCase());
         if (userId) {
-          return (
+          out.push(
             <button
-              key={i}
+              key={key++}
               type="button"
               className="fc-mention fc-mention-link"
               onClick={(e) => { e.stopPropagation(); onOpenProfile(userId); }}
-              title={`View ${match[1]}'s profile`}
+              title={`View ${seg.value.slice(1)}'s profile`}
             >
-              {part}
-            </button>
+              {seg.value}
+            </button>,
           );
+        } else {
+          out.push(<span key={key++} className="fc-mention">{seg.value}</span>);
         }
-        return <span key={i} className="fc-mention">{part}</span>;
-      })}
-    </p>
-  );
+      }
+    }
+    return out;
+  }, [body, map, onOpenProfile]);
+
+  return <p className={className ?? "fc-text"}>{nodes}</p>;
 }

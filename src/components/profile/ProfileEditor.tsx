@@ -190,6 +190,7 @@ export default function ProfileEditor({ onClose }: { onClose: () => void }) {
                 presence="online"
                 frameId={draft.frameId}
                 decorationId={draft.decorationId}
+                reducedMotion={appearance?.reducedMotion}
                 size={72}
               />
               <div>
@@ -207,7 +208,7 @@ export default function ProfileEditor({ onClose }: { onClose: () => void }) {
             <section className="fc-settings-section">
               <h3><ImagePlus size={16} /> Profile picture</h3>
               <div className="fc-icon-row">
-                <ProfileAvatar name={draft.displayName} url={avatarPreview ?? me.avatarUrl} frameId={draft.frameId} decorationId={draft.decorationId} size={72} />
+                <ProfileAvatar name={draft.displayName} url={avatarPreview ?? me.avatarUrl} frameId={draft.frameId} decorationId={draft.decorationId} reducedMotion={appearance?.reducedMotion} size={72} />
                 <div className="fc-icon-actions">
                   <input ref={avatarInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f, "avatar"); e.target.value = ""; }} />
                   <Button size="sm" variant="outline" onClick={() => avatarInput.current?.click()} disabled={uploadPct !== null}>

@@ -150,5 +150,8 @@ await expectTrue("friend cards carry an avatarUrl", async () => {
   return friends.every((f) => "avatarUrl" in f);
 });
 
+// Clean up the test community so it never lingers in the database.
+try { await A.client.mutation(api.communities.deleteCommunity, { serverId }); } catch {}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
