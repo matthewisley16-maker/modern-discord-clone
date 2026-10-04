@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 
 import type { Id } from "./_generated/dataModel";
+import { gifValidator, requireGif } from "./gif";
 import { authorCardOf, notify } from "./lib";
 import { resolveMentions } from "./mentions";
 
@@ -102,13 +103,18 @@ export const createChannel = mutation({ args: { serverId: v.id("servers"), name:
   if (channels.some(c => c.name === normalized)) throw new ConvexError("A channel with that name already exists.");
   return ctx.db.insert("channels", { serverId, name: normalized, description: "A new conversation starts here." });
 }});
-export const sendMessage = mutation({ args: { channelId: v.id("channels"), body: v.string(), replyToId: v.optional(v.id("messages")) }, handler: async (ctx, { channelId, body, replyToId }) => {
+export const sendMessage = mutation({ args: { channelId: v.id("channels"), body: v.string(), replyToId: v.optional(v.id("messages")), gif: v.optional(gifValidator) }, handler: async (ctx, { channelId, body, replyToId, gif }) => {
   const channel = await ctx.db.get(channelId);
   if (!channel) throw new ConvexError("Channel not found.");
   const userId = await member(ctx, channel.serverId);
   if (channel.locked) throw new ConvexError("This channel is locked.");
-  const text = clean(body, 4000);
-  const messageId = await ctx.db.insert("messages", { channelId, userId, body: text, replyToId });
+  // Validate the GIF server-side; never trust a client-provided media URL.
+  const safeGif = gif ? requireGif(gif) : undefined;
+  const raw = body.trim();
+  if (raw.length > 4000) throw new ConvexError("Please enter between 1 and 4000 characters.");
+  // A GIF can be sent on its own; a plain-text fallback keeps search/replies working.
+  const text = safeGif ? raw || "Sent a GIF" : clean(body, 4000);
+  const messageId = await ctx.db.insert("messages", { channelId, userId, body: text, replyToId, gif: safeGif });
   // Deep link so the recipient lands on this exact message.
   const link = `?server=${channel.serverId}&channel=${channelId}&message=${messageId}`;
   const already = new Set<string>([userId as string]);

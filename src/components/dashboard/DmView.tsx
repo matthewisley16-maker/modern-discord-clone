@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { GifValue } from "@/convex/gif";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, EmptyState } from "./ui";
 import MediaAttachment from "./MediaAttachment";
+import GifMessage from "./GifMessage";
+import GifPicker from "./GifPicker";
 import MentionText from "./MentionText";
 import { useMentions } from "@/hooks/use-mentions";
 import { useMessageSound } from "@/hooks/use-message-sound";
@@ -73,6 +76,9 @@ export default function DmView({
   const [dragging, setDragging] = useState(false);
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [showGroupPanel, setShowGroupPanel] = useState(false);
+  // GIF picker + the selected (not yet sent) GIF.
+  const [gifOpen, setGifOpen] = useState(false);
+  const [pendingGif, setPendingGif] = useState<GifValue | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const msgInput = useRef<HTMLInputElement>(null);
@@ -81,7 +87,7 @@ export default function DmView({
   const mentions = useMentions({ value: draft, setValue: setDraft, inputRef: msgInput, conversationId });
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, conversationId]);
-  useEffect(() => { markRead({ conversationId }).catch(() => {}); setSearch(""); setReplyTo(null); setEditing(null); }, [conversationId, markRead]);
+  useEffect(() => { markRead({ conversationId }).catch(() => {}); setSearch(""); setReplyTo(null); setEditing(null); setGifOpen(false); }, [conversationId, markRead]);
 
   // Scroll to and flash a message opened from a notification.
   useEffect(() => {
@@ -123,20 +129,22 @@ export default function DmView({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if ((!draft.trim() && pending.length === 0) || busy) return;
+    if ((!draft.trim() && pending.length === 0 && !pendingGif) || busy) return;
     setBusy(true);
     try {
       if (editing) {
         await edit({ messageId: editing.id, body: draft });
         setEditing(null);
       } else {
-        // Only sent here, on explicit Send; staged attachments ride along.
+        // Only sent here, on explicit Send; staged attachments + GIF ride along.
         const fallback = pending.length ? `Shared ${pending.map((p) => p.name).join(", ").slice(0, 120)}` : "";
-        const messageId = await send({ conversationId, body: draft.trim() || fallback, replyToId: replyTo?.id });
+        const messageId = await send({ conversationId, body: draft.trim() || fallback, replyToId: replyTo?.id, gif: pendingGif ?? undefined });
         for (const att of pending) {
           await attach({ storageId: att.storageId, name: att.name, size: att.size, contentType: att.contentType, dmMessageId: messageId });
         }
         setReplyTo(null);
+        setPendingGif(null);
+        setGifOpen(false);
         clearPending();
       }
       playSound();
@@ -270,8 +278,11 @@ export default function DmView({
                 {m.deleted ? (
                   <p className="fc-deleted">This message was deleted.</p>
                 ) : (
-                  <MentionText body={m.body} mentions={m.mentionUsers} onOpenProfile={onOpenProfile} />
+                  (!m.gif || m.body !== "Sent a GIF") && (
+                    <MentionText body={m.body} mentions={m.mentionUsers} onOpenProfile={onOpenProfile} />
+                  )
                 )}
+                {m.gif && <GifMessage gif={m.gif} />}
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
                     {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}
@@ -330,6 +341,19 @@ export default function DmView({
         {uploadPct !== null && (
           <div className="fc-upload"><span style={{ width: `${uploadPct}%` }} /> Uploading… {uploadPct}%</div>
         )}
+        {/* A staged GIF sits ABOVE the input so the text box stays usable. */}
+        {pendingGif && (
+          <div className="fc-pending fc-pending-gif" role="list" aria-label="Pending GIF">
+            <div className="fc-pending-item" role="listitem">
+              <img className="fc-pending-thumb" src={pendingGif.previewUrl} alt="" />
+              <span className="fc-pending-text">
+                <strong>{pendingGif.title || "GIF"}</strong>
+                <small>GIF · not sent yet</small>
+              </span>
+              <button type="button" aria-label="Remove GIF" onClick={() => setPendingGif(null)}><X size={14} /></button>
+            </div>
+          </div>
+        )}
         {/* Pending attachments sit ABOVE the input so the text box stays usable. */}
         {pending.length > 0 && (
           <div className="fc-pending" role="list" aria-label="Pending attachments">
@@ -352,6 +376,7 @@ export default function DmView({
             {EMOJIS.map((e) => <button key={e} onClick={() => { setDraft(draft + e); setEmojiOpen(false); }}>{e}</button>)}
           </div>
         )}
+        {gifOpen && <GifPicker onSelect={(g) => { setPendingGif(g); setGifOpen(false); }} onClose={() => setGifOpen(false)} />}
         {mentions.open && (
           <div className="fc-mention-menu" role="listbox" aria-label="Mention suggestions">
             {mentions.suggestions.map((s, i) => (
@@ -376,7 +401,18 @@ export default function DmView({
         <form className="fc-composer" onSubmit={submit}>
           <input ref={fileInput} type="file" multiple hidden onChange={(e) => { Array.from(e.target.files ?? []).forEach(stageFile); e.target.value = ""; }} />
           <button type="button" title="Attach a file" aria-label="Attach a file" onClick={() => fileInput.current?.click()}><Paperclip size={19} /></button>
-          <button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => setEmojiOpen((v) => !v)}><Smile size={19} /></button>
+          <button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => { setEmojiOpen((v) => !v); setGifOpen(false); }}><Smile size={19} /></button>
+          <button
+            type="button"
+            className={`fc-gif-toggle ${gifOpen ? "active" : ""}`}
+            title="Add a GIF"
+            aria-label="Add a GIF"
+            aria-expanded={gifOpen}
+            disabled={editing !== null}
+            onClick={() => { setGifOpen((v) => !v); setEmojiOpen(false); }}
+          >
+            <span className="fc-gif-glyph">GIF</span>
+          </button>
           <input
             ref={msgInput}
             aria-label="Message"
@@ -389,7 +425,7 @@ export default function DmView({
             onPaste={(e) => { const files = Array.from(e.clipboardData.files ?? []); if (files.length) { e.preventDefault(); files.forEach(stageFile); } }}
             placeholder={editing ? "Edit your message…" : `Message ${title}`}
           />
-          <button type="submit" disabled={(!draft.trim() && pending.length === 0) || busy} aria-label="Send message"><Send size={18} /></button>
+          <button type="submit" disabled={(!draft.trim() && pending.length === 0 && !pendingGif) || busy} aria-label="Send message"><Send size={18} /></button>
         </form>
         <div className="fc-composer-note">
           <span>Enter to send · Drag and drop or paste to upload</span>

@@ -52,7 +52,7 @@ export async function downloadFile(url: string, name: string) {
 }
 
 /** Full-screen in-app image viewer. Escape or a click outside closes it. */
-function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
+export function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
     window.addEventListener("keydown", onKey);

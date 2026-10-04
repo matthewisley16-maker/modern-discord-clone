@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
+import { gifValidator, requireGif } from "./gif";
 import { areFriends, authorCardOf, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import { resolveMentions } from "./mentions";
 import type { Id } from "./_generated/dataModel";
@@ -300,15 +301,19 @@ export const messages = query({
 });
 
 export const sendMessage = mutation({
-  args: { conversationId: v.id("dmConversations"), body: v.string(), replyToId: v.optional(v.id("dmMessages")) },
-  handler: async (ctx, { conversationId, body, replyToId }) => {
+  args: { conversationId: v.id("dmConversations"), body: v.string(), replyToId: v.optional(v.id("dmMessages")), gif: v.optional(gifValidator) },
+  handler: async (ctx, { conversationId, body, replyToId, gif }) => {
     const me = await currentUserId(ctx);
     await requireMember(ctx, conversationId, me);
     await enforceRateLimit(ctx, `dmsg:${me}`, 60, 60_000);
-    const text = body.trim();
+    // Validate the GIF server-side; never trust a client-provided media URL.
+    const safeGif = gif ? requireGif(gif) : undefined;
+    const raw = body.trim();
+    if (raw.length > 4000) throw new Error("Message is too long (4000 characters max).");
+    // A GIF can be sent on its own; a text fallback keeps search/history working.
+    const text = safeGif ? raw || "Sent a GIF" : raw;
     if (!text) throw new Error("Message can't be empty.");
-    if (text.length > 4000) throw new Error("Message is too long (4000 characters max).");
-    const messageId = await ctx.db.insert("dmMessages", { conversationId, userId: me, body: text, replyToId });
+    const messageId = await ctx.db.insert("dmMessages", { conversationId, userId: me, body: text, replyToId, gif: safeGif });
     await ctx.db.patch(conversationId, { lastMessageAt: Date.now() });
 
     // Notify other members (muted conversations are skipped).

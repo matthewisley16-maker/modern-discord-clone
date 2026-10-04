@@ -1,6 +1,7 @@
 import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
 import { Infer, v } from "convex/values";
+import { gifValidator } from "./gif";
 
 // default user roles. can add / remove based on the project as needed
 export const ROLES = {
@@ -250,6 +251,8 @@ const schema = defineSchema(
       conversationId: v.id("dmConversations"),
       userId: v.id("users"),
       body: v.string(),
+      /** Optional GIF (validated provider record; no bytes are stored). */
+      gif: v.optional(gifValidator),
       replyToId: v.optional(v.id("dmMessages")),
       editedAt: v.optional(v.number()),
       deleted: v.optional(v.boolean()),
@@ -351,6 +354,8 @@ const schema = defineSchema(
       channelId: v.id("channels"),
       userId: v.id("users"),
       body: v.string(),
+      /** Optional GIF (validated provider record; no bytes are stored). */
+      gif: v.optional(gifValidator),
       replyToId: v.optional(v.id("messages")),
       editedAt: v.optional(v.number()),
       deleted: v.optional(v.boolean()),
