@@ -455,7 +455,7 @@ export default function Dashboard() {
               {(expandedVoice[c._id] ? participants : participants.slice(0, 4)).map((p) => (
                 <li key={p.userId} className={p.speaking ? "speaking" : ""}>
                   <button className="fc-voice-person" onClick={() => setProfileUserId(p.userId)}>
-                    <Avatar name={p.name} presence={p.speaking ? "online" : undefined} size={22} url={p.avatarUrl} />
+                    <Avatar name={p.name} presence={p.speaking ? "online" : undefined} size={22} url={p.avatarUrl} decorationId={p.decorationId} />
                     <span className={p.speaking ? "talk" : ""}>{p.name}</span>
                     {p.deafened ? <span className="fc-mute-flag" title="Deafened">🔇</span> : p.muted ? <span className="fc-mute-flag" title="Muted">🎙️</span> : null}
                     {p.video && <span className="fc-mute-flag" title="Camera on">📹</span>}
@@ -742,7 +742,7 @@ export default function Dashboard() {
                   className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                   onClick={() => openConversation(c.conversationId)}
                 >
-                  <Avatar name={c.name} size={26} url={c.members?.[0]?.avatarUrl} />
+                  <Avatar name={c.name} size={26} url={c.members?.[0]?.avatarUrl} decorationId={c.members?.[0]?.decorationId} />
                   <span className="fc-dm-name">{c.name}</span>
                   {c.pinned && <span className="fc-dm-flag">📌</span>}
                   {c.muted && <span className="fc-dm-flag">🔇</span>}
@@ -759,7 +759,7 @@ export default function Dashboard() {
 
         {/* User panel */}
         <div className="fc-user-panel">
-          <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} presence={me?.presence} size={34} url={me?.avatarUrl} lastSeen={me?.lastSeen} />
+          <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} presence={me?.presence} size={34} url={me?.avatarUrl} lastSeen={me?.lastSeen} decorationId={me?.profile?.decorationId ?? null} />
           <div className="fc-user-text">
             <strong>{me?.profile?.displayName ?? me?.username ?? "…"}</strong>
             <small>{me?.profile?.customStatus || statusMeta.label}</small>

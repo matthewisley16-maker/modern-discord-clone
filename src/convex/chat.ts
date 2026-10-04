@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 
 import type { Id } from "./_generated/dataModel";
-import { avatarUrlOf, notify } from "./lib";
+import { authorCardOf, notify } from "./lib";
 import { resolveMentions } from "./mentions";
 
 async function signedIn(ctx: QueryCtx) {
@@ -73,7 +73,7 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
           : { _id: parent._id, author: await nameOf(ctx, parent.userId), body: parent.body.slice(0, 140), deleted: false };
       }
     }
-    return { ...message, author: await nameOf(ctx, message.userId), authorAvatarUrl: await avatarUrlOf(ctx, message.userId), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply, mentionUsers: await resolveMentions(ctx, message.body, { serverId: channel.serverId }) };
+    return { ...message, ...(await authorCardOf(ctx, message.userId)), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply, mentionUsers: await resolveMentions(ctx, message.body, { serverId: channel.serverId }) };
   }));
 }});
 export const createServer = mutation({ args: { name: v.string(), description: v.string() }, handler: async (ctx, args) => {

@@ -2,7 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
-import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
+import { areFriends, authorCardOf, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import { resolveMentions } from "./mentions";
 import type { Id } from "./_generated/dataModel";
 
@@ -25,6 +25,7 @@ async function card(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"users"
     displayName: profile?.displayName ?? user?.name ?? "Freecord member",
     avatarColor: profile?.avatarColor ?? "violet",
     avatarUrl: await avatarUrlOf(ctx, userId),
+    decorationId: profile?.decorationId ?? null,
     presence: status,
     lastSeen,
   };
@@ -277,8 +278,7 @@ export const messages = query({
       }
       result.push({
         ...m,
-        author: await displayNameOf(ctx, m.userId),
-        authorAvatarUrl: await avatarUrlOf(ctx, m.userId),
+        ...(await authorCardOf(ctx, m.userId)),
         reactions,
         // Attachments are removed on delete-for-everyone, so this stays empty.
         attachments,

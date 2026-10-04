@@ -45,7 +45,7 @@ export default function ProfileDrawer({
       <button className="fc-drawer-close" aria-label="Close profile" onClick={onClose}><X size={18} /></button>
       <div className="fc-drawer-banner" />
       <div className="fc-drawer-body">
-        <Avatar name={profile.displayName} color={profile.avatarColor} presence={profile.presence} size={72} url={profile.avatarUrl} />
+        <Avatar name={profile.displayName} color={profile.avatarColor} presence={profile.presence} size={72} url={profile.avatarUrl} decorationId={profile.decorationId} />
         <h2 className="fc-drawer-name">{profile.displayName}</h2>
         {profile.username && <p className="fc-drawer-handle">@{profile.username}</p>}
         <p className="fc-drawer-presence"><span className="fc-dot" style={{ background: presence.color }} /> {presence.label}</p>

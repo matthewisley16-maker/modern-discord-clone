@@ -257,7 +257,7 @@ export default function ChannelView({
               onTouchEnd={() => { if (pressTimer.current) window.clearTimeout(pressTimer.current); }}
               onTouchMove={() => { if (pressTimer.current) window.clearTimeout(pressTimer.current); }}
             >
-              <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} url={m.authorAvatarUrl} />
+              <Avatar name={m.author} color={mine ? "violet" : undefined} size={38} url={m.authorAvatarUrl} decorationId={m.authorDecorationId} />
               <div className="fc-message-body">
                 <div className="fc-message-top">
                   <button className="fc-author" onClick={() => onOpenProfile(m.userId)}>{m.author}</button>
@@ -354,7 +354,7 @@ export default function ChannelView({
                   onMouseEnter={() => mentions.setIndex(i)}
                   onMouseDown={(e) => { e.preventDefault(); mentions.choose(s); }}
                 >
-                  <Avatar name={s.displayName} size={26} url={s.avatarUrl} presence={s.presence} />
+                  <Avatar name={s.displayName} size={26} url={s.avatarUrl} presence={s.presence} decorationId={s.decorationId} />
                   <span className="fc-mention-name"><strong>{s.displayName}</strong><small>@{s.username}</small></span>
                   {s.isMutual ? <em className="fc-mention-flag mutual">Mutual</em>
                     : s.isFollowing ? <em className="fc-mention-flag following">Following</em>

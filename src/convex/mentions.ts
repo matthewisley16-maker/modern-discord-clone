@@ -111,6 +111,7 @@ export const candidates = query({
       username: string;
       displayName: string;
       avatarUrl: string | null;
+      decorationId: string | null;
       presence: string;
       isFollowing: boolean;
       followsYou: boolean;
@@ -139,6 +140,7 @@ export const candidates = query({
         username: user.username,
         displayName,
         avatarUrl: await avatarUrlOf(ctx, id),
+        decorationId: profile?.decorationId ?? null,
         presence: status,
         isFollowing,
         followsYou,

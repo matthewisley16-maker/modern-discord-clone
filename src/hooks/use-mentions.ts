@@ -9,6 +9,7 @@ export type MentionSuggestion = {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  decorationId: string | null;
   presence: string;
   isFollowing: boolean;
   followsYou: boolean;

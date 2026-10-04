@@ -128,7 +128,7 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
             <section className="fc-settings-section">
               <h3><Settings2 size={16} /> General</h3>
               <div className="fc-profile-preview">
-                <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} size={64} url={me?.avatarUrl} />
+                <Avatar name={me?.profile?.displayName ?? me?.username ?? "You"} size={64} url={me?.avatarUrl} decorationId={me?.profile?.decorationId ?? null} />
                 <div>
                   <p className="fc-settings-username">@{me?.username}</p>
                   <p className="fc-muted">{me?.email ? me.email : "No email linked"}</p>
@@ -230,7 +230,7 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
             <section className="fc-settings-section">
               <h3><User size={16} /> Profile</h3>
               <div className="fc-profile-preview">
-                <Avatar name={displayName || me?.username || "You"} size={64} url={me?.avatarUrl} />
+                <Avatar name={displayName || me?.username || "You"} size={64} url={me?.avatarUrl} decorationId={me?.profile?.decorationId ?? null} />
                 <div>
                   <p className="fc-settings-username">@{me?.username}</p>
                   <p className="fc-muted">{me?.email ? me.email : "No email linked"}</p>

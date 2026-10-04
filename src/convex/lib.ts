@@ -77,6 +77,22 @@ export async function avatarUrlOf(ctx: Ctx, userId: Id<"users">): Promise<string
   return user?.image ?? null;
 }
 
+/**
+ * Display name, avatar and avatar decoration for a message author, resolved
+ * with a single profile lookup so chat/DM payloads stay cheap. Decorations are
+ * the same authoritative saved value used everywhere else, so the signed-in
+ * user's own effect appears in their messages exactly like anyone else's.
+ */
+export async function authorCardOf(ctx: Ctx, userId: Id<"users">) {
+  const profile = await profileOf(ctx, userId);
+  const user = await ctx.db.get(userId);
+  return {
+    author: profile?.displayName || user?.name || user?.username || "Freecord member",
+    authorAvatarUrl: profile?.avatarStorageId ? await ctx.storage.getUrl(profile.avatarStorageId) : user?.image ?? null,
+    authorDecorationId: profile?.decorationId ?? null,
+  };
+}
+
 export async function settingsOf(ctx: Ctx, userId: Id<"users">) {
   return ctx.db
     .query("userSettings")

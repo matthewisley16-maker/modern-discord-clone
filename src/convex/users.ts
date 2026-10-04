@@ -275,6 +275,7 @@ export const publicProfile = query({
       isMutual,
       isFriend,
       isBlocked,
+      decorationId: profile?.decorationId ?? null,
       publicProfile: settings?.publicProfile !== false,
     };
   },

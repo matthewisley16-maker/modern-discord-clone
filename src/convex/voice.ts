@@ -1,7 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { audit, avatarUrlOf, currentUserId, displayNameOf, hasPermission, isTimedOut, membershipOf, notify, requireMember, requirePermission } from "./lib";
+import { audit, avatarUrlOf, currentUserId, displayNameOf, hasPermission, isTimedOut, membershipOf, notify, profileOf, requireMember, requirePermission } from "./lib";
 import type { Ctx } from "./lib";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
@@ -265,7 +265,7 @@ export const channelTree = query({
     visible.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
 
     const sessions = await ctx.db.query("voiceSessions").collect();
-    const byChannel: Record<string, { userId: string; name: string; avatarUrl: string | null; muted: boolean; deafened: boolean; speaking: boolean; video: boolean; screen: boolean }[]> = {};
+    const byChannel: Record<string, { userId: string; name: string; avatarUrl: string | null; decorationId: string | null; muted: boolean; deafened: boolean; speaking: boolean; video: boolean; screen: boolean }[]> = {};
     for (const s of sessions) {
       // Skip ghosts whose client is gone (explicit disconnect or stale heartbeat).
       if (!(await isSessionLive(ctx, s.userId))) continue;
@@ -274,6 +274,7 @@ export const channelTree = query({
         userId: s.userId,
         name: await displayNameOf(ctx, s.userId),
         avatarUrl: await avatarUrlOf(ctx, s.userId),
+        decorationId: (await profileOf(ctx, s.userId))?.decorationId ?? null,
         muted: s.muted,
         deafened: s.deafened,
         speaking: Boolean(s.speaking),
@@ -443,6 +444,7 @@ export const voiceChannelDetails = query({
           userId: s.userId,
           name: await displayNameOf(ctx, s.userId),
           avatarUrl: await avatarUrlOf(ctx, s.userId),
+          decorationId: (await profileOf(ctx, s.userId))?.decorationId ?? null,
           muted: s.muted,
           deafened: s.deafened,
           speaking: Boolean(s.speaking),
