@@ -1,27 +1,31 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
 import { toast } from "sonner";
-import { Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Video, VideoOff, VolumeX, X } from "lucide-react";
+import { Maximize, Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Video, VideoOff, VolumeX, X } from "lucide-react";
+import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "./screenShare";
+import "./screenShare.css";
 
 const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 const SPEAK_THRESHOLD = 0.045; // RMS above this counts as speech
 const SPEAK_HOLD_MS = 350; // keep the ring on briefly after speech stops
 
+type ScreenEntry = { id: string; local: boolean; stream: MediaStream; name: string };
+
 /**
- * Voice channel panel.
+ * Voice channel panel with real screen sharing.
  *
- * Speaking detection is REAL: we run an AnalyserNode over the local microphone
- * stream, compute RMS each frame, and report only on transitions (talking
- * started / stopped). That keeps network traffic minimal while the speaking
- * ring stays in sync for everyone in the channel.
+ * Screen share is captured with the browser's `getDisplayMedia()` and sent over
+ * the SAME peer connections as voice/camera, using a dedicated send-only video
+ * transceiver. The camera is never replaced, so voice + camera + screen can all
+ * run together; stopping a share just clears that transceiver.
  *
  * Audio is transmitted peer-to-peer over WebRTC; signalling is relayed through
  * Convex. The component stays mounted across navigation, so `minimized` only
- * changes what is drawn — the call itself keeps running.
+ * changes what is drawn — the call and any screen share keep running.
  */
 export default function VoicePanel({
   channelId,
@@ -52,10 +56,13 @@ export default function VoicePanel({
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
   const [videoOn, setVideoOn] = useState(false);
-  const [sharing, setSharing] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
   const [connection, setConnection] = useState<"connecting" | "connected" | "lost">("connecting");
   const [level, setLevel] = useState(0);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  const [remoteScreens, setRemoteScreens] = useState<Record<string, MediaStream>>({});
+  const [screenFocus, setScreenFocus] = useState<string | null>(null);
+  const [enlarged, setEnlarged] = useState(false);
   // True once the mic attempt has finished (granted or denied), so peer
   // connections can still form for camera-only / listen-only participants.
   const [mediaReady, setMediaReady] = useState(false);
@@ -70,9 +77,25 @@ export default function VoicePanel({
   const audioEls = useRef<Map<string, HTMLAudioElement>>(new Map());
   const videoEls = useRef<Map<string, HTMLVideoElement>>(new Map());
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   // Throttles the mic-level meter so it does not re-render the whole grid 60×/s.
   const lastLevelRef = useRef(0);
   const lastLevelAtRef = useRef(0);
+
+  // ---- Screen-share bookkeeping (all per-peer, never global) ----
+  const screenStreamRef = useRef<MediaStream | null>(null); // persistent local preview + send source
+  const screenSendersRef = useRef<Map<string, ScreenSenders>>(new Map());
+  const sharingRef = useRef(false);
+  // Which peers we initiated the offer for (only they auto-negotiate).
+  const initiatorsRef = useRef<Set<string>>(new Set());
+  // Every screen stream id a peer has ever announced (a peer's screen stream
+  // stays the same object across start/stop, so tracks stay classified even
+  // while sharing is paused).
+  const remoteScreenIds = useRef<Map<string, Set<string>>>(new Map());
+  const remoteScreenActive = useRef<Map<string, boolean>>(new Map());
+  const remoteScreenStreams = useRef<Map<string, MediaStream>>(new Map());
+  const mainStreams = useRef<Map<string, MediaStream>>(new Map());
+  const trackStreamIds = useRef<Map<string, string>>(new Map());
 
   async function getMic(withVideo: boolean) {
     try {
@@ -161,16 +184,91 @@ export default function VoicePanel({
       peers.current.clear();
       videoEls.current.clear();
       audioEls.current.clear();
+      // Release the screen capture too — leaving the call must stop sharing.
+      sharingRef.current = false;
+      screenStreamRef.current?.getTracks().forEach((t) => { try { t.stop(); } catch { /* noop */ } });
+      screenStreamRef.current = null;
+      screenSendersRef.current.clear();
+      initiatorsRef.current.clear();
+      mainStreams.current.clear();
+      remoteScreenStreams.current.clear();
+      remoteScreenIds.current.clear();
+      remoteScreenActive.current.clear();
+      trackStreamIds.current.clear();
       localStream.current?.getTracks().forEach((t) => t.stop());
       localStream.current = null;
     };
   }, [setSpeaking]);
 
+  // ---- Screen-share signalling helpers ----
+  const notifyScreen = (remoteId: string, on: boolean) => {
+    const streamId = on ? screenStreamRef.current?.id ?? "" : "";
+    sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "screen", payload: JSON.stringify({ on, streamId }) }).catch(() => {});
+  };
+
+  /** Push the current screen track to one peer (idempotent — safe to call twice). */
+  async function pushScreenToPeer(remoteId: string) {
+    const pc = peers.current.get(remoteId);
+    const ss = screenStreamRef.current;
+    if (!pc || !ss || !sharingRef.current) return;
+    let holders = screenSendersRef.current.get(remoteId);
+    if (!holders) { holders = {}; screenSendersRef.current.set(remoteId, holders); }
+    const firstTime = !holders.video && !holders.audio;
+    await applyScreenToPeer(pc, holders, ss, ss.getVideoTracks()[0] ?? null, ss.getAudioTracks()[0] ?? null);
+    // Adding the screen transceiver needs a renegotiation. The offer-initiating
+    // peer gets it automatically from `onnegotiationneeded`; the other peer must
+    // send the offer explicitly (same pattern the camera toggle already uses) so
+    // the remote actually receives the new track.
+    if (firstTime && !initiatorsRef.current.has(remoteId)) {
+      try {
+        const offer = await pc.createOffer();
+        if (pc.signalingState === "stable") {
+          await pc.setLocalDescription(offer);
+          await sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "offer", payload: JSON.stringify(pc.localDescription) });
+        }
+      } catch { /* retried on the next negotiationneeded */ }
+    }
+    notifyScreen(remoteId, true);
+  }
+
+  /**
+   * Route every incoming track to either the participant's camera/audio stream
+   * or their screen stream. The screen stream id is announced over the relay,
+   * so a screen track is never mistaken for the camera.
+   */
+  function classifyPeer(remoteId: string) {
+    const pc = peers.current.get(remoteId);
+    const main = mainStreams.current.get(remoteId);
+    if (!pc || !main) return;
+    const screenIds = remoteScreenIds.current.get(remoteId);
+    let scr = remoteScreenStreams.current.get(remoteId);
+    if (screenIds && screenIds.size > 0 && !scr) { scr = new MediaStream(); remoteScreenStreams.current.set(remoteId, scr); }
+    for (const r of pc.getReceivers()) {
+      const t = r.track;
+      if (!t) continue;
+      const sid = trackStreamIds.current.get(t.id);
+      const isScreen = Boolean(screenIds && sid && screenIds.has(sid));
+      const target = isScreen && scr ? scr : main;
+      const other = isScreen ? main : scr;
+      if (!target.getTracks().some((x) => x.id === t.id)) target.addTrack(t);
+      if (other && other !== target && other.getTracks().some((x) => x.id === t.id)) other.removeTrack(t);
+    }
+    // Main stream feeds the participant tile + audio sink.
+    setRemoteStreams((prev) => (prev[remoteId] === main ? prev : { ...prev, [remoteId]: main }));
+    // Only show the screen stage once the real remote track has arrived and the
+    // peer has announced that sharing is on — never a placeholder.
+    const active = (remoteScreenActive.current.get(remoteId) ?? false)
+      && Boolean(scr?.getVideoTracks().some((t) => t.readyState === "live"));
+    setRemoteScreens((prev) => {
+      if (active && scr) return prev[remoteId] === scr ? prev : { ...prev, [remoteId]: scr };
+      if (prev[remoteId]) { const next = { ...prev }; delete next[remoteId]; return next; }
+      return prev;
+    });
+  }
+
   // ---- WebRTC peer connections ----
   function attachRemote(userId: string, stream: MediaStream) {
     setRemoteStreams((prev) => ({ ...prev, [userId]: stream }));
-    // The same MediaStream feeds both the audio sink and the video tile, so a
-    // participant's audio keeps playing whether or not their camera is on.
     const el = audioEls.current.get(userId);
     if (el) { el.srcObject = stream; void el.play().catch(() => {}); }
     const vel = videoEls.current.get(userId);
@@ -185,15 +283,17 @@ export default function VoicePanel({
     localStream.current?.getTracks().forEach((t) => pc.addTrack(t, localStream.current!));
 
     const remote = new MediaStream();
+    mainStreams.current.set(remoteId, remote);
     pc.ontrack = (e) => {
-      e.streams[0]?.getTracks().forEach((t) => { if (!remote.getTracks().some((x) => x.id === t.id)) remote.addTrack(t); });
-      attachRemote(remoteId, remote);
+      trackStreamIds.current.set(e.track.id, e.streams[0]?.id ?? "");
+      classifyPeer(remoteId);
     };
     pc.onicecandidate = (e) => {
       if (e.candidate) sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "candidate", payload: JSON.stringify(e.candidate) }).catch(() => {});
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "connected") {
+        attachRemote(remoteId, remote);
         setConnection("connected");
       } else if (pc.connectionState === "failed") {
         // Only a REAL failure triggers recovery. `disconnected` is routinely
@@ -215,6 +315,9 @@ export default function VoicePanel({
         } catch { /* retried on the next negotiationneeded */ }
       };
     }
+    if (initiator) initiatorsRef.current.add(remoteId);
+    // If we are already sharing, the new peer must receive the screen too.
+    if (sharingRef.current) void pushScreenToPeer(remoteId);
     return pc;
   }
 
@@ -227,7 +330,20 @@ export default function VoicePanel({
     // Drop peer connections for people who left (no ghost streams/tiles).
     const present = new Set(details.participants.map((p) => p.userId as string));
     for (const [id, pc] of peers.current) {
-      if (!present.has(id)) { pc.close(); peers.current.delete(id); }
+      if (!present.has(id)) {
+        pc.close();
+        peers.current.delete(id);
+        videoEls.current.delete(id);
+        audioEls.current.delete(id);
+        mainStreams.current.delete(id);
+        remoteScreenStreams.current.delete(id);
+        remoteScreenIds.current.delete(id);
+        remoteScreenActive.current.delete(id);
+        screenSendersRef.current.delete(id);
+        initiatorsRef.current.delete(id);
+        setRemoteStreams((prev) => { if (!prev[id]) return prev; const next = { ...prev }; delete next[id]; return next; });
+        setRemoteScreens((prev) => { if (!prev[id]) return prev; const next = { ...prev }; delete next[id]; return next; });
+      }
     }
   }, [details, myUserId, mediaReady]);
 
@@ -252,6 +368,15 @@ export default function VoicePanel({
             if (pc.signalingState !== "stable") await pc.setRemoteDescription(new RTCSessionDescription(data));
           } else if (s.kind === "candidate") {
             await pc.addIceCandidate(new RTCIceCandidate(data));
+          } else if (s.kind === "screen") {
+            const meta = data as { on?: boolean; streamId?: string };
+            if (meta.streamId) {
+              let set = remoteScreenIds.current.get(s.fromUserId);
+              if (!set) { set = new Set<string>(); remoteScreenIds.current.set(s.fromUserId, set); }
+              set.add(meta.streamId);
+            }
+            remoteScreenActive.current.set(s.fromUserId, Boolean(meta.on));
+            classifyPeer(s.fromUserId);
           }
         } catch { /* ignore out-of-order signalling */ }
         await clearSignal({ signalId: s._id });
@@ -274,9 +399,8 @@ export default function VoicePanel({
   }
 
   /**
-   * Turn the camera on/off without disturbing the microphone or the call.
-   * Video is requested on its own so the existing audio track is never
-   * duplicated, and every peer either gets the new track or drops it.
+   * Turn the camera on/off without disturbing the microphone, the screen share
+   * or the call.
    */
   async function toggleVideo() {
     if (videoOn) {
@@ -340,32 +464,79 @@ export default function VoicePanel({
     await setVoiceFlags({ video: true }).catch(() => {});
   }
 
+  /** Start or stop sharing. A cancelled picker silently does nothing at all. */
   async function toggleScreen() {
-    if (sharing) { setSharing(false); await setVoiceFlags({ screen: false }).catch(() => {}); return; }
-    try {
-      const display = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const track = display.getVideoTracks()[0];
-      for (const [remoteId, pc] of peers.current) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) await sender.replaceTrack(track);
-        else pc.addTrack(track, display);
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "offer", payload: JSON.stringify(offer) });
-        } catch { /* retried on reconnect */ }
-      }
-      track.onended = () => { setSharing(false); setVoiceFlags({ screen: false }).catch(() => {}); };
-      setSharing(true);
-      await setVoiceFlags({ screen: true }).catch(() => {});
-    } catch (err) {
-      const name = (err as DOMException)?.name;
-      toast.error(name === "NotAllowedError" ? "Screen sharing permission was denied." : "Screen sharing isn't supported here.");
+    if (sharingRef.current) { await stopScreen(); return; }
+
+    const result = await captureDisplay();
+    if (!result.ok) {
+      // Cancelling the browser picker must never look like a call failure.
+      if (!result.cancelled && result.message) toast.error(result.message);
+      return;
     }
+    const display = result.stream;
+    const videoTrack = display.getVideoTracks()[0];
+    if (!videoTrack) { display.getTracks().forEach((t) => t.stop()); toast.error("No screen was selected."); return; }
+    const audioTrack = display.getAudioTracks()[0] ?? null;
+
+    let ss = screenStreamRef.current;
+    if (!ss) { ss = new MediaStream(); screenStreamRef.current = ss; }
+    ss.addTrack(videoTrack);
+    if (audioTrack) ss.addTrack(audioTrack);
+
+    sharingRef.current = true;
+    setScreenOn(true);
+    setScreenFocus("self");
+    // The browser's own "Stop sharing" button ends the track — react to it.
+    videoTrack.onended = () => { void stopScreen(); };
+
+    await setVoiceFlags({ screen: true }).catch(() => {});
+    for (const remoteId of peers.current.keys()) await pushScreenToPeer(remoteId);
+  }
+
+  /** Stop sharing without touching the call, the mic, or the camera. */
+  async function stopScreen() {
+    const wasSharing = sharingRef.current;
+    sharingRef.current = false;
+    screenStreamRef.current?.getTracks().forEach((t) => { t.onended = null; });
+    setScreenOn(false);
+    setScreenFocus((f) => (f === "self" ? null : f));
+    if (wasSharing) {
+      for (const [remoteId, holders] of screenSendersRef.current) {
+        if (holders.video) { try { await holders.video.replaceTrack(null); } catch { /* noop */ } }
+        if (holders.audio) { try { await holders.audio.replaceTrack(null); } catch { /* noop */ } }
+        notifyScreen(remoteId, false);
+      }
+    }
+    const ss = screenStreamRef.current;
+    ss?.getTracks().forEach((t) => { try { t.stop(); } catch { /* noop */ } ss.removeTrack(t); });
+    if (wasSharing) await setVoiceFlags({ screen: false }).catch(() => {});
+  }
+
+  function toggleFullscreen() {
+    const el = stageRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) { void document.exitFullscreen?.().catch(() => {}); return; }
+    void el.requestFullscreen?.().catch(() => {});
   }
 
   const participants = details?.participants ?? [];
   const statusLabel = connection === "connected" ? "Voice Connected" : connection === "connecting" ? "Connecting…" : "Connection Lost";
+
+  const screenEntries = useMemo<ScreenEntry[]>(() => {
+    const list: ScreenEntry[] = [];
+    if (screenOn && screenStreamRef.current) list.push({ id: "self", local: true, stream: screenStreamRef.current, name: "You" });
+    for (const p of participants) {
+      if (p.userId === myUserId) continue;
+      const s = remoteScreens[p.userId];
+      if (s) list.push({ id: p.userId, local: false, stream: s, name: p.name });
+    }
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenOn, remoteScreens, participants, myUserId]);
+  const activeFocus = screenFocus && screenEntries.some((e) => e.id === screenFocus)
+    ? screenFocus
+    : screenEntries[0]?.id ?? null;
 
   return (
     <>
@@ -403,6 +574,7 @@ export default function VoicePanel({
             {participants.length > 5 && <span className="vp-mini-more">+{participants.length - 5}</span>}
             <span className="vp-mini-count">{participants.length}</span>
           </div>
+          {screenOn && <span className="vp-mini-sharing"><MonitorUp size={12} /> sharing</span>}
           {videoOn && (
             <video
               className="vp-mini-cam"
@@ -422,6 +594,9 @@ export default function VoicePanel({
             </button>
             <button className={videoOn ? "active" : ""} onClick={toggleVideo} aria-label="Toggle camera" title="Toggle camera">
               {videoOn ? <Video size={16} /> : <VideoOff size={16} />}
+            </button>
+            <button className={screenOn ? "active" : ""} onClick={toggleScreen} aria-label="Share screen" title="Share screen">
+              <MonitorUp size={16} />
             </button>
             <button className={deafened ? "active" : ""} onClick={toggleDeafen} aria-label="Toggle deafen" title="Deafen">
               <VolumeX size={16} />
@@ -449,6 +624,49 @@ export default function VoicePanel({
                 <Button size="sm" variant="destructive" onClick={onLeave}><PhoneOff className="mr-1 h-4 w-4" /> Disconnect</Button>
               </div>
             </header>
+
+            {screenEntries.length > 0 && (
+              <div className={`vp-screenstage ${enlarged ? "enlarged" : ""}`} ref={stageRef}>
+                <div className="vp-screen-tabs">
+                  {screenEntries.map((e) => (
+                    <button
+                      key={e.id}
+                      className={`vp-screen-tab ${e.id === activeFocus ? "active" : ""}`}
+                      onClick={() => setScreenFocus(e.id)}
+                    >
+                      <span className="vp-screen-tab-dot" /> {e.local ? "Your screen" : `${e.name}'s screen`}
+                    </button>
+                  ))}
+                  <span className="vp-screen-tools">
+                    <button onClick={() => setEnlarged((v) => !v)} title={enlarged ? "Exit focus" : "Focus shared screen"} aria-label={enlarged ? "Exit focus" : "Focus shared screen"}>
+                      {enlarged ? <Minimize2 size={14} /> : <Maximize size={14} />}
+                    </button>
+                    <button onClick={toggleFullscreen} title="Fullscreen" aria-label="Fullscreen"><Maximize size={14} /></button>
+                  </span>
+                </div>
+                <div className="vp-screen-main">
+                  {screenEntries.map((e) => (
+                    <video
+                      key={e.id}
+                      className={`vp-screen-video ${e.id === activeFocus ? "focus" : ""}`}
+                      autoPlay
+                      playsInline
+                      muted={e.local || deafened}
+                      ref={(el) => {
+                        if (!el) return;
+                        if (el.srcObject !== e.stream) { el.srcObject = e.stream; void el.play().catch(() => {}); }
+                      }}
+                    />
+                  ))}
+                  {screenOn && (
+                    <div className="vp-screen-badge">
+                      <MonitorUp size={13} /> You&apos;re sharing
+                      <button onClick={() => void toggleScreen()}>Stop sharing</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="vp-grid">
               {participants.map((p) => {
@@ -491,6 +709,7 @@ export default function VoicePanel({
                     <span className="vp-flags">
                       {p.deafened ? <VolumeX size={13} aria-label="Deafened" /> : p.muted ? <MicOff size={13} aria-label="Muted" /> : null}
                       {p.video && <Video size={13} aria-label="Camera on" />}
+                      {isSelf ? (screenOn && <MonitorUp size={13} aria-label="Sharing screen" />) : (remoteScreens[p.userId] && <MonitorUp size={13} aria-label="Sharing screen" />)}
                       {p.speaking && <em className="vp-speaking-text">speaking</em>}
                     </span>
                   </div>
@@ -514,7 +733,7 @@ export default function VoicePanel({
               <button className={videoOn ? "active" : ""} onClick={toggleVideo} aria-label="Toggle camera" title="Toggle camera">
                 {videoOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
               </button>
-              <button className={sharing ? "active" : ""} onClick={toggleScreen} aria-label="Share screen" title="Share screen">
+              <button className={screenOn ? "active" : ""} onClick={() => void toggleScreen()} aria-label={screenOn ? "Stop sharing screen" : "Share screen"} title={screenOn ? "Stop sharing" : "Share screen"}>
                 <MonitorUp className="h-5 w-5" />
               </button>
             </footer>

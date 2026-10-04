@@ -1,0 +1,75 @@
+/* ---------- Screen sharing (channel voice panel + DM call window) ---------- */
+
+/* -- Channel voice panel: shared-screen stage -- */
+.vp-screenstage {
+  display: flex; flex-direction: column; gap: 8px; padding: 8px;
+  border: 1px solid rgba(139, 92, 246, .35); border-radius: 14px; background: #0e0e14;
+  max-height: 46vh;
+}
+.vp-screen-tabs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.vp-screen-tab {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+  padding: 4px 10px; border-radius: 999px; border: 1px solid transparent;
+  background: rgba(255, 255, 255, .06); color: #c9c5da;
+}
+.vp-screen-tab.active { background: rgba(139, 92, 246, .24); color: #fff; border-color: rgba(139, 92, 246, .6); }
+.vp-screen-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: #f0616d; box-shadow: 0 0 8px #f0616d; }
+.vp-screen-tools { margin-left: auto; display: inline-flex; gap: 4px; }
+.vp-screen-tools button { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: rgba(255, 255, 255, .07); color: #d8d4e6; }
+.vp-screen-tools button:hover { background: rgba(255, 255, 255, .15); }
+.vp-screen-main { position: relative; }
+/* Only the focused screen is displayed; every entry stays mounted so focusing
+   another share never forces a stream to be re-attached. */
+.vp-screen-video { display: none; width: 100%; max-height: min(360px, 36vh); border-radius: 12px; background: #000; object-fit: contain; }
+.vp-screen-video.focus { display: block; }
+.vp-screen-badge {
+  position: absolute; left: 10px; bottom: 10px; display: inline-flex; align-items: center; gap: 8px;
+  font-size: 11px; padding: 5px 10px; border-radius: 999px; background: rgba(0, 0, 0, .7);
+  color: #eae7f5; border: 1px solid rgba(139, 92, 246, .5);
+}
+.vp-screen-badge button { font-size: 11px; color: #ffb4bd; text-decoration: underline; }
+.vp-screen-badge button:hover { color: #fff; }
+.vp-screenstage.enlarged {
+  position: fixed; inset: 3vh 3vw; z-index: 88; background: #0b0b10; border-radius: 16px;
+  padding: 14px; box-shadow: 0 30px 90px rgba(0, 0, 0, .8);
+}
+.vp-screenstage.enlarged .vp-screen-video.focus { max-height: none; height: calc(96vh - 150px); }
+.vp-screenstage:fullscreen { background: #000; padding: 12px; }
+.vp-screenstage:fullscreen .vp-screen-video.focus { height: calc(100vh - 90px); max-height: none; }
+.vp-mini-sharing { display: inline-flex; align-items: center; gap: 5px; margin: 0 11px 4px; font-size: 10px; color: #c4b5f7; }
+
+/* -- DM call window: remote screen stage + local preview -- */
+.fc-callwin-screenshare { position: relative; background: #06060a; border-bottom: 1px solid rgba(139, 92, 246, .4); }
+.fc-callwin-screenshare.off { display: none; }
+.fc-callwin-screenvideo { display: block; width: 100%; max-height: 240px; object-fit: contain; background: #000; }
+.fc-callwin-screen-tag {
+  position: absolute; left: 8px; bottom: 8px; font-size: 10px; padding: 2px 8px;
+  border-radius: 999px; background: rgba(0, 0, 0, .6); color: #d8d4e6;
+}
+.fc-callwin-screen-tools { position: absolute; right: 8px; top: 8px; display: inline-flex; gap: 4px; }
+.fc-callwin-screen-tools button {
+  width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center;
+  background: rgba(0, 0, 0, .55); color: #eae7f5;
+}
+.fc-callwin-screen-tools button:hover { background: rgba(139, 92, 246, .6); }
+.fc-callwin-screenshare.enlarged {
+  position: fixed; inset: 4vh 4vw; z-index: 97; background: #06060a; border-radius: 16px;
+  padding: 12px; border: 1px solid rgba(139, 92, 246, .6); box-shadow: 0 30px 90px rgba(0, 0, 0, .8);
+}
+.fc-callwin-screenshare.enlarged .fc-callwin-screenvideo { height: calc(92vh - 120px); max-height: none; }
+.fc-callwin-screenshare:fullscreen { background: #000; padding: 12px; }
+.fc-callwin-screenshare:fullscreen .fc-callwin-screenvideo { height: calc(100vh - 40px); max-height: none; }
+.fc-callwin.compact .fc-callwin-screenvideo { max-height: 120px; }
+/* The local screen preview keeps the shared content visible without cropping. */
+.fc-callwin-selfscreen { object-fit: contain; background: #06060a; }
+.fc-callwin-selfshare {
+  position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; padding: 2px 8px; border-radius: 999px; background: rgba(0, 0, 0, .6);
+  color: #c4b5f7; pointer-events: none;
+}
+.fc-callwin-stopshare {
+  position: absolute; left: 8px; top: 8px; font-size: 10px; padding: 3px 9px;
+  border-radius: 8px; background: rgba(240, 97, 109, .85); color: #fff; pointer-events: auto;
+}
+.fc-callwin-stopshare:hover { background: #f0616d; }
+.fc-callwin-minishare { color: #c4b5f7; }

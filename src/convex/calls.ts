@@ -118,7 +118,7 @@ export const cancelCall = mutation({
 
 // ---------------- DM call signaling (WebRTC for calls) ----------------
 
-const signalKind = v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate"));
+const signalKind = v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate"), v.literal("screen"));
 
 /** Relay a WebRTC signal to the other member of a DM call. */
 export const sendDmSignal = mutation({

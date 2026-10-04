@@ -5,7 +5,9 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
 import { toast } from "sonner";
-import { Maximize2, Mic, MicOff, Minimize2, PhoneOff, Video, VideoOff, Volume2, VolumeX, X } from "lucide-react";
+import { Maximize, Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Video, VideoOff, Volume2, VolumeX, X } from "lucide-react";
+import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "@/components/voice/screenShare";
+import "@/components/voice/screenShare.css";
 
 const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
@@ -29,21 +31,20 @@ type View = "compact" | "float" | "full";
 
 /**
  * A real 1:1 call inside a DM conversation, rendered as a DRAGGABLE floating
- * window for both audio and video calls.
+ * window for both audio and video calls, with real screen sharing.
  *
- * The media lifecycle is deliberately stable, because rebuilding it is exactly
- * what makes the video flash between frames and black:
- *  - `getUserMedia` runs exactly once per call (guarded by `initRef`).
+ * The media lifecycle stays deliberately stable, because rebuilding it is
+ * exactly what makes video flash black:
+ *  - `getUserMedia` runs once per call (guarded by `initRef`).
  *  - Exactly one `RTCPeerConnection` exists for the call; it is never recreated
- *    for mute / camera / minimize / drag / navigation.
+ *    for mute / camera / screen share / minimize / drag / navigation.
  *  - Perfect-negotiation handles the initial offer AND every later
- *    renegotiation (camera added), so there is no offer loop and no glare.
- *  - The `<video>` elements are mounted for the whole call and only ever get
- *    `srcObject` assigned when the actual stream instance changes.
- *  - Camera toggles use `RTCRtpSender.replaceTrack()`; the microphone toggle
- *    only touches the audio track. Neither restarts the connection.
- *  - Teardown happens only when the component unmounts (the call really ended),
- *    never on a rerender.
+ *    renegotiation, so there is no offer loop and no glare.
+ *  - The camera keeps its own sender; screen share gets a SEPARATE send-only
+ *    transceiver, so camera + screen run together and stopping share never
+ *    touches the camera.
+ *  - The media elements are mounted for the whole call and only get `srcObject`
+ *    assigned when the actual stream instance changes.
  */
 export default function DmCallPanel({
   conversationId,
@@ -77,6 +78,9 @@ export default function DmCallPanel({
   const [muted, setMuted] = useState(false);
   const [cameraOn, setCameraOn] = useState(media === "video");
   const [speakerMuted, setSpeakerMuted] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
+  const [remoteScreen, setRemoteScreen] = useState<MediaStream | null>(null);
+  const [screenEnlarged, setScreenEnlarged] = useState(false);
   const [connection, setConnection] = useState<"connecting" | "connected" | "lost">("connecting");
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -97,6 +101,7 @@ export default function DmCallPanel({
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  const cameraSenderRef = useRef<RTCRtpSender | null>(null);
   const initRef = useRef(false);
   // Perfect-negotiation bookkeeping.
   const makingOfferRef = useRef(false);
@@ -111,6 +116,16 @@ export default function DmCallPanel({
   // avatar over a live frame.
   const hideRemoteTimer = useRef<number | null>(null);
 
+  // Screen-share bookkeeping.
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const screenSendersRef = useRef<ScreenSenders | null>(null);
+  const sharingRef = useRef(false);
+  const remoteScreenStream = useRef<MediaStream | null>(null);
+  const remoteScreenIds = useRef<Set<string>>(new Set());
+  const remoteScreenActive = useRef(false);
+  const trackStreamIds = useRef<Map<string, string>>(new Map());
+  const screenStageRef = useRef<HTMLDivElement | null>(null);
+
   // Latest props/values in refs so the init effect never needs to rerun.
   const peerIdRef = useRef(peerId);
   const myUserIdRef = useRef(myUserId);
@@ -123,11 +138,13 @@ export default function DmCallPanel({
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localScreenRef = useRef<HTMLVideoElement | null>(null);
+  const remoteScreenRef = useRef<HTMLVideoElement | null>(null);
   const audioEl = useRef<HTMLAudioElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
 
-  const send = useCallback((to: Id<"users">, kind: "offer" | "answer" | "candidate", payload: string) => {
+  const send = useCallback((to: Id<"users">, kind: "offer" | "answer" | "candidate" | "screen", payload: string) => {
     return sendSignalRef.current({ conversationId, toUserId: to, kind, payload }).catch(() => {});
   }, [conversationId]);
 
@@ -151,6 +168,34 @@ export default function DmCallPanel({
     }, 500);
   }, []);
 
+  /**
+   * Route incoming tracks to either the participant's camera/audio stream or
+   * their screen stream. A peer's screen stream id is announced over the relay,
+   * so the screen is never mistaken for the camera.
+   */
+  const classifyRemote = useCallback(() => {
+    const pc = pcRef.current;
+    const main = remoteStreamRef.current;
+    if (!pc || !main) return;
+    let scr = remoteScreenStream.current;
+    if (remoteScreenIds.current.size > 0 && !scr) { scr = new MediaStream(); remoteScreenStream.current = scr; }
+    for (const r of pc.getReceivers()) {
+      const t = r.track;
+      if (!t) continue;
+      const sid = trackStreamIds.current.get(t.id);
+      const isScreen = Boolean(sid && remoteScreenIds.current.has(sid));
+      const target = isScreen && scr ? scr : main;
+      const other = isScreen ? main : scr;
+      if (!target.getTracks().some((x) => x.id === t.id)) target.addTrack(t);
+      if (other && other !== target && other.getTracks().some((x) => x.id === t.id)) other.removeTrack(t);
+    }
+    const active = remoteScreenActive.current && Boolean(scr?.getVideoTracks().some((t) => t.readyState === "live"));
+    setRemoteScreen(active && scr ? scr : null);
+    // A screen track that briefly landed on the main stream must not leave the
+    // remote camera tile showing a frozen frame.
+    refreshRemoteVideo();
+  }, [refreshRemoteVideo]);
+
   // ---- Call duration once connected ----
   useEffect(() => {
     if (connection !== "connected") return;
@@ -159,7 +204,11 @@ export default function DmCallPanel({
   }, [connection]);
 
   // ---- Speaker mute on the always-mounted remote audio sink ----
-  useEffect(() => { if (audioEl.current) audioEl.current.muted = speakerMuted; }, [speakerMuted]);
+  useEffect(() => {
+    if (audioEl.current) audioEl.current.muted = speakerMuted;
+    // Screen audio (if the sharer is sending it) follows the speaker control too.
+    if (remoteScreenRef.current) remoteScreenRef.current.muted = speakerMuted;
+  }, [speakerMuted]);
 
   // ---- Attach streams to the (permanent) media elements ----
   useEffect(() => {
@@ -172,6 +221,20 @@ export default function DmCallPanel({
     const a = audioEl.current;
     if (a && a.srcObject !== remoteStream) { a.srcObject = remoteStream; safePlay(a); }
   }, [remoteStream]);
+  // Local screen preview (muted) — the sharer's single preview, no duplicates.
+  useEffect(() => {
+    const el = localScreenRef.current;
+    if (!el) return;
+    const s = screenOn ? screenStreamRef.current : null;
+    if (el.srcObject !== s) { el.srcObject = s; safePlay(el); }
+  }, [screenOn]);
+  // Remote screen stage.
+  useEffect(() => {
+    const el = remoteScreenRef.current;
+    if (!el) return;
+    if (el.srcObject !== remoteScreen) { el.srcObject = remoteScreen; safePlay(el); }
+    el.muted = speakerMuted;
+  }, [remoteScreen, speakerMuted]);
 
   // ---- Acquire local media + build the peer connection exactly once ----
   useEffect(() => {
@@ -227,15 +290,8 @@ export default function DmCallPanel({
 
       // Registered exactly once per connection.
       pc.ontrack = (e) => {
-        const rs = remoteStreamRef.current;
-        if (!rs) return;
-        const incoming = e.streams[0]?.getTracks() ?? (e.track ? [e.track] : []);
-        for (const track of incoming) {
-          if (!rs.getTracks().some((x) => x.id === track.id)) rs.addTrack(track);
-          track.onmute = refreshRemoteVideo;
-          track.onunmute = refreshRemoteVideo;
-          track.onended = refreshRemoteVideo;
-        }
+        trackStreamIds.current.set(e.track.id, e.streams[0]?.id ?? "");
+        classifyRemote();
         refreshRemoteVideo();
       };
       pc.onicecandidate = (e) => {
@@ -276,8 +332,18 @@ export default function DmCallPanel({
         }
       };
 
-      // Adding the tracks triggers onnegotiationneeded → exactly one offer.
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
+      // Adding the tracks triggers onnegotiationneeded → exactly one offer. The
+      // camera sender is captured so screen share can never get hold of it.
+      for (const t of stream.getTracks()) {
+        const sender = pc.addTrack(t, stream);
+        if (t.kind === "video") cameraSenderRef.current = sender;
+      }
+      // If sharing was somehow started before the connection existed, send it.
+      if (sharingRef.current && screenStreamRef.current) {
+        const holders = (screenSendersRef.current ??= {});
+        await applyScreenToPeer(pc, holders, screenStreamRef.current, screenStreamRef.current.getVideoTracks()[0] ?? null, screenStreamRef.current.getAudioTracks()[0] ?? null);
+        send(peer, "screen", JSON.stringify({ on: true, streamId: screenStreamRef.current.id }));
+      }
       setPcReady(true);
     })();
 
@@ -287,9 +353,19 @@ export default function DmCallPanel({
       setPcReady(false);
       try { pcRef.current?.close(); } catch { /* noop */ }
       pcRef.current = null;
+      cameraSenderRef.current = null;
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
       remoteStreamRef.current = null;
+      // Release the screen capture as well — ending the call stops sharing.
+      sharingRef.current = false;
+      screenStreamRef.current?.getTracks().forEach((t) => { try { t.stop(); } catch { /* noop */ } });
+      screenStreamRef.current = null;
+      screenSendersRef.current = null;
+      remoteScreenStream.current = null;
+      remoteScreenIds.current.clear();
+      remoteScreenActive.current = false;
+      trackStreamIds.current.clear();
       processedSignals.current.clear();
       pendingCandidates.current = [];
       remoteDescSet.current = false;
@@ -299,7 +375,7 @@ export default function DmCallPanel({
       if (hideRemoteTimer.current !== null) { clearTimeout(hideRemoteTimer.current); hideRemoteTimer.current = null; }
     };
     // Intentionally stable for the whole call: deps never change mid-call.
-  }, [conversationId, send, refreshRemoteVideo]);
+  }, [conversationId, send, refreshRemoteVideo, classifyRemote]);
 
   // ---- Apply incoming signaling (each message exactly once) ----
   useEffect(() => {
@@ -339,12 +415,17 @@ export default function DmCallPanel({
             } else {
               pendingCandidates.current.push(data);
             }
+          } else if (s.kind === "screen") {
+            const meta = data as { on?: boolean; streamId?: string };
+            if (meta.streamId) remoteScreenIds.current.add(meta.streamId);
+            remoteScreenActive.current = Boolean(meta.on);
+            classifyRemote();
           }
         } catch { /* ignore out-of-order signaling */ }
         try { await clearSignal({ signalId: s._id }); } catch { /* noop */ }
       }
     })();
-  }, [signals, pcReady, clearSignal, send]);
+  }, [signals, pcReady, clearSignal, send, classifyRemote]);
 
   // ---- Controls (operate on existing tracks; never rebuild the connection) ----
   function toggleMute() {
@@ -354,24 +435,16 @@ export default function DmCallPanel({
     localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !next));
   }
 
-  /**
-   * The video sender is the one carrying a video track, or — once the camera
-   * was turned off with `replaceTrack(null)` — the sender with no track at all
-   * (the audio sender always keeps its track).
-   */
-  function findVideoSender(pc: RTCPeerConnection): RTCRtpSender | undefined {
-    return pc.getSenders().find((s) => s.track?.kind === "video") ?? pc.getSenders().find((s) => s.track === null);
-  }
-
   async function toggleCamera() {
     const pc = pcRef.current;
     if (!pc) return;
     const stream = localStreamRef.current;
-    const videoSender = findVideoSender(pc);
+    const videoSender = cameraSenderRef.current;
 
     if (cameraOn) {
       // Turning OFF: stop sending video and release the camera (LED off). The
-      // peer connection, the microphone and remote audio are untouched.
+      // peer connection, the microphone, the screen share and remote audio are
+      // untouched.
       if (videoSender) { try { await videoSender.replaceTrack(null); } catch { /* noop */ } }
       const existing = stream?.getVideoTracks()[0];
       if (existing) { try { existing.stop(); } catch { /* noop */ } stream?.removeTrack(existing); }
@@ -392,9 +465,10 @@ export default function DmCallPanel({
         // Replace in place — no renegotiation and no flicker on the remote side.
         await videoSender.replaceTrack(track);
       } else {
-        // No video sender yet (a voice call turning on video): addTrack triggers
+        // No camera sender yet (a voice call turning on video): addTrack triggers
         // onnegotiationneeded, which perfect-negotiation answers exactly once.
-        pc.addTrack(track, s);
+        const sender = pc.addTrack(track, s);
+        cameraSenderRef.current = sender;
       }
       setCameraOn(true);
     } catch (err) {
@@ -402,6 +476,61 @@ export default function DmCallPanel({
       setCameraError(name === "NotAllowedError" ? "Camera permission is required to turn your camera on." : "Could not access your camera.");
       toast.error(name === "NotAllowedError" ? "Camera permission is required to turn your camera on." : "Could not access your camera.");
     }
+  }
+
+  /** Start or stop sharing. A cancelled picker silently does nothing. */
+  async function toggleScreen() {
+    const pc = pcRef.current;
+    if (sharingRef.current) { await stopScreen(); return; }
+    if (!pc) return;
+
+    const result = await captureDisplay();
+    if (!result.ok) {
+      if (!result.cancelled && result.message) toast.error(result.message);
+      return;
+    }
+    const display = result.stream;
+    const videoTrack = display.getVideoTracks()[0];
+    if (!videoTrack) { display.getTracks().forEach((t) => t.stop()); toast.error("No screen was selected."); return; }
+    const audioTrack = display.getAudioTracks()[0] ?? null;
+
+    let ss = screenStreamRef.current;
+    if (!ss) { ss = new MediaStream(); screenStreamRef.current = ss; }
+    ss.addTrack(videoTrack);
+    if (audioTrack) ss.addTrack(audioTrack);
+
+    const holders = (screenSendersRef.current ??= {});
+    await applyScreenToPeer(pc, holders, ss, videoTrack, audioTrack);
+
+    sharingRef.current = true;
+    setScreenOn(true);
+    // The browser's own "Stop sharing" button ends the track — react to it.
+    videoTrack.onended = () => { void stopScreen(); };
+    send(peerIdRef.current, "screen", JSON.stringify({ on: true, streamId: ss.id }));
+  }
+
+  /** Stop sharing without touching the call, the mic, or the camera. */
+  async function stopScreen() {
+    const wasSharing = sharingRef.current;
+    sharingRef.current = false;
+    screenStreamRef.current?.getTracks().forEach((t) => { t.onended = null; });
+    setScreenOn(false);
+    setScreenEnlarged(false);
+    if (wasSharing) {
+      const holders = screenSendersRef.current;
+      if (holders?.video) { try { await holders.video.replaceTrack(null); } catch { /* noop */ } }
+      if (holders?.audio) { try { await holders.audio.replaceTrack(null); } catch { /* noop */ } }
+      send(peerIdRef.current, "screen", JSON.stringify({ on: false }));
+    }
+    const ss = screenStreamRef.current;
+    ss?.getTracks().forEach((t) => { try { t.stop(); } catch { /* noop */ } ss.removeTrack(t); });
+  }
+
+  function toggleFullscreen() {
+    const el = screenStageRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) { void document.exitFullscreen?.().catch(() => {}); return; }
+    void el.requestFullscreen?.().catch(() => {});
   }
 
   // ---- Keep the view in sync with the external minimize flag (nav changes) ----
@@ -501,7 +630,22 @@ export default function DmCallPanel({
           {/* Compact row — hidden (but kept mounted) via CSS in other views. */}
           <div className="fc-callwin-compact-row">
             <ProfileAvatar name={peerName} url={peerAvatarUrl} size={26} showPresence={false} />
-            <span className="fc-callwin-time">{connection === "connected" ? fmtDuration(seconds) : label}</span>
+            <span className="fc-callwin-time">
+              {connection === "connected" ? fmtDuration(seconds) : label}
+              {screenOn && <span className="fc-callwin-minishare"> · sharing</span>}
+            </span>
+          </div>
+
+          {/* Remote screen stage — only rendered while the real remote track is live. */}
+          <div className={`fc-callwin-screenshare ${screenEnlarged ? "enlarged" : ""} ${remoteScreen ? "" : "off"}`} ref={screenStageRef}>
+            <video className="fc-callwin-screenvideo" autoPlay playsInline ref={remoteScreenRef} />
+            <span className="fc-callwin-screen-tag">{peerName}&apos;s screen</span>
+            <span className="fc-callwin-screen-tools">
+              <button aria-label={screenEnlarged ? "Exit focus" : "Focus shared screen"} title={screenEnlarged ? "Exit focus" : "Focus"} onClick={() => setScreenEnlarged((v) => !v)}>
+                {screenEnlarged ? <Minimize2 size={14} /> : <Maximize size={14} />}
+              </button>
+              <button aria-label="Fullscreen shared screen" title="Fullscreen" onClick={toggleFullscreen}><Maximize size={14} /></button>
+            </span>
           </div>
 
           {/* Stage — always mounted so the <video> elements never unmount. */}
@@ -521,12 +665,24 @@ export default function DmCallPanel({
               <span className="fc-callwin-timer">{connection === "connected" ? fmtDuration(seconds) : label}</span>
             </div>
             <div className="fc-callwin-local">
-              <video className={`fc-callwin-selfvideo ${cameraOn ? "" : "off"}`} autoPlay playsInline muted ref={localVideoRef} />
-              {cameraOn
-                ? <span className="fc-callwin-tag">You</span>
-                : <span className="fc-callwin-selfav"><ProfileAvatar name="You" size={28} showPresence={false} /></span>}
+              {/* While sharing, this tile becomes the local screen preview (the
+                  camera keeps transmitting regardless). One preview, no dupes. */}
+              {screenOn ? (
+                <>
+                  <video className="fc-callwin-selfvideo fc-callwin-selfscreen" autoPlay playsInline muted ref={localScreenRef} />
+                  <span className="fc-callwin-selfshare"><MonitorUp size={12} /> Your screen</span>
+                  <button className="fc-callwin-stopshare" onClick={() => void toggleScreen()}>Stop sharing</button>
+                </>
+              ) : (
+                <>
+                  <video className={`fc-callwin-selfvideo ${cameraOn ? "" : "off"}`} autoPlay playsInline muted ref={localVideoRef} />
+                  {cameraOn
+                    ? <span className="fc-callwin-tag">You</span>
+                    : <span className="fc-callwin-selfav"><ProfileAvatar name="You" size={28} showPresence={false} /></span>}
+                </>
+              )}
             </div>
-            {cameraError && <p className="fc-callwin-camerr">{cameraError}</p>}
+            {cameraError && !screenOn && <p className="fc-callwin-camerr">{cameraError}</p>}
           </div>
         </div>
 
@@ -539,6 +695,9 @@ export default function DmCallPanel({
           </button>
           <button className={cameraOn ? "active" : ""} onClick={toggleCamera} aria-label="Toggle camera" title="Camera">
             {cameraOn ? <Video size={16} /> : <VideoOff size={16} />}
+          </button>
+          <button className={screenOn ? "active" : ""} onClick={() => void toggleScreen()} aria-label={screenOn ? "Stop sharing screen" : "Share screen"} title={screenOn ? "Stop sharing" : "Share screen"}>
+            <MonitorUp size={16} />
           </button>
           {view === "full"
             ? <button onClick={() => setViewAndNotify("float")} aria-label="Shrink call window" title="Shrink"><Minimize2 size={16} /></button>

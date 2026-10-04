@@ -622,7 +622,7 @@ export const sendSignal = mutation({
   args: {
     channelId: v.id("channels"),
     toUserId: v.id("users"),
-    kind: v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate")),
+    kind: v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate"), v.literal("screen")),
     payload: v.string(),
   },
   handler: async (ctx, { channelId, toUserId, kind, payload }) => {

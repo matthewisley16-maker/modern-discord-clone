@@ -449,7 +449,9 @@ const schema = defineSchema(
       channelId: v.id("channels"),
       fromUserId: v.id("users"),
       toUserId: v.id("users"),
-      kind: v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate")),
+      // "screen" announces the screen-share stream id / on-off state alongside
+      // the normal SDP offer/answer and ICE candidate relay.
+      kind: v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate"), v.literal("screen")),
       payload: v.string(),
     }).index("by_to", ["toUserId"]),
 
@@ -479,7 +481,9 @@ const schema = defineSchema(
       conversationId: v.id("dmConversations"),
       fromUserId: v.id("users"),
       toUserId: v.id("users"),
-      kind: v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate")),
+      // "screen" announces the screen-share stream id / on-off state alongside
+      // the normal SDP offer/answer and ICE candidate relay.
+      kind: v.union(v.literal("offer"), v.literal("answer"), v.literal("candidate"), v.literal("screen")),
       payload: v.string(),
     }).index("by_to", ["toUserId"]).index("by_conversation", ["conversationId"]),
 
