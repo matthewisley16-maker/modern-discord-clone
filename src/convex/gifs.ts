@@ -33,7 +33,9 @@ export const search = action({
     }
     await ctx.runMutation(internal.gifLimits.enforceGifRateLimit, { userId });
 
-    const key = process.env.GIPHY_API_KEY;
+    // Accept both naming conventions so the key works regardless of how it was
+    // named in the environment/Keys configuration.
+    const key = process.env.GIPHY_API_KEY ?? process.env.GIPHYAPIKEY;
     if (!key) {
       return { configured: false, results: [], next: null, error: null };
     }

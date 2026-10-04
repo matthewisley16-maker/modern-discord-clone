@@ -17,7 +17,9 @@ export const giphyConfig = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { configured: false, apiKey: null as string | null };
-    const key = process.env.GIPHY_API_KEY?.trim();
+    // Accept both naming conventions so the key works regardless of how it was
+    // named in the environment/Keys configuration.
+    const key = (process.env.GIPHY_API_KEY ?? process.env.GIPHYAPIKEY)?.trim();
     return { configured: Boolean(key), apiKey: key && key.length > 0 ? key : null };
   },
 });
