@@ -95,7 +95,18 @@ class RootErrorBoundary extends React.Component<
   }
 }
 
-const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL as string);
+// One Convex deployment for every environment (dev, preview, production).
+//
+// This used to read `import.meta.env.VITE_CONVEX_URL`, which Vite inlines at
+// BUILD time — so a production build could be compiled against a different
+// deployment than the one the app is developed against. That split the data:
+// the deployed app wrote to a different database than dev, so nothing appeared
+// to save. Pinning a single URL here makes dev and the deployed app read and
+// write the exact same database, so they stay in sync in real time.
+//
+// To move to a different deployment, change this one line.
+const CONVEX_URL = "https://academic-porcupine-929.convex.cloud";
+const convex = new ConvexReactClient(CONVEX_URL);
 
 
 
