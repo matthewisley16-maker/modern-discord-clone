@@ -542,9 +542,16 @@ export default function DmCallPanel({
   }, [minimized]);
 
   // ---- Dragging (window views only), clamped to the visible area ----
+  // The WHOLE window is draggable (header and body background). Controls,
+  // links, fields and — importantly — the <video>/<audio> elements are never
+  // drag handles, so mute/camera/screen-share/end stay perfectly clickable and
+  // interacting with a video doesn't move the window. This is pointer-event
+  // based, so it also works with touch. It never touches the peer connection.
   function startDrag(e: React.PointerEvent) {
     if (view === "full") return;
-    if ((e.target as HTMLElement).closest("button")) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest("button, a, input, select, textarea, video, audio, [data-no-drag]")) return;
     const el = rootRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -606,8 +613,9 @@ export default function DmCallPanel({
         style={windowStyle}
         role="region"
         aria-label={`Call with ${peerName}`}
+        onPointerDown={startDrag}
       >
-        <div className="fc-callwin-head" onPointerDown={startDrag} title={view === "full" ? undefined : "Drag to move"}>
+        <div className="fc-callwin-head" title={view === "full" ? undefined : "Drag to move"}>
           <span className="fc-callwin-title">
             <span className={`vp-mini-dot ${connection}`} />
             {view === "compact" ? peerName : `${title} · ${peerName}`}

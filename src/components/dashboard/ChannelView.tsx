@@ -375,7 +375,7 @@ export default function ChannelView({
             </div>
           )}
           {emojiOpen && <div className="fc-emoji-picker">{EMOJIS.map((e) => <button key={e} onClick={() => { setDraft(draft + e); setEmojiOpen(false); }}>{e}</button>)}</div>}
-          {gifOpen && <GifPicker onSelect={(g) => { setPendingGif(g); setGifOpen(false); }} onClose={() => setGifOpen(false)} />}
+          {gifOpen && <GifPicker onSelect={(g) => { setPendingGif(g); setGifOpen(false); }} onUploadGif={stageFile} onClose={() => setGifOpen(false)} />}
           {mentions.open && (
             <div className="fc-mention-menu" role="listbox" aria-label="Mention suggestions">
               {mentions.suggestions.map((s, i) => (

@@ -6,6 +6,7 @@ import { convexAuth, createAccount, retrieveAccount } from "@convex-dev/auth/ser
 import { Scrypt } from "lucia";
 import { internal } from "./_generated/api";
 import { emailOtp } from "./auth/emailOtp";
+import { emailPassword } from "./auth/emailPassword";
 
 /** Usernames: 3-24 chars, letters/numbers/dot/underscore. Normalized to lowercase. */
 export const USERNAME_PATTERN = /^[a-z0-9._]{3,24}$/;
@@ -113,5 +114,5 @@ const usernamePassword = ConvexCredentials({
 });
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
-  providers: [usernamePassword, emailOtp, Anonymous],
+  providers: [usernamePassword, emailPassword, emailOtp, Anonymous],
 });

@@ -461,6 +461,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-session-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.07); }
 .fc-session-row p { font-size: 12px; }
 .fc-delete-row { display: flex; gap: 10px; }
+.fc-pw-form { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.02); }
+.fc-pw-input { display: flex; align-items: center; gap: 6px; }
+.fc-pw-input > button { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 8px; border: 1px solid rgba(255,255,255,.1); background: #1e1d28; color: #9d99ad; }
+.fc-pw-input > button:hover { color: #eeecf6; }
+.fc-pw-actions { display: flex; gap: 10px; }
 .fc-call-overlay { position: fixed; inset: 0; z-index: 80; background: rgba(6,6,10,.97); display: grid; place-items: center; padding: 20px; }
 .call-panel { width: min(940px, 100%); max-height: 90vh; display: flex; flex-direction: column; gap: 14px; }
 .call-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -582,7 +587,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .vp-head-actions { display: flex; gap: 8px; align-items: center; }
 .vp-sinks { position: fixed; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 /* ---- Floating minimized call window (voice + DM) ---- */
-.vp-mini { position: fixed; right: 18px; bottom: 18px; z-index: 95; width: 232px; background: #14141b; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 22px 55px rgba(0,0,0,.6); overflow: hidden; cursor: pointer; }
+.vp-mini { position: fixed; right: 18px; bottom: 18px; z-index: 95; width: 232px; background: #14141b; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 22px 55px rgba(0,0,0,.6); overflow: hidden; cursor: pointer; touch-action: none; }
+.vp-mini.dragging { cursor: grabbing; }
 .vp-mini-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 11px; background: rgba(255,255,255,.03); }
 .vp-mini-title { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: #eeecf6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vp-mini-dot { width: 8px; height: 8px; border-radius: 50%; background: #f5c451; flex-shrink: 0; }
@@ -605,6 +611,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 /* ---- Draggable direct-call window (audio + video) ---- */
 .fc-callwin { position: fixed; right: 18px; bottom: 18px; z-index: 96; width: 300px; background: #131319; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 22px 55px rgba(0,0,0,.65); overflow: hidden; display: flex; flex-direction: column; }
 .fc-callwin.compact { width: 232px; }
+.fc-callwin:not(.full) { touch-action: none; }
+.fc-callwin.dragging { cursor: grabbing; }
 .fc-callwin-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; background: rgba(255,255,255,.04); cursor: grab; touch-action: none; user-select: none; }
 .fc-callwin.dragging .fc-callwin-head { cursor: grabbing; }
 .fc-callwin-title { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: #eeecf6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1098,7 +1106,15 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
 .fc-gif-status.error { color: #f0616d; }
 .fc-gif-more { display: flex; justify-content: center; padding: 10px; color: #a78bfa; }
 .fc-gif-spin { animation: fc-spin 1s linear infinite; }
-.fc-gif-foot { padding: 6px 10px; text-align: right; font-size: 9px; letter-spacing: .4px; color: #6f6b82; border-top: 1px solid rgba(255,255,255,.06); }
+.fc-gif-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-top: 1px solid rgba(255,255,255,.06); }
+.fc-gif-powered { font-size: 9px; letter-spacing: .4px; color: #6f6b82; }
+.fc-gif-foot-upload { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: #b7b1cc; padding: 3px 6px; border-radius: 6px; }
+.fc-gif-foot-upload:hover { background: rgba(255,255,255,.08); color: #fff; }
+.fc-gif-unconfigured { flex-direction: column; gap: 12px; }
+.fc-gif-unconfigured p { font-size: 12px; color: #8b87a0; margin: 0; }
+.fc-gif-unconfigured .fc-gif-hint { font-size: 11px; color: #6f6b82; max-width: 260px; }
+.fc-gif-upload { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-radius: 9px; background: #8b5cf6; color: #fff; font-size: 12px; font-weight: 600; }
+.fc-gif-upload:hover { background: #7c4df0; }
 .fc-pending-gif .fc-pending-text small { color: #a78bfa; }
 .fc-gif-msg { display: inline-block; padding: 0; border: 1px solid rgba(255,255,255,.09); border-radius: 10px; overflow: hidden; background: #17161d; cursor: zoom-in; max-width: min(320px, 100%); line-height: 0; margin-top: 6px; }
 .fc-gif-msg:hover { border-color: rgba(167,139,250,.5); }

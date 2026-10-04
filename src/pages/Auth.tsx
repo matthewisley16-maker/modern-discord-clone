@@ -3,6 +3,9 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { useAuth } from "@/hooks/use-auth";
+import { api } from "@/convex/_generated/api";
+import { useAction } from "convex/react";
+import { toast } from "sonner";
 import { FreecordMark } from "./Landing";
 import { ArrowLeft, ArrowRight, Check, Loader2, Mail, ShieldCheck, User } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
@@ -22,6 +25,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = resolveRedirect(searchParams.get("returnTo"), redirectAfterAuth);
+  const resetPassword = useAction(api.passwords.resetPassword);
 
   // Primary method is username + password. Email code sign-in stays available.
   const [method, setMethod] = useState<"username" | "email">("username");
@@ -37,13 +41,21 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   // Email OTP flow state
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
+  // After recovering via email code, the user is signed back into the SAME
+  // account and prompted to set a new password before continuing.
+  const [resetPending, setResetPending] = useState(false);
+  const [resetPw, setResetPw] = useState("");
+  const [resetConfirm, setResetConfirm] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
 
   useEffect(() => {
-    if (!authLoading && isAuthenticated) navigate(redirect);
-  }, [authLoading, isAuthenticated, navigate, redirect]);
+    if (!authLoading && isAuthenticated && !resetPending) navigate(redirect);
+  }, [authLoading, isAuthenticated, navigate, redirect, resetPending]);
 
   const usernameOk = USERNAME_RE.test(username.trim().toLowerCase());
   const passwordOk = password.length >= 8 && /[a-zA-Z]/.test(password) && /[0-9]/.test(password);
+  const resetOk = resetPw.length >= 8 && /[a-zA-Z]/.test(resetPw) && /[0-9]/.test(resetPw);
+  const resetMatch = resetPw.length > 0 && resetPw === resetConfirm;
 
   function resetMessages() {
     setError(null);
@@ -71,11 +83,14 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
         });
         navigate("/onboarding");
       } else {
-        await signIn("password", {
-          flow: "signIn",
-          username: username.trim().toLowerCase(),
-          password,
-        });
+        const identifier = username.trim().toLowerCase();
+        // Accept either a username or an email. Unknown identifiers fail with
+        // the same generic error, so email addresses can't be enumerated.
+        if (identifier.includes("@")) {
+          await signIn("email-password", { email: identifier, password });
+        } else {
+          await signIn("password", { flow: "signIn", username: identifier, password });
+        }
         navigate(redirect);
       }
     } catch (err) {
@@ -108,7 +123,15 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     setBusy(true);
     try {
       await signIn("email-otp", { email: email.trim().toLowerCase(), code: otp });
-      navigate(redirect);
+      // Recovery: the code signs us back into the same account. Offer a new
+      // password instead of jumping straight to the app.
+      if (mode === "forgot") {
+        setResetPending(true);
+        setResetPw("");
+        setResetConfirm("");
+      } else {
+        navigate(redirect);
+      }
     } catch (err) {
       setError(friendly(err, "That code isn't correct."));
       setOtp("");
@@ -123,6 +146,8 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     setBusy(true);
     try {
       await signIn("email-otp", { email: email.trim().toLowerCase() });
+      setMethod("email");
+      setOtpSent(true);
       setNotice("If that email is linked to an account, we've sent a recovery code.");
     } catch {
       setNotice("If that email is linked to an account, we've sent a recovery code.");
@@ -131,19 +156,41 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     }
   }
 
+  // Step 3 of recovery: set a new password on the SAME account (already signed in
+  // via the email code) without ever creating a second user.
+  async function submitResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    resetMessages();
+    if (!resetOk) { setError("Password must be at least 8 characters and include a letter and a number."); return; }
+    if (!resetMatch) { setError("Those passwords don't match."); return; }
+    setResetBusy(true);
+    try {
+      await resetPassword({ newPassword: resetPw });
+      toast.success("Password updated. You're signed in.");
+      setResetPending(false);
+      navigate(redirect);
+    } catch (err) {
+      setError(friendly(err, "Could not update your password."));
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
   const heading =
-    method === "email"
-      ? otpSent ? "Enter your code" : "Sign in with email"
-      : mode === "signUp" ? "Create your Freecord account"
-        : mode === "forgot" ? "Account recovery"
-          : "Welcome back";
+    resetPending ? "Set a new password"
+      : method === "email"
+        ? otpSent ? "Enter your code" : "Sign in with email"
+        : mode === "signUp" ? "Create your Freecord account"
+          : mode === "forgot" ? "Account recovery"
+            : "Welcome back";
 
   const subheading =
-    method === "email"
-      ? otpSent ? `We sent a code to ${email.trim().toLowerCase()}.` : "We'll email you a one-time sign-in code."
-      : mode === "signUp" ? "All you need is a username and password. Email is optional."
-        : mode === "forgot" ? "Recovery needs a verified email on your account."
-          : "Sign in with your username and password.";
+    resetPending ? "Choose a new password for your existing account."
+      : method === "email"
+        ? otpSent ? `We sent a code to ${email.trim().toLowerCase()}.` : "We'll email you a one-time sign-in code."
+        : mode === "signUp" ? "All you need is a username and password. Email is optional."
+          : mode === "forgot" ? "Recovery needs a verified email on your account."
+            : "Sign in with your username or email and password.";
 
   return (
     <div className="auth-freecord min-h-screen flex flex-col">
@@ -158,7 +205,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
           </CardHeader>
 
           {/* Method switch: username/password vs email code */}
-          {!(method === "email" && otpSent) && mode !== "forgot" && (
+          {!resetPending && !(method === "email" && otpSent) && mode !== "forgot" && (
             <div className="mx-6 mb-4 grid grid-cols-2 gap-1 rounded-lg border border-border/70 p-1">
               <button
                 type="button"
@@ -177,8 +224,50 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
             </div>
           )}
 
-          {/* ---------- Email code: verify step ---------- */}
-          {method === "email" && otpSent ? (
+          {/* ---------- Recovery step 3: choose a new password ---------- */}
+          {resetPending ? (
+            <form onSubmit={submitResetPassword}>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  You&apos;re signed back into your account. Choose a new password to continue.
+                </p>
+                <div className="relative">
+                  <ShieldCheck className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    className="pl-9"
+                    placeholder="New password"
+                    value={resetPw}
+                    onChange={(e) => setResetPw(e.target.value)}
+                    disabled={resetBusy}
+                    required
+                  />
+                </div>
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Confirm new password"
+                  value={resetConfirm}
+                  onChange={(e) => setResetConfirm(e.target.value)}
+                  disabled={resetBusy}
+                  required
+                />
+                <p className="text-xs text-muted-foreground">At least 8 characters, with one letter and one number.</p>
+                {resetConfirm.length > 0 && !resetMatch && <p className="text-xs text-destructive">Those passwords don&apos;t match.</p>}
+                {error && <p className="text-sm text-destructive">{error}</p>}
+              </CardContent>
+              <CardFooter className="flex-col gap-2">
+                <Button type="submit" className="w-full" disabled={resetBusy || !resetOk || !resetMatch}>
+                  {resetBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
+                  Update password
+                </Button>
+                <Button type="button" variant="ghost" className="w-full" disabled={resetBusy} onClick={() => { setResetPending(false); navigate(redirect); }}>
+                  Skip for now
+                </Button>
+              </CardFooter>
+            </form>
+          ) : method === "email" && otpSent ? (
             <form onSubmit={verifyEmailCode}>
               <CardContent className="space-y-4 pb-4">
                 <div className="flex justify-center">
@@ -288,7 +377,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                     name="username"
                     autoComplete="username"
                     className="pl-9"
-                    placeholder="username"
+                    placeholder={mode === "signUp" ? "username" : "username or email"}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     disabled={busy}

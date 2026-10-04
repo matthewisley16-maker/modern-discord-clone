@@ -7,6 +7,7 @@ import ProfileAvatar from "@/components/profile/ProfileAvatar";
 import { toast } from "sonner";
 import { Maximize, Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Video, VideoOff, VolumeX, X } from "lucide-react";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "./screenShare";
+import { useDraggableWindow } from "@/hooks/use-draggable";
 import "./screenShare.css";
 
 const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
@@ -66,6 +67,8 @@ export default function VoicePanel({
   // True once the mic attempt has finished (granted or denied), so peer
   // connections can still form for camera-only / listen-only participants.
   const [mediaReady, setMediaReady] = useState(false);
+  // The minimized floating window is draggable; the call itself is untouched.
+  const miniDrag = useDraggableWindow(`vp-mini:${channelId}`);
 
   const localStream = useRef<MediaStream | null>(null);
   const peers = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -560,7 +563,16 @@ export default function VoicePanel({
       </div>
 
       {minimized ? (
-        <div className="vp-mini" role="region" aria-label={`${channelName} call`} onClick={onExpand} title="Open the call">
+        <div
+          className={`vp-mini ${miniDrag.dragging ? "dragging" : ""}`}
+          role="region"
+          aria-label={`${channelName} call`}
+          ref={miniDrag.ref}
+          style={miniDrag.style}
+          onPointerDown={miniDrag.startDrag}
+          onClick={() => { if (!miniDrag.wasDragged()) onExpand?.(); }}
+          title="Drag to move · click to open"
+        >
           <div className="vp-mini-head">
             <span className="vp-mini-title"><span className={`vp-mini-dot ${connection}`} /> {channelName}</span>
             <button className="vp-mini-x" aria-label="Leave call" onClick={(e) => { e.stopPropagation(); onLeave(); }}><X size={14} /></button>

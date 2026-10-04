@@ -1,41 +1,48 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useAction } from "convex/react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { useQuery } from "convex/react";
+import { Grid } from "@giphy/react-components";
+import { GiphyFetch } from "@giphy/js-fetch-api";
 import { api } from "@/convex/_generated/api";
-import type { GifValue } from "@/convex/gif";
-import { Loader2, Search, X } from "lucide-react";
+import { normalizeGiphy, type GifValue } from "@/convex/gif";
+import { ImageUp, Loader2, Search, X } from "lucide-react";
+import { toast } from "sonner";
 
 const DEBOUNCE_MS = 350;
+const PAGE_SIZE = 12;
 
 /**
- * GIF picker.
+ * GIF picker built on the OFFICIAL GIPHY Web SDK.
  *
- * Opens above the composer (never covering the message input), searches real
- * GIPHY results through the `gifs.search` action, shows trending GIFs when the
- * box is empty, and stays open until the user picks a GIF, presses Escape, or
- * clicks outside. Picking a GIF only stages it — sending is explicit.
- *
- * Performance: results are small preview renditions, loaded lazily, and the grid
- * infinite-scrolls a page at a time.
+ * - `GiphyFetch` (`@giphy/js-fetch-api`) retrieves trending GIFs and search
+ *   results; the official `Grid` (`@giphy/react-components`) renders them with
+ *   infinite scrolling, a loading state and GIPHY's required attribution.
+ * - The API key comes from `GIPHY_API_KEY` (server environment, surfaced to
+ *   signed-in users). When it is missing the picker never crashes and no fake
+ *   results are ever shown — the user is told GIPHY isn't configured and can
+ *   upload a `.gif` instead.
+ * - Selecting a GIF only STAGES it; the composer sends on the next Send press.
  */
 export default function GifPicker({
   onSelect,
   onClose,
+  onUploadGif,
 }: {
   onSelect: (gif: GifValue) => void;
   onClose: () => void;
+  onUploadGif?: (file: File) => void;
 }) {
-  const searchGifs = useAction(api.gifs.search);
+  const config = useQuery(api.gifConfig.giphyConfig, {});
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [results, setResults] = useState<GifValue[]>([]);
-  const [next, setNext] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [configured, setConfigured] = useState(true);
-  const reqId = useRef(0);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(280);
   const rootRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const gf = useMemo(
+    () => (config?.apiKey ? new GiphyFetch(config.apiKey) : null),
+    [config?.apiKey],
+  );
 
   // Debounce the search box so we don't hit the provider on every keystroke.
   useEffect(() => {
@@ -52,9 +59,8 @@ export default function GifPicker({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Outside-click closes the picker. The composer stays fully usable because
-  // there is no full-screen backdrop — only clicks outside this panel count,
-  // and the GIF toggle button is ignored so it can toggle the picker itself.
+  // Outside-click closes the picker; the composer's GIF toggle is ignored so it
+  // can still toggle the picker itself.
   useEffect(() => {
     function onDown(e: MouseEvent) {
       const target = e.target as HTMLElement | null;
@@ -67,57 +73,43 @@ export default function GifPicker({
     return () => document.removeEventListener("mousedown", onDown);
   }, [onClose]);
 
-  // Load the first page whenever the (debounced) query changes.
+  // Grid needs a pixel width; keep it in sync with the (responsive) panel.
   useEffect(() => {
-    const id = ++reqId.current;
-    setLoading(true);
-    setError(null);
-    setResults([]);
-    setNext(null);
-    searchGifs({ query: debounced })
-      .then((res) => {
-        if (id !== reqId.current) return;
-        setConfigured(res.configured);
-        setResults(res.results);
-        setNext(res.next);
-        setError(res.error);
-      })
-      .catch((e: unknown) => {
-        if (id !== reqId.current) return;
-        setError(e instanceof Error ? e.message : "Couldn't load GIFs.");
-      })
-      .finally(() => {
-        if (id === reqId.current) setLoading(false);
-      });
-  }, [debounced, searchGifs]);
-
-  const loadMore = useCallback(() => {
-    if (next === null || loading || loadingMore) return;
-    const id = reqId.current;
-    setLoadingMore(true);
-    searchGifs({ query: debounced, offset: next })
-      .then((res) => {
-        if (id !== reqId.current) return;
-        setResults((prev) => {
-          const seen = new Set(prev.map((g) => g.id));
-          return [...prev, ...res.results.filter((g) => !seen.has(g.id))];
-        });
-        setNext(res.next);
-        if (!res.configured) setConfigured(false);
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (id === reqId.current) setLoadingMore(false);
-      });
-  }, [next, loading, loadingMore, debounced, searchGifs]);
-
-  function onScroll() {
     const el = scrollRef.current;
     if (!el) return;
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 320) loadMore();
-  }
+    const measure = () => setWidth(Math.max(200, el.clientWidth - 20));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [config?.configured]);
 
-  const showGrid = !loading && !error && configured && results.length > 0;
+  const fetchGifs = useCallback(
+    (offset: number) => {
+      if (!gf) return Promise.reject(new Error("GIPHY isn't configured."));
+      const opts = { offset, limit: PAGE_SIZE };
+      return debounced ? gf.search(debounced, opts) : gf.trending(opts);
+    },
+    [gf, debounced],
+  );
+
+  type GifClick = NonNullable<ComponentProps<typeof Grid>["onGifClick"]>;
+  const onGifClick = useCallback<GifClick>(
+    (gif, e) => {
+      e.preventDefault();
+      const value = normalizeGiphy(gif);
+      if (!value) {
+        toast.error("That GIF can't be sent.");
+        return;
+      }
+      onSelect(value);
+    },
+    [onSelect],
+  );
+
+  const loadingConfig = config === undefined;
+  const configured = config?.configured ?? false;
 
   return (
     <div className="fc-gif-picker" role="dialog" aria-label="GIF picker" ref={rootRef}>
@@ -132,6 +124,7 @@ export default function GifPicker({
             placeholder="Search GIPHY"
             aria-label="Search GIFs"
             maxLength={50}
+            disabled={!configured}
           />
           {query && (
             <button type="button" aria-label="Clear GIF search" onClick={() => setQuery("")}>
@@ -144,47 +137,62 @@ export default function GifPicker({
         </button>
       </div>
 
-      <div className="fc-gif-scroll" ref={scrollRef} onScroll={onScroll}>
-        {loading && (
+      <div className="fc-gif-scroll" ref={scrollRef}>
+        {loadingConfig && (
           <div className="fc-gif-status">
             <Loader2 className="fc-gif-spin" size={18} /> Loading GIFs…
           </div>
         )}
-        {!loading && error && <div className="fc-gif-status error">{error}</div>}
-        {!loading && !error && !configured && (
-          <div className="fc-gif-status">
-            GIF search isn&apos;t available yet. Add a GIPHY API key to enable it.
-          </div>
-        )}
-        {!loading && !error && configured && results.length === 0 && (
-          <div className="fc-gif-status">
-            {debounced ? `No GIFs found for “${debounced}”.` : "No trending GIFs right now."}
-          </div>
-        )}
-        {showGrid && (
-          <div className="fc-gif-grid">
-            {results.map((g) => (
-              <button
-                key={g.id}
-                type="button"
-                className="fc-gif-item"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onSelect(g)}
-                aria-label={g.title ? `Send ${g.title}` : "Send GIF"}
-              >
-                <img src={g.previewUrl} alt={g.title ?? ""} loading="lazy" />
+
+        {!loadingConfig && !configured && (
+          <div className="fc-gif-status fc-gif-unconfigured">
+            <p>GIPHY search isn&apos;t configured yet.</p>
+            {onUploadGif && (
+              <button type="button" className="fc-gif-upload" onClick={() => fileRef.current?.click()}>
+                <ImageUp size={15} /> Upload a GIF
               </button>
-            ))}
+            )}
+            <p className="fc-gif-hint">You can still add a GIPHY API key later — uploading a .gif keeps working either way.</p>
           </div>
         )}
-        {loadingMore && (
-          <div className="fc-gif-more">
-            <Loader2 className="fc-gif-spin" size={16} />
-          </div>
+
+        {!loadingConfig && configured && gf && (
+          <Grid
+            key={debounced}
+            width={width}
+            columns={width > 300 ? 3 : 2}
+            gutter={8}
+            borderRadius={9}
+            fetchGifs={fetchGifs}
+            onGifClick={onGifClick}
+            loaderConfig={{ root: scrollRef.current ?? null }}
+            noResultsMessage={debounced ? `No GIFs found for “${debounced}”.` : "No trending GIFs right now."}
+          />
         )}
       </div>
 
-      <div className="fc-gif-foot">Powered by GIPHY</div>
+      <div className="fc-gif-foot">
+        {onUploadGif && (
+          <button type="button" className="fc-gif-foot-upload" onClick={() => fileRef.current?.click()}>
+            <ImageUp size={12} /> Upload GIF
+          </button>
+        )}
+        <span className="fc-gif-powered">Powered by GIPHY</span>
+      </div>
+
+      {/* Uploading a GIF reuses the composer's existing staging pipeline; the
+          file is only sent when the user presses Send. */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/gif,.gif"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file && onUploadGif) onUploadGif(file);
+          e.target.value = "";
+        }}
+      />
     </div>
   );
 }

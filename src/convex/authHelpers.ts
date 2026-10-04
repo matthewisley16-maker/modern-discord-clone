@@ -16,6 +16,30 @@ export const usernameExists = internalQuery({
   },
 });
 
+/**
+ * Internal: find the stored password account for the user that owns an email.
+ * Used by the email+password sign-in provider. Returns null when there is no
+ * user, no verified account, or no password — callers must surface a generic
+ * error so email addresses cannot be enumerated.
+ */
+export const passwordAccountForEmail = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    const normalized = email.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", normalized))
+      .unique();
+    if (!user) return null;
+    const account = await ctx.db
+      .query("authAccounts")
+      .withIndex("userIdAndProvider", (q) => q.eq("userId", user._id).eq("provider", "password"))
+      .unique();
+    if (!account) return null;
+    return { providerAccountId: account.providerAccountId };
+  },
+});
+
 /** Internal: create the profile row for a freshly registered account. */
 export const onSignUp = internalMutation({
   args: { userId: v.id("users"), displayName: v.string() },

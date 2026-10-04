@@ -68,8 +68,12 @@ export function Avatar({
   reducedMotion?: boolean;
 }) {
   const key = color ?? colorFor(name);
-  const meta = presence ? PRESENCE_META[presence] : undefined;
-  const title = presence === "offline" ? formatLastSeen(lastSeen) : meta?.label;
+  // Only Online (green), Idle (amber) and Do Not Disturb (red) get a dot.
+  // Invisible and Offline deliberately show NO indicator — absence of a dot
+  // means "Invisible/Offline", exactly like the presence spec.
+  const showDot = presence === "online" || presence === "idle" || presence === "dnd";
+  const meta = presence && showDot ? PRESENCE_META[presence] : undefined;
+  const title = presence === "offline" || presence === "invisible" ? formatLastSeen(lastSeen) : meta?.label;
   return (
     <span className="fc-avatar" style={{ width: size, height: size, background: url ? undefined : AVATAR_BG[key] ?? "#7c5cf6" }} title={title}>
       {url ? <img src={url} alt="" /> : initialsOf(name)}

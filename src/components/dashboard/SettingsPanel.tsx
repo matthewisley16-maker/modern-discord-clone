@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "./ui";
 import { toast } from "sonner";
-import { KeyRound, Mail, Mic, Monitor, Palette, Settings2, Shield, Trash2, User, X } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Mail, Mic, Monitor, Palette, Settings2, Shield, Trash2, User, X } from "lucide-react";
 
 const TABS = ["General", "Profile", "Appearance", "Notifications", "Privacy", "Voice & Video", "Account", "Sessions"] as const;
 type Tab = (typeof TABS)[number];
@@ -22,6 +22,48 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
   const deleteAccount = useMutation(api.users.deleteAccount);
   const setUsername = useMutation(api.users.setUsername);
   const setDisplayNameOnly = useMutation(api.users.setDisplayName);
+
+  // ---- Password (Set for accounts without one, Change for accounts with one) ----
+  const passwordState = useQuery(api.passwords.passwordState, {});
+  const setPassword = useAction(api.passwords.setPassword);
+  const changePassword = useAction(api.passwords.changePassword);
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [pwShow, setPwShow] = useState(false);
+  const [pwBusy, setPwBusy] = useState(false);
+  const pwRuleOk = pwNew.length >= 8 && /[a-zA-Z]/.test(pwNew) && /[0-9]/.test(pwNew);
+  const pwMatch = pwNew.length > 0 && pwNew === pwConfirm;
+
+  function resetPwForm() {
+    setPwCurrent("");
+    setPwNew("");
+    setPwConfirm("");
+    setPwShow(false);
+  }
+
+  async function submitPassword() {
+    if (!pwRuleOk) { toast.error("Password must be at least 8 characters and include a letter and a number."); return; }
+    if (!pwMatch) { toast.error("Those passwords don't match."); return; }
+    setPwBusy(true);
+    try {
+      if (passwordState?.hasPassword) {
+        await changePassword({ currentPassword: pwCurrent, newPassword: pwNew });
+        toast.success("Password updated.");
+      } else {
+        await setPassword({ password: pwNew });
+        toast.success("Password set. You can now sign in with it.");
+      }
+      // The live query flips this section to "Password is set" with no refresh.
+      setPwOpen(false);
+      resetPwForm();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update your password.");
+    } finally {
+      setPwBusy(false);
+    }
+  }
 
   const appearance = useQuery(api.profiles.getAppearance, {});
   const updateAppearance = useMutation(api.profiles.updateAppearance);
@@ -284,7 +326,77 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
                 <p className="fc-muted">Your current email: {me?.email ? me.email : "none"}</p>
               </div>
               <h3><KeyRound size={16} /> Password</h3>
-              <p className="fc-muted">Passwords are hashed and can't be displayed. If you've forgotten it, use “Forgot your password?” on the sign-in page (this needs a linked email).</p>
+              {passwordState === undefined && <p className="fc-muted">Checking your password…</p>}
+              {passwordState !== undefined && passwordState !== null && !pwOpen && (
+                <>
+                  <p className="fc-muted">
+                    {passwordState.hasPassword
+                      ? "Password is set. You can sign in with your username — or your email — and this password."
+                      : "No password is currently set for this account. Add one to sign in without an email code — your account, data and profile stay exactly the same."}
+                  </p>
+                  {passwordState.email && !passwordState.emailVerified && (
+                    <p className="fc-muted">
+                      Your email isn&apos;t verified yet. Verify it to be able to reset your password if you ever forget it.
+                    </p>
+                  )}
+                  <Button
+                    variant={passwordState.hasPassword ? "outline" : "default"}
+                    onClick={() => { resetPwForm(); setPwOpen(true); }}
+                  >
+                    {passwordState.hasPassword ? "Change Password" : "Set Password"}
+                  </Button>
+                </>
+              )}
+              {passwordState !== undefined && passwordState !== null && pwOpen && (
+                <div className="fc-pw-form">
+                  {passwordState.hasPassword && (
+                    <label>Current password
+                      <Input
+                        type={pwShow ? "text" : "password"}
+                        value={pwCurrent}
+                        autoComplete="current-password"
+                        onChange={(e) => setPwCurrent(e.target.value)}
+                      />
+                    </label>
+                  )}
+                  <label>New password
+                    <div className="fc-pw-input">
+                      <Input
+                        type={pwShow ? "text" : "password"}
+                        value={pwNew}
+                        autoComplete="new-password"
+                        onChange={(e) => setPwNew(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        aria-label={pwShow ? "Hide passwords" : "Show passwords"}
+                        onClick={() => setPwShow((v) => !v)}
+                      >
+                        {pwShow ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </label>
+                  <label>Confirm password
+                    <Input
+                      type={pwShow ? "text" : "password"}
+                      value={pwConfirm}
+                      autoComplete="new-password"
+                      onChange={(e) => setPwConfirm(e.target.value)}
+                    />
+                  </label>
+                  <p className="fc-muted">At least 8 characters, including at least one letter and one number.</p>
+                  {pwConfirm.length > 0 && !pwMatch && <p className="text-xs text-destructive">Those passwords don&apos;t match.</p>}
+                  <div className="fc-pw-actions">
+                    <Button
+                      onClick={submitPassword}
+                      disabled={pwBusy || !pwRuleOk || !pwMatch || (passwordState.hasPassword && !pwCurrent)}
+                    >
+                      {pwBusy ? "Saving…" : passwordState.hasPassword ? "Update password" : "Set password"}
+                    </Button>
+                    <Button variant="ghost" disabled={pwBusy} onClick={() => { setPwOpen(false); resetPwForm(); }}>Cancel</Button>
+                  </div>
+                </div>
+              )}
               <h3 className="danger-heading"><Trash2 size={16} /> Delete account</h3>
               <p className="fc-muted">This permanently deletes your profile, messages, and communities you own. Type your username to confirm.</p>
               <div className="fc-delete-row">
