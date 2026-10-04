@@ -90,10 +90,14 @@ export default function ProfileDecoration({
     const ring = size * cfg.radius;
     const psize = Math.max(3, size * cfg.psize);
     const amp = size * (cfg.amp ?? 0.08);
-    return Array.from({ length: cfg.count }, (_, i) => {
-      const spread = cfg.count > 1 ? i / cfg.count : 0;
+    // Fewer particles on the tiny avatars used in chats/lists so a channel full
+    // of decorated messages stays cheap, while full-size profiles keep the full
+    // effect. The ring, scale and placement are otherwise identical.
+    const count = size <= 48 ? Math.max(3, Math.round(cfg.count * 0.6)) : cfg.count;
+    return Array.from({ length: count }, (_, i) => {
+      const spread = count > 1 ? i / count : 0;
       // Even distribution around the ring with a small deterministic jitter.
-      const angle = spread * Math.PI * 2 + (rand() - 0.5) * ((Math.PI * 2) / cfg.count) * 0.6;
+      const angle = spread * Math.PI * 2 + (rand() - 0.5) * ((Math.PI * 2) / count) * 0.6;
       const r = ring * (0.96 + rand() * 0.08);
       return {
         left: `calc(50% + ${(Math.cos(angle) * r).toFixed(1)}px)`,

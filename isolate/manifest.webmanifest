@@ -1,0 +1,17 @@
+{
+  "name": "Freecord — Your people. Your place.",
+  "short_name": "Freecord",
+  "description": "Your little corner of the internet. Create a community and keep the conversation going.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0b10",
+  "theme_color": "#8b5cf6",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
