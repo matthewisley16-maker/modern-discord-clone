@@ -830,7 +830,7 @@ export default function Dashboard() {
         </header>
 
         {announcement?.announcement && (
-          <div className="mx-3 mt-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 sm:mx-4">
+          <div role="status" className="mx-3 mt-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 sm:mx-4">
             <strong className="mr-1 font-semibold">Announcement:</strong>
             {announcement.announcement}
           </div>
