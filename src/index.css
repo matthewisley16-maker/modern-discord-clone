@@ -1124,3 +1124,63 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
   .fc-gif-grid { grid-template-columns: repeat(2, 1fr); }
   .fc-gif-msg img { max-height: 180px; }
 }
+
+/* ---------------------------------------------------------------------------
+   Server rail: drag-and-drop ordering, folders/groups and the overflow
+   switcher. Purely additive — it does not change any existing rail styling.
+--------------------------------------------------------------------------- */
+.fc-rail-servers { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
+.fc-rail-item { position: relative; display: grid; place-items: center; }
+.fc-rail-item.drag-over::before { content: ""; position: absolute; left: -7px; right: -7px; top: -7px; bottom: -7px; border: 2px dashed #a78bfa; border-radius: 16px; pointer-events: none; }
+.fc-rail-item-menu { position: absolute; top: -6px; right: -8px; width: 18px; height: 18px; border-radius: 9px; background: #2a2836; color: #cfc7e6; font-size: 12px; line-height: 1; display: grid; place-items: center; opacity: 0; transition: opacity .12s; border: 1px solid rgba(255,255,255,.12); z-index: 6; }
+.fc-rail-item:hover .fc-rail-item-menu, .fc-rail-item:focus-within .fc-rail-item-menu { opacity: 1; }
+.fc-rail-item-menu:hover { background: #3a3750; color: #fff; }
+.fc-rail-menu { right: auto; left: 54px; top: 0; min-width: 168px; max-height: 60vh; overflow-y: auto; }
+.fc-rail-menu-label { padding: 6px 9px 2px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #8b87a0; }
+.fc-rail-menu-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; }
+.fc-rail-item-nested { margin-top: -7px; }
+.fc-rail-item-nested .fc-rail-server { width: 38px; height: 38px; border-radius: 12px; font-size: 12px; }
+.fc-rail-folder { position: relative; width: 44px; height: 44px; border-radius: 14px; background: #1c1a26; border: 2px solid transparent; display: grid; place-items: center; cursor: pointer; }
+.fc-rail-folder:hover { background: #262335; }
+.fc-rail-folder.open { border-color: rgba(167,139,250,.55); }
+.fc-rail-folder.contains-active { box-shadow: 0 0 0 2px rgba(167,139,250,.45); }
+.fc-rail-folder-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px; width: 26px; height: 26px; }
+.fc-rail-folder-mini { width: 12px; height: 12px; border-radius: 4px; overflow: hidden; display: grid; place-items: center; font-size: 7px; font-weight: 700; color: #fff; background: #3a3750; }
+.fc-rail-folder-mini img { width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
+.fc-rail-folder-empty { grid-column: 1 / -1; font-size: 14px; color: #a78bfa; text-align: center; }
+.fc-rail-drop-end { width: 44px; height: 3px; border-radius: 2px; transition: height .12s, background .12s; }
+.fc-rail-drop-end.active { height: 10px; background: rgba(167,139,250,.5); }
+.fc-rail-overflow { position: relative; width: 100%; display: grid; place-items: center; }
+.fc-rail-overflow .fc-rail-server { font-size: 9px; line-height: 1.05; text-align: center; }
+.fc-rail-overflow-label { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.fc-servers-overflow-backdrop { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.35); }
+.fc-servers-overflow-panel { position: fixed; left: 78px; top: 56px; bottom: 56px; width: 300px; max-width: calc(100vw - 92px); z-index: 41; background: #17161f; border: 1px solid rgba(255,255,255,.1); border-radius: 14px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.6); }
+.fc-servers-overflow-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.07); }
+.fc-servers-overflow-head button { color: #8b87a0; }
+.fc-servers-overflow-search { display: flex; align-items: center; gap: 8px; margin: 10px 12px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,.05); color: #8b87a0; }
+.fc-servers-overflow-search input { flex: 1; background: transparent; border: none; outline: none; color: #e5e0ff; font-size: 13px; }
+.fc-servers-overflow-body { flex: 1; overflow-y: auto; padding: 4px 8px 12px; }
+.fc-servers-overflow-section { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
+.fc-servers-overflow-title { padding: 8px 8px 4px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #8b87a0; }
+.fc-servers-overflow-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 7px 8px; border-radius: 8px; color: #c9c5da; font-size: 13px; }
+.fc-servers-overflow-row:hover { background: rgba(255,255,255,.06); color: #fff; }
+.fc-servers-overflow-row.current { background: rgba(139,92,246,.18); color: #e5e0ff; }
+.fc-servers-overflow-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-servers-overflow-empty { padding: 16px; text-align: center; font-size: 12px; color: #8b87a0; }
+html.fc-light .fc-rail-folder { background: #dcdbe8; }
+html.fc-light .fc-rail-folder:hover { background: #d1d0e0; }
+html.fc-light .fc-rail-item-menu { background: #e4e3ee; color: #4b4a58; }
+html.fc-light .fc-servers-overflow-panel { background: #f4f3fa; color: #1c1b22; }
+html.fc-light .fc-servers-overflow-search { background: rgba(0,0,0,.05); }
+html.fc-light .fc-servers-overflow-search input { color: #1c1b22; }
+html.fc-light .fc-servers-overflow-row { color: #4b4a58; }
+html.fc-light .fc-servers-overflow-row:hover { background: rgba(0,0,0,.05); color: #1c1b22; }
+@media (max-width: 768px) {
+  .fc-rail-folder, .fc-rail-folder-grid { width: 38px; height: 38px; }
+  .fc-rail-item-nested .fc-rail-server { width: 34px; height: 34px; }
+  .fc-servers-overflow-panel { left: 62px; width: min(300px, calc(100vw - 70px)); }
+}
+/* Touch devices cannot hover, so keep the per-server options button visible. */
+@media (hover: none) {
+  .fc-rail-item-menu { opacity: 1; }
+}

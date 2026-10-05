@@ -326,6 +326,29 @@ const schema = defineSchema(
       .index("by_server", ["serverId"])
       .index("by_server_user", ["serverId", "userId"]),
 
+    /**
+     * Per-user server-rail organization: drag-and-drop order, folders/groups and
+     * recently-visited servers. Stored per account so the user's personal layout
+     * follows them to any device.
+     *
+     *  - `layout` is the top-level column order. Each entry is either a server id
+     *    or `folder:<folderId>`.
+     *  - `folders[].serverIds` holds the servers grouped inside a folder.
+     *  - `recent` is a most-recent-first list for the server switcher.
+     */
+    serverOrganization: defineTable({
+      userId: v.id("users"),
+      layout: v.optional(v.array(v.string())),
+      folders: v.optional(v.array(v.object({
+        id: v.string(),
+        name: v.string(),
+        color: v.optional(v.string()),
+        collapsed: v.boolean(),
+        serverIds: v.array(v.string()),
+      }))),
+      recent: v.optional(v.array(v.string())),
+    }).index("by_user", ["userId"]),
+
     communityRoles: defineTable({
       serverId: v.id("servers"),
       name: v.string(),

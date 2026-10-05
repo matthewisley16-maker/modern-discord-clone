@@ -20,6 +20,7 @@ import FullProfile from "@/components/profile/FullProfile";
 import ProfileEditor from "@/components/profile/ProfileEditor";
 import SettingsPanel from "@/components/dashboard/SettingsPanel";
 import CommunitySettings from "@/components/dashboard/CommunitySettings";
+import ServerRail from "@/components/dashboard/ServerRail";
 import { Avatar, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
@@ -597,18 +598,14 @@ export default function Dashboard() {
         ><Compass size={20} /></button>
 
         <div className="fc-rail-rule" />
-        {communities?.map((c) => (
-          <button
-            key={c._id}
-            className={`fc-rail-server ${communityId === c._id && section === "community" ? "selected" : ""}`}
-            title={c.name} aria-label={c.name}
-            onClick={() => openCommunity(c._id)}
-          >{(c as { iconUrl?: string | null }).iconUrl
-            ? <img src={(c as { iconUrl?: string | null }).iconUrl!} alt="" className="fc-rail-img" />
-            : initialsOf(c.name)}</button>
-        ))}
-        <button className="fc-rail-server add" title="Create a community" aria-label="Create a community" onClick={() => openModal("createCommunity")}><Plus size={20} /></button>
-        <button className="fc-rail-server add" title="Join with invite" aria-label="Join with invite" onClick={() => openModal("join")}><Hash size={18} /></button>
+        {/* Server rail: drag-and-drop ordering, folders, and the overflow switcher. */}
+        <ServerRail
+          communities={(communities ?? []) as { _id: string; name: string; iconUrl?: string | null }[]}
+          communityId={section === "community" ? communityId : null}
+          onOpen={(id) => openCommunity(id)}
+          onCreate={() => openModal("createCommunity")}
+          onJoin={() => openModal("join")}
+        />
 
         <button className="fc-rail-btn bottom" title="Sign out" aria-label="Sign out" onClick={async () => { await signOut(); navigate("/"); }}>
           <LogOut size={19} />
