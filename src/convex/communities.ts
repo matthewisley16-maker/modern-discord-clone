@@ -14,7 +14,9 @@ import {
   isTimedOut,
   membershipOf,
   notify,
+  platformSettingsOf,
   profileOf,
+  rankOf,
   requireMember,
   requirePermission,
 } from "./lib";
@@ -57,6 +59,15 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const userId = await currentUserId(ctx);
     await enforceRateLimit(ctx, `community:${userId}`, 5, 60_000);
+    // Platform-wide switch (managed from the Admin Panel). Admins can always
+    // create; when disabled, regular members cannot start new communities.
+    const settings = await platformSettingsOf(ctx);
+    if (settings?.newCommunitiesEnabled === false) {
+      const me = await ctx.db.get(userId);
+      if (rankOf(me?.role) < rankOf("admin")) {
+        throw new Error("Creating new communities is temporarily disabled.");
+      }
+    }
     const name = args.name.trim();
     if (name.length < 2 || name.length > 50) throw new Error("Community name must be 2-50 characters.");
     const serverId = await ctx.db.insert("servers", {
@@ -270,6 +281,9 @@ export const details = query({
 export const discover = query({
   args: { q: v.optional(v.string()), category: v.optional(v.string()) },
   handler: async (ctx, { q, category }) => {
+    // Platform-wide switch (managed from the Admin Panel).
+    const settings = await platformSettingsOf(ctx);
+    if (settings?.discoveryEnabled === false) return [];
     const all = await ctx.db.query("servers").withIndex("by_public", (q2) => q2.eq("isPublic", true)).take(100);
     const term = q?.trim().toLowerCase();
     const out = [];

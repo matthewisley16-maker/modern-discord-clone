@@ -3,6 +3,7 @@ import { ConvexError } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { syncOwnerRole } from "./lib";
 
 /** Internal: does a username already exist? Used to enforce uniqueness. */
 export const usernameExists = internalQuery({
@@ -44,6 +45,9 @@ export const passwordAccountForEmail = internalQuery({
 export const onSignUp = internalMutation({
   args: { userId: v.id("users"), displayName: v.string() },
   handler: async (ctx, { userId, displayName }) => {
+    // The three protected owner emails automatically receive the highest
+    // "Owner Admin" role the moment the account is created.
+    await syncOwnerRole(ctx, userId);
     const existing = await ctx.db
       .query("profiles")
       .withIndex("by_user", (q) => q.eq("userId", userId))

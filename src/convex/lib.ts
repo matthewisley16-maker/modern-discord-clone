@@ -8,6 +8,22 @@ export type Ctx = QueryCtx | MutationCtx;
 export async function currentUserId(ctx: Ctx): Promise<Id<"users">> {
   const id = await getAuthUserId(ctx);
   if (!id) throw new ConvexError("Please sign in first.");
+  // Server-enforced moderation gate: a banned or temporarily suspended account
+  // cannot perform any write action, no matter what the client sends. Reads use
+  // getAuthUserId directly, so a moderated user can still be shown the reason.
+  const user = await ctx.db.get(id);
+  if (user) {
+    if (user.banned) {
+      throw new ConvexError(
+        user.banReason
+          ? `Your account has been suspended: ${user.banReason}`
+          : "Your account has been suspended.",
+      );
+    }
+    if (user.suspendedUntil && user.suspendedUntil > Date.now()) {
+      throw new ConvexError("Your account is temporarily suspended.");
+    }
+  }
   return id;
 }
 
@@ -255,4 +271,142 @@ export async function effectivePermissions(
 
 export function isTimedOut(membership: Doc<"memberships"> | null) {
   return Boolean(membership?.timeoutUntil && membership.timeoutUntil > Date.now());
+}
+
+// ---------------- Account roles & protected owners ----------------
+
+/**
+ * The ONLY accounts that may hold the highest "Owner Admin" role. Ownership is
+ * keyed by email and is permanent: these addresses are recognised on sign-up and
+ * on every identity sync, and can never be demoted, banned or deleted through
+ * the application (see `admin.setUserRole` / `banUser` / `deleteUser`).
+ */
+export const PROTECTED_OWNER_EMAILS: readonly string[] = [
+  "matthewisley16@gmail.com",
+  "matthew@icscomp.com",
+  "matthewisley23@gmail.com",
+];
+
+/** True when an email belongs to a protected Owner Admin account. */
+export function isProtectedOwnerEmail(email?: string | null): boolean {
+  if (!email) return false;
+  return PROTECTED_OWNER_EMAILS.includes(email.trim().toLowerCase());
+}
+
+/**
+ * Account role ranking. Higher number = more authority. Anchors the backend
+ * authorization rules so a lower role can never act on a higher (or equal) one.
+ */
+export const ROLE_RANK: Record<string, number> = {
+  member: 0,
+  user: 0,
+  moderator: 1,
+  admin: 2,
+  owner: 3,
+};
+
+export function rankOf(role?: string | null): number {
+  return ROLE_RANK[role ?? "user"] ?? 0;
+}
+
+/** The account role stored on the users table (defaults to "user"). */
+export async function roleOfUser(ctx: Ctx, userId: Id<"users">): Promise<string> {
+  const user = await ctx.db.get(userId);
+  return user?.role ?? "user";
+}
+
+/**
+ * A protected Owner Admin: the account's email is one of the protected owner
+ * addresses. Ownership follows the email, so it cannot be transferred or lost
+ * through a role change or an account rename.
+ */
+export async function isProtectedOwner(ctx: Ctx, userId: Id<"users">): Promise<boolean> {
+  const user = await ctx.db.get(userId);
+  return isProtectedOwnerEmail(user?.email);
+}
+
+/**
+ * Keep the stored role in sync with the protected-owner emails: the three owner
+ * addresses are always Owners, and nobody else can hold the owner role. Safe to
+ * call repeatedly; only writes when the role actually needs to change.
+ */
+export async function syncOwnerRole(ctx: MutationCtx, userId: Id<"users">) {
+  const user = await ctx.db.get(userId);
+  if (!user) return;
+  const shouldBeOwner = isProtectedOwnerEmail(user.email);
+  if (shouldBeOwner && user.role !== "owner") {
+    // Exactly one account per protected email may hold Owner Admin: if another
+    // account already claimed this email, this duplicate is not promoted.
+    const sameEmail = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", user.email))
+      .collect();
+    const alreadyOwned = sameEmail.some((u) => u.role === "owner" && u._id !== userId);
+    if (!alreadyOwned) await ctx.db.patch(userId, { role: "owner" });
+  } else if (!shouldBeOwner && user.role === "owner") {
+    // Only the protected emails may hold Owner Admin; anything else is corrected.
+    await ctx.db.patch(userId, { role: "user" });
+  }
+}
+
+/**
+ * Server-side gate for the Admin Panel. `admin` is the minimum role for read
+ * access; write actions additionally enforce their own rank rules.
+ */
+export async function requirePanelAccess(ctx: Ctx, userId: Id<"users">): Promise<string> {
+  const role = await roleOfUser(ctx, userId);
+  if (rankOf(role) < ROLE_RANK.admin) {
+    throw new ConvexError("Administrator access required.");
+  }
+  return role;
+}
+
+/** The singleton platform settings row (key = "global"), if it exists. */
+export async function platformSettingsOf(ctx: Ctx) {
+  return ctx.db.query("platformSettings").withIndex("by_key", (q) => q.eq("key", "global")).unique();
+}
+
+/**
+ * Append a structured administrative audit entry. Records who performed the
+ * action, the action, which account was affected, the previous/new role and a
+ * timestamp (both in `auditLogs` — the rich table — and the legacy
+ * `moderationLogs` feed).
+ */
+export async function auditAdmin(
+  ctx: MutationCtx,
+  entry: {
+    action: string;
+    actorId: Id<"users">;
+    actorName: string;
+    targetType: string;
+    targetId?: string;
+    targetUserId?: Id<"users">;
+    targetName?: string;
+    detail: string;
+    previousRole?: string;
+    newRole?: string;
+    previousValue?: string;
+    newValue?: string;
+  },
+) {
+  await ctx.db.insert("auditLogs", {
+    action: entry.action,
+    actorId: entry.actorId,
+    actorName: entry.actorName,
+    targetType: entry.targetType,
+    targetId: entry.targetId,
+    targetUserId: entry.targetUserId,
+    targetName: entry.targetName,
+    detail: entry.detail,
+    previousRole: entry.previousRole,
+    newRole: entry.newRole,
+    previousValue: entry.previousValue,
+    newValue: entry.newValue,
+    at: Date.now(),
+  });
+  await ctx.db.insert("moderationLogs", {
+    action: entry.action,
+    actorId: entry.actorId,
+    detail: entry.detail,
+  });
 }

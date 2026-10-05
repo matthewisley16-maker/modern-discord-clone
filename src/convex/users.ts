@@ -4,7 +4,7 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { USERNAME_PATTERN, normalizeUsername, assertValidUsername } from "./auth";
-import { avatarUrlOf, currentUserId, displayNameOf, presenceInfoOf, profileOf, settingsOf, audit, areFriends, isBlockedEitherWay } from "./lib";
+import { avatarUrlOf, currentUserId, displayNameOf, presenceInfoOf, profileOf, settingsOf, audit, areFriends, isBlockedEitherWay, syncOwnerRole, rankOf, isProtectedOwnerEmail } from "./lib";
 
 // ---------- Identity helpers (username is unique, display name is not) ----------
 
@@ -62,6 +62,11 @@ export const ensureIdentity = mutation({
     const userId = await currentUserId(ctx);
     const user = await ctx.db.get(userId);
     if (!user) return null;
+
+    // Keep the account role aligned with the protected-owner emails on every
+    // load, so an owner email always resolves to Owner Admin and nobody else
+    // can hold that role.
+    await syncOwnerRole(ctx, userId);
 
     let username = user.username ?? null;
     if (!username || !USERNAME_PATTERN.test(username)) {
@@ -178,6 +183,14 @@ export const me = query({
       email: user?.email ?? null,
       name: user?.name ?? null,
       image: user?.image ?? null,
+      // Account role + protected-owner flag (server-authoritative; the Admin
+      // Panel route is still gated by a server query, not just this value).
+      role: user?.role ?? "user",
+      isOwner: rankOf(user?.role) >= rankOf("owner"),
+      isAdmin: rankOf(user?.role) >= rankOf("admin"),
+      isProtectedOwner: isProtectedOwnerEmail(user?.email),
+      banned: user?.banned ?? false,
+      suspendedUntil: user?.suspendedUntil ?? null,
       // Authoritative, freshly resolved avatar so the Dashboard updates instantly.
       avatarUrl: await avatarUrlOf(ctx, userId),
       createdAt: user?._creationTime ?? null,

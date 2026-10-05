@@ -3,15 +3,26 @@ import { defineSchema, defineTable } from "convex/server";
 import { Infer, v } from "convex/values";
 import { gifValidator } from "./gif";
 
-// default user roles. can add / remove based on the project as needed
+// Account-level roles, ordered from highest to lowest:
+//   owner      -> "Owner Admin". Reserved ONLY for the protected owner accounts.
+//   admin      -> platform administrator (can manage users + moderators).
+//   moderator  -> can moderate, cannot manage administrators.
+//   user       -> normal account.
+//   member     -> legacy alias kept for backwards compatibility (= user level).
+// Only the three protected owner emails may ever hold the `owner` role; the
+// server enforces this (see lib.syncOwnerRole / admin.setUserRole).
 export const ROLES = {
+  OWNER: "owner",
   ADMIN: "admin",
+  MODERATOR: "moderator",
   USER: "user",
   MEMBER: "member",
 } as const;
 
 export const roleValidator = v.union(
+  v.literal(ROLES.OWNER),
   v.literal(ROLES.ADMIN),
+  v.literal(ROLES.MODERATOR),
   v.literal(ROLES.USER),
   v.literal(ROLES.MEMBER),
 );
@@ -72,7 +83,16 @@ const schema = defineSchema(
       emailVerificationTime: v.optional(v.number()), // email verification time. do not remove
       isAnonymous: v.optional(v.boolean()), // is the user anonymous. do not remove
 
-      role: v.optional(roleValidator), // role of the user. do not remove
+      role: v.optional(roleValidator), // account role. do not remove
+
+      // --- moderation state (all server-enforced, never trusted from client) ---
+      banned: v.optional(v.boolean()),
+      bannedAt: v.optional(v.number()),
+      bannedBy: v.optional(v.id("users")),
+      banReason: v.optional(v.string()),
+      suspendedUntil: v.optional(v.number()),
+      suspendedBy: v.optional(v.id("users")),
+      suspendReason: v.optional(v.string()),
     })
       .index("email", ["email"])
       .index("username", ["username"]), // indexes for email + username. do not remove or modify
@@ -546,7 +566,27 @@ const schema = defineSchema(
       targetId: v.optional(v.string()),
       detail: v.string(),
       at: v.number(),
+      // Richer context for administrative actions (who / what / which user /
+      // previous role / new role / timestamp). Populated by the Admin Panel.
+      actorName: v.optional(v.string()),
+      targetUserId: v.optional(v.id("users")),
+      targetName: v.optional(v.string()),
+      previousRole: v.optional(v.string()),
+      newRole: v.optional(v.string()),
+      previousValue: v.optional(v.string()),
+      newValue: v.optional(v.string()),
     }).index("by_at", ["at"]),
+
+    // Platform-wide settings (singleton row, key = "global"). Managed from the
+    // Admin Panel and enforced server-side where they matter.
+    platformSettings: defineTable({
+      key: v.string(),
+      announcement: v.optional(v.string()),
+      newCommunitiesEnabled: v.optional(v.boolean()),
+      discoveryEnabled: v.optional(v.boolean()),
+      updatedAt: v.optional(v.number()),
+      updatedBy: v.optional(v.id("users")),
+    }).index("by_key", ["key"]),
   },
   {
     schemaValidation: false,

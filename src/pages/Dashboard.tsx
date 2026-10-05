@@ -24,7 +24,7 @@ import { Avatar, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
 import {
-  AtSign, Bell, Compass, Hash, Home, Lock, LogOut, Menu, Phone, Plus, Search, Settings, Users, Volume2, X,
+  AtSign, Bell, Compass, Hash, Home, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, Users, Volume2, X,
 } from "lucide-react";
 
 type Section = "home" | "dms" | "discover" | "search" | "community";
@@ -46,6 +46,9 @@ export default function Dashboard() {
   const heartbeat = useMutation(api.profiles.heartbeat);
   // Guarantees every account has a unique username AND a display name (email-only, legacy, etc.).
   const ensureIdentity = useMutation(api.users.ensureIdentity);
+  const panelAccess = useQuery(api.admin.panelAccess, {});
+  // Operator announcement set from the Admin Panel's platform settings.
+  const announcement = useQuery(api.admin.platformBanner, {});
   const disconnect = useMutation(api.profiles.disconnect);
   const appearance = useQuery(api.profiles.getAppearance, {});
   const createChannelFull = useMutation(api.voice.createChannelFull);
@@ -797,6 +800,9 @@ export default function Dashboard() {
             <option value="dnd">Do Not Disturb</option>
             <option value="invisible">Invisible</option>
           </select>
+          {panelAccess?.canAccess && (
+            <button aria-label="Open Admin Panel" title="Admin Panel" onClick={() => navigate("/admin")}><ShieldCheck size={18} /></button>
+          )}
           <button aria-label="Open settings" onClick={() => setSettingsOpen(true)}><Settings size={18} /></button>
         </div>
       </aside>
@@ -822,6 +828,13 @@ export default function Dashboard() {
             </button>
           </div>
         </header>
+
+        {announcement?.announcement && (
+          <div className="mx-3 mt-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 sm:mx-4">
+            <strong className="mr-1 font-semibold">Announcement:</strong>
+            {announcement.announcement}
+          </div>
+        )}
 
         {notifOpen && (
           <div className="fc-notif-panel">

@@ -13,6 +13,7 @@ import "./index.css";
 const Landing = lazy(() => import("./pages/Landing.tsx"));
 const AuthPage = lazy(() => import("./pages/Auth.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
+const AdminPanel = lazy(() => import("./pages/AdminPanel.tsx"));
 const Onboarding = lazy(() => import("./pages/Onboarding.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
@@ -184,6 +185,15 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth redirectImmediately>
                     <Dashboard />
+                  </RequireAuth>
+                }
+              />
+              {/* Private Admin Panel — access is enforced again on the server. */}
+              <Route
+                path="/admin"
+                element={
+                  <RequireAuth redirectImmediately>
+                    <AdminPanel />
                   </RequireAuth>
                 }
               />
