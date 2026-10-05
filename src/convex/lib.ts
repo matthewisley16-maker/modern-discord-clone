@@ -190,20 +190,81 @@ export async function audit(
 
 export const ROLE_PERMISSIONS: Record<string, string[]> = {
   owner: [
-    "sendMessages", "deleteMessages", "manageMessages", "createChannels", "manageChannels",
-    "kickMembers", "banMembers", "manageRoles", "manageCommunity", "createInvites",
-    "useVoice", "manageMembers",
+    "viewChannels", "sendMessages", "attachFiles", "createThreads", "deleteMessages", "manageMessages",
+    "mentionEveryone", "createChannels", "manageChannels", "kickMembers", "banMembers", "manageRoles",
+    "manageCommunity", "createInvites", "useVoice", "manageMembers",
   ],
   admin: [
-    "sendMessages", "deleteMessages", "manageMessages", "createChannels", "manageChannels",
-    "kickMembers", "banMembers", "manageRoles", "manageCommunity", "createInvites",
-    "useVoice", "manageMembers",
+    "viewChannels", "sendMessages", "attachFiles", "createThreads", "deleteMessages", "manageMessages",
+    "mentionEveryone", "createChannels", "manageChannels", "kickMembers", "banMembers", "manageRoles",
+    "manageCommunity", "createInvites", "useVoice", "manageMembers",
   ],
   moderator: [
-    "sendMessages", "deleteMessages", "manageMessages", "createInvites", "useVoice", "kickMembers",
+    "viewChannels", "sendMessages", "attachFiles", "createThreads", "deleteMessages", "manageMessages",
+    "mentionEveryone", "createInvites", "useVoice", "kickMembers", "manageMembers",
   ],
-  member: ["sendMessages", "useVoice", "createInvites"],
+  member: ["viewChannels", "sendMessages", "attachFiles", "createThreads", "useVoice", "createInvites"],
 };
+
+/** Built-in server roles, lowest to highest. */
+export const SYSTEM_ROLES = ["member", "moderator", "admin", "owner"] as const;
+
+/**
+ * Channel-scoped permission check. This is the server-level authority: it uses
+ * ONLY the membership/roles of this specific server and the channel's own
+ * overrides — never the platform account role. A FreeBuff platform admin has no
+ * special power here, and a server admin gains nothing on the platform side.
+ */
+export async function hasChannelPermission(
+  ctx: Ctx,
+  channelId: Id<"channels">,
+  userId: Id<"users">,
+  permission: string,
+): Promise<boolean> {
+  const channel = await ctx.db.get(channelId);
+  if (!channel) return false;
+  const server = await ctx.db.get(channel.serverId);
+  if (!server) return false;
+  // The server owner always has full control of their own server.
+  if (server.ownerId === userId) return true;
+
+  const membership = await membershipOf(ctx, channel.serverId, userId);
+  if (!membership) return false;
+
+  // Legacy private-channel gate (kept working alongside the override system).
+  if (permission === "viewChannels" && channel.isPrivate) {
+    const allowed = channel.allowedRoleIds ?? [];
+    const roleKey = membership.role ?? "member";
+    const ok = allowed.includes(roleKey) || Boolean(membership.customRoleId && allowed.includes(membership.customRoleId as string));
+    if (!ok) return false;
+  }
+
+  let value = await hasPermission(ctx, channel.serverId, userId, permission);
+
+  // Apply channel overrides: @everyone first, then the member's system role,
+  // then their custom role. Within one entry deny wins over allow.
+  const overrides = channel.overrides ?? [];
+  const keys = ["everyone", membership.role ?? "member"];
+  if (membership.customRoleId) keys.push(membership.customRoleId as string);
+  for (const key of keys) {
+    const entry = overrides.find((o) => o.target === key);
+    if (!entry) continue;
+    if (entry.allow.includes(permission as never)) value = true;
+    if (entry.deny.includes(permission as never)) value = false;
+  }
+  return value;
+}
+
+/** Throws unless the member has the permission on this specific channel. */
+export async function requireChannelPermission(
+  ctx: Ctx,
+  channelId: Id<"channels">,
+  userId: Id<"users">,
+  permission: string,
+) {
+  const ok = await hasChannelPermission(ctx, channelId, userId, permission);
+  if (!ok) throw new ConvexError(`You don't have permission to do that in this channel.`);
+}
 
 export async function membershipOf(ctx: Ctx, serverId: Id<"servers">, userId: Id<"users">) {
   return ctx.db

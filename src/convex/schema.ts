@@ -30,9 +30,13 @@ export type Role = Infer<typeof roleValidator>;
 
 // ---- Community (server) permission model ----
 export const PERMISSIONS = [
+  "viewChannels",
   "sendMessages",
+  "attachFiles",
+  "createThreads",
   "deleteMessages",
   "manageMessages",
+  "mentionEveryone",
   "createChannels",
   "manageChannels",
   "kickMembers",
@@ -370,6 +374,17 @@ const schema = defineSchema(
       userLimit: v.optional(v.number()), // 0 / undefined = unlimited
       isPrivate: v.optional(v.boolean()),
       allowedRoleIds: v.optional(v.array(v.string())),
+      /**
+       * Channel-level permission overrides, applied on top of the member's
+       * server roles. Each entry targets `@everyone` ("everyone"), a built-in
+       * server role ("owner" | "admin" | "moderator" | "member") or a custom
+       * role id. `deny` always wins over `allow` within the same entry.
+       */
+      overrides: v.optional(v.array(v.object({
+        target: v.string(),
+        allow: v.array(permissionValidator),
+        deny: v.array(permissionValidator),
+      }))),
     }).index("by_server", ["serverId"]),
 
     /** Channel categories (folders) used to group text and voice channels. */

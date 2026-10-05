@@ -4,7 +4,7 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 
 import type { Id } from "./_generated/dataModel";
 import { gifValidator, requireGif } from "./gif";
-import { authorCardOf, notify } from "./lib";
+import { authorCardOf, hasChannelPermission, notify } from "./lib";
 import { resolveMentions } from "./mentions";
 
 async function signedIn(ctx: QueryCtx) {
@@ -45,7 +45,12 @@ export const serverDetails = query({ args: { serverId: v.id("servers") }, handle
 export const messages = query({ args: { channelId: v.id("channels") }, handler: async (ctx, { channelId }) => {
   const channel = await ctx.db.get(channelId);
   if (!channel) return [];
-  await member(ctx, channel.serverId);
+  const viewUserId = await member(ctx, channel.serverId);
+  // Server-level (NOT platform-level) channel access: users without viewChannels
+  // on this channel cannot read it, regardless of their platform role.
+  if (!(await hasChannelPermission(ctx, channelId, viewUserId, "viewChannels"))) {
+    throw new ConvexError("You don't have access to this channel.");
+  }
   // Per-user "delete for me": hidden ids are filtered out for this viewer only.
   const viewerId = await getAuthUserId(ctx);
   const hidden = new Set(
@@ -108,9 +113,19 @@ export const sendMessage = mutation({ args: { channelId: v.id("channels"), body:
   if (!channel) throw new ConvexError("Channel not found.");
   const userId = await member(ctx, channel.serverId);
   if (channel.locked) throw new ConvexError("This channel is locked.");
+  // Channel-level permissions (server-scoped, enforced on the backend).
+  if (!(await hasChannelPermission(ctx, channelId, userId, "sendMessages"))) {
+    throw new ConvexError("You don't have permission to send messages in this channel.");
+  }
+  if (gif && !(await hasChannelPermission(ctx, channelId, userId, "attachFiles"))) {
+    throw new ConvexError("You don't have permission to attach files in this channel.");
+  }
   // Validate the GIF server-side; never trust a client-provided media URL.
   const safeGif = gif ? requireGif(gif) : undefined;
   const raw = body.trim();
+  if (/@(everyone|here)\b/i.test(raw) && !(await hasChannelPermission(ctx, channelId, userId, "mentionEveryone"))) {
+    throw new ConvexError("You don't have permission to mention everyone.");
+  }
   if (raw.length > 4000) throw new ConvexError("Please enter between 1 and 4000 characters.");
   // A GIF can be sent on its own; a plain-text fallback keeps search/replies working.
   const text = safeGif ? raw || "Sent a GIF" : clean(body, 4000);

@@ -1184,3 +1184,44 @@ html.fc-light .fc-servers-overflow-row:hover { background: rgba(0,0,0,.05); colo
 @media (hover: none) {
   .fc-rail-item-menu { opacity: 1; }
 }
+
+/* ---------------------------------------------------------------------------
+   Server-level administration (Roles & permissions). Scoped to a single server
+   and fully separate from the FreeBuff platform Admin Panel.
+--------------------------------------------------------------------------- */
+.fc-server-perms { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+.fc-perms-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.fc-perms-tab { padding: 6px 12px; border-radius: 8px; background: rgba(255,255,255,.05); color: #b7b1cc; font-size: 12px; }
+.fc-perms-tab:hover { background: rgba(255,255,255,.09); color: #e5e0ff; }
+.fc-perms-tab.active { background: rgba(139,92,246,.24); color: #e5e0ff; }
+.fc-perms-panel { display: flex; flex-direction: column; gap: 8px; }
+.fc-role-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); flex-wrap: wrap; }
+.fc-role-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+.fc-role-name { font-size: 13px; font-weight: 600; color: #e5e0ff; }
+.fc-role-count { font-size: 11px; color: #8b87a0; }
+.fc-role-actions { display: flex; gap: 6px; margin-left: auto; }
+.fc-role-edit { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.fc-role-new { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 10px; background: rgba(139,92,246,.08); border: 1px solid rgba(139,92,246,.2); }
+.fc-role-new h4 { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.fc-color-dots { display: flex; flex-wrap: wrap; gap: 7px; }
+.fc-color-dot { width: 22px; height: 22px; border-radius: 50%; }
+.fc-color-dot.active { outline: 2px solid rgba(255,255,255,.85); outline-offset: 2px; }
+.fc-perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; }
+.fc-perm-check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #c9c5da; }
+.fc-member-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); flex-wrap: wrap; }
+.fc-member-row-name { display: flex; flex-direction: column; gap: 2px; min-width: 140px; }
+.fc-member-row-name small { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #8b87a0; }
+.fc-member-row-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.fc-perms-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #b7b1cc; }
+.fc-override-scroll { overflow-x: auto; border: 1px solid rgba(255,255,255,.07); border-radius: 10px; }
+.fc-override-table { border-collapse: collapse; width: 100%; font-size: 11px; }
+.fc-override-table th, .fc-override-table td { padding: 5px 7px; text-align: center; border-bottom: 1px solid rgba(255,255,255,.06); white-space: nowrap; }
+.fc-override-table thead th { color: #8b87a0; font-weight: 600; }
+.fc-override-table tbody th { text-align: left; color: #c9c5da; font-weight: 600; }
+.fc-perm-cell { width: 26px; height: 24px; border-radius: 6px; font-size: 12px; font-weight: 700; background: rgba(255,255,255,.05); color: #8b87a0; }
+.fc-perm-cell.allow { background: rgba(59,165,93,.25); color: #6ee7a0; }
+.fc-perm-cell.deny { background: rgba(240,97,109,.22); color: #ff9aa3; }
+.fc-perm-cell:hover { filter: brightness(1.25); }
+html.fc-light .fc-role-row, html.fc-light .fc-member-row { background: rgba(0,0,0,.03); border-color: rgba(0,0,0,.08); }
+html.fc-light .fc-role-name { color: #1c1b22; }
+html.fc-light .fc-perms-tab { color: #4b4a58; }

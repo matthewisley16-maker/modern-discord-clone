@@ -1,5 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import {
@@ -24,11 +24,38 @@ import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 
 const permissionArg = v.union(
-  v.literal("sendMessages"), v.literal("deleteMessages"), v.literal("manageMessages"),
-  v.literal("createChannels"), v.literal("manageChannels"), v.literal("kickMembers"),
-  v.literal("banMembers"), v.literal("manageRoles"), v.literal("manageCommunity"),
-  v.literal("createInvites"), v.literal("useVoice"), v.literal("manageMembers"),
+  v.literal("viewChannels"), v.literal("sendMessages"), v.literal("attachFiles"),
+  v.literal("createThreads"), v.literal("deleteMessages"), v.literal("manageMessages"),
+  v.literal("mentionEveryone"), v.literal("createChannels"), v.literal("manageChannels"),
+  v.literal("kickMembers"), v.literal("banMembers"), v.literal("manageRoles"),
+  v.literal("manageCommunity"), v.literal("createInvites"), v.literal("useVoice"),
+  v.literal("manageMembers"),
 );
+
+/** Hierarchy of built-in server roles, used to stop members moderating peers. */
+const SERVER_ROLE_RANK: Record<string, number> = { member: 0, moderator: 1, admin: 2, owner: 3 };
+
+/**
+ * Server-scoped moderation guard. The server owner can always act. Otherwise a
+ * member may only act on someone with a strictly lower role, and the owner can
+ * never be moderated by anyone else. This is independent of platform roles.
+ */
+async function assertCanModerateMember(
+  ctx: QueryCtx,
+  serverId: Id<"servers">,
+  actorId: Id<"users">,
+  targetUserId: Id<"users">,
+) {
+  const server = await ctx.db.get(serverId);
+  if (!server) throw new ConvexError("Community not found.");
+  if (server.ownerId === targetUserId) throw new ConvexError("You can't moderate the server owner.");
+  if (server.ownerId === actorId) return;
+  const actor = await membershipOf(ctx, serverId, actorId);
+  const target = await membershipOf(ctx, serverId, targetUserId);
+  const actorRank = SERVER_ROLE_RANK[actor?.role ?? "member"] ?? 0;
+  const targetRank = SERVER_ROLE_RANK[target?.role ?? "member"] ?? 0;
+  if (actorRank <= targetRank) throw new ConvexError("You can't moderate someone with an equal or higher role.");
+}
 
 function inviteCode() {
   return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
@@ -422,15 +449,100 @@ export const assignRole = mutation({
   handler: async (ctx, { serverId, userId, role, customRoleId }) => {
     const me = await currentUserId(ctx);
     await requirePermission(ctx, serverId, me, "manageRoles");
+    const server = await ctx.db.get(serverId);
+    if (!server) throw new ConvexError("Community not found.");
     const target = await membershipOf(ctx, serverId, userId);
-    if (!target) throw new Error("That user isn't a member.");
+    if (!target) throw new ConvexError("That user isn't a member.");
+
     if (role) {
-      const server = await ctx.db.get(serverId);
-      if (server?.ownerId === userId && role !== "owner") throw new Error("The owner's role can't be changed.");
+      if (role === "owner") throw new ConvexError("Ownership can only change through ownership transfer.");
+      if (server.ownerId === userId) throw new ConvexError("The owner's role can't be changed.");
+      // Only the server owner may create or remove server admins.
+      if (server.ownerId !== me) {
+        if (target.role === "admin") throw new ConvexError("Only the server owner can manage admins.");
+        if (role === "admin") throw new ConvexError("Only the server owner can grant admin.");
+      }
       await ctx.db.patch(target._id, { role });
     }
-    if (customRoleId !== undefined) await ctx.db.patch(target._id, { customRoleId });
+    if (customRoleId !== undefined) {
+      const custom = await ctx.db.get(customRoleId);
+      if (!custom || custom.serverId !== serverId) throw new ConvexError("That role doesn't belong to this community.");
+      await ctx.db.patch(target._id, { customRoleId });
+    }
     await audit(ctx, "role.assign", me, `Assigned role to ${userId}`, "user", userId);
+  },
+});
+
+/**
+ * Channel-level permission overrides. Only members with manageChannels (server
+ * owner/admins) may change them, and they are stored on the channel itself so
+ * they can never leak between servers.
+ */
+export const channelPermissions = query({
+  args: { channelId: v.id("channels") },
+  handler: async (ctx, { channelId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const channel = await ctx.db.get(channelId);
+    if (!channel) return null;
+    const canManage = (await hasPermission(ctx, channel.serverId, userId, "manageChannels")) ||
+      (await hasPermission(ctx, channel.serverId, userId, "manageRoles"));
+    if (!canManage) return null;
+    const roles = await ctx.db.query("communityRoles").withIndex("by_server", (q) => q.eq("serverId", channel.serverId)).collect();
+    return {
+      overrides: channel.overrides ?? [],
+      roles: roles.map((r) => ({ _id: r._id as string, name: r.name, color: r.color ?? null })),
+    };
+  },
+});
+
+export const updateChannelOverrides = mutation({
+  args: {
+    channelId: v.id("channels"),
+    overrides: v.array(v.object({
+      target: v.string(),
+      allow: v.array(permissionArg),
+      deny: v.array(permissionArg),
+    })),
+  },
+  handler: async (ctx, { channelId, overrides }) => {
+    const userId = await currentUserId(ctx);
+    const channel = await ctx.db.get(channelId);
+    if (!channel) throw new ConvexError("Channel not found.");
+    await requirePermission(ctx, channel.serverId, userId, "manageChannels");
+    const clean = overrides
+      .slice(0, 60)
+      .map((o) => ({
+        target: String(o.target).slice(0, 64),
+        allow: [...new Set(o.allow)],
+        deny: [...new Set(o.deny)],
+      }))
+      .filter((o) => o.allow.length > 0 || o.deny.length > 0);
+    await ctx.db.patch(channelId, { overrides: clean });
+    await audit(ctx, "channel.permissions", userId, `Updated permissions for #${channel.name}`, "channel", channelId);
+  },
+});
+
+/**
+ * Transfer server ownership. Only the current owner may do this; the previous
+ * owner is downgraded to admin and the new owner gets full control. This is the
+ * ONLY way the owner role can change.
+ */
+export const transferOwnership = mutation({
+  args: { serverId: v.id("servers"), userId: v.id("users") },
+  handler: async (ctx, { serverId, userId }) => {
+    const me = await currentUserId(ctx);
+    const server = await ctx.db.get(serverId);
+    if (!server) throw new ConvexError("Community not found.");
+    if (server.ownerId !== me) throw new ConvexError("Only the server owner can transfer ownership.");
+    if (server.ownerId === userId) return;
+    const target = await membershipOf(ctx, serverId, userId);
+    if (!target) throw new ConvexError("That user isn't a member of this community.");
+    await ctx.db.patch(serverId, { ownerId: userId });
+    await ctx.db.patch(target._id, { role: "owner", customRoleId: undefined });
+    const mine = await membershipOf(ctx, serverId, me);
+    if (mine) await ctx.db.patch(mine._id, { role: "admin" });
+    await audit(ctx, "ownership.transfer", me, `Transferred ownership to ${userId}`, "server", serverId);
   },
 });
 
@@ -483,6 +595,7 @@ export const kickMember = mutation({
   handler: async (ctx, { serverId, userId }) => {
     const me = await currentUserId(ctx);
     await requirePermission(ctx, serverId, me, "kickMembers");
+    await assertCanModerateMember(ctx, serverId, me, userId);
     const server = await ctx.db.get(serverId);
     if (server?.ownerId === userId) throw new Error("You can't kick the owner.");
     const target = await membershipOf(ctx, serverId, userId);
@@ -498,6 +611,7 @@ export const banMember = mutation({
   handler: async (ctx, { serverId, userId, reason }) => {
     const me = await currentUserId(ctx);
     await requirePermission(ctx, serverId, me, "banMembers");
+    await assertCanModerateMember(ctx, serverId, me, userId);
     const server = await ctx.db.get(serverId);
     if (server?.ownerId === userId) throw new Error("You can't ban the owner.");
     const existing = await ctx.db.query("bans").withIndex("by_server_user", (q) => q.eq("serverId", serverId).eq("userId", userId)).unique();
@@ -535,6 +649,7 @@ export const timeoutMember = mutation({
   handler: async (ctx, { serverId, userId, minutes }) => {
     const me = await currentUserId(ctx);
     await requirePermission(ctx, serverId, me, "manageMembers");
+    await assertCanModerateMember(ctx, serverId, me, userId);
     const target = await membershipOf(ctx, serverId, userId);
     if (!target) throw new Error("That user isn't a member.");
     const clamped = Math.max(0, Math.min(1440, Math.round(minutes)));

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Compass, ImagePlus, LayoutList, LogOut, Mic, Plus, Shield, Trash2, Volume2, X } from "lucide-react";
 import ChannelManager from "./ChannelManager";
+import ServerPermissions from "./ServerPermissions";
 
 const CATEGORIES = ["General", "Gaming", "Music", "Art", "Tech", "Study", "Sports", "Community"];
 const MAX_ICON_BYTES = 5 * 1024 * 1024;
@@ -304,6 +305,12 @@ export default function CommunitySettings({
 
             <h3><LayoutList size={16} /> Channels &amp; categories</h3>
             <ChannelManager serverId={serverId} roles={(details.roles ?? []).map((r) => ({ _id: r._id as string, name: r.name }))} />
+
+            {/* Server-level administration: roles, members, channel permissions,
+                bans. Scoped to THIS community and enforced on the backend — it is
+                deliberately separate from the FreeBuff platform Admin Panel. */}
+            <h3><Shield size={16} /> Roles &amp; permissions</h3>
+            <ServerPermissions serverId={serverId} />
 
             <h3><Shield size={16} /> General</h3>
             <label>Community name
