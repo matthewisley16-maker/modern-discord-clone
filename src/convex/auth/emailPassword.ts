@@ -1,5 +1,6 @@
 import { ConvexCredentials } from "@convex-dev/auth/providers/ConvexCredentials";
 import { retrieveAccount, type ConvexCredentialsConfig } from "@convex-dev/auth/server";
+import { ConvexError } from "convex/values";
 import { internal } from "../_generated/api";
 
 /**
@@ -22,7 +23,7 @@ export const emailPassword: ConvexCredentialsConfig = ConvexCredentials({
     const email = String(credentials.email ?? "").trim().toLowerCase();
     const password = String(credentials.password ?? "");
     const generic = "Incorrect email or password.";
-    if (!email || !email.includes("@") || !password) throw new Error(generic);
+    if (!email || !email.includes("@") || !password) throw new ConvexError(generic);
 
     try {
       const account = await ctx.runQuery(internal.authHelpers.passwordAccountForEmail, { email });
@@ -34,7 +35,7 @@ export const emailPassword: ConvexCredentialsConfig = ConvexCredentials({
       if (result === null) throw new Error(generic);
       return { userId: result.user._id };
     } catch {
-      throw new Error(generic);
+      throw new ConvexError(generic);
     }
   },
 });

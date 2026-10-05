@@ -3,6 +3,7 @@
 import { ConvexCredentials } from "@convex-dev/auth/providers/ConvexCredentials";
 import { Anonymous } from "@convex-dev/auth/providers/Anonymous";
 import { convexAuth, createAccount, retrieveAccount } from "@convex-dev/auth/server";
+import { ConvexError } from "convex/values";
 import { Scrypt } from "lucia";
 import { internal } from "./_generated/api";
 import { emailOtp } from "./auth/emailOtp";
@@ -19,25 +20,25 @@ export function normalizeUsername(value: unknown): string {
 /** Throws with a user-safe message when a username is invalid. */
 export function assertValidUsername(username: string): void {
   if (!USERNAME_PATTERN.test(username)) {
-    throw new Error(
+    throw new ConvexError(
       "Usernames must be 3-24 characters and use only letters, numbers, dots, or underscores.",
     );
   }
   if (RESERVED.has(username)) {
-    throw new Error("That username is reserved. Please choose another.");
+    throw new ConvexError("That username is reserved. Please choose another.");
   }
 }
 
 /** Throws with a user-safe message when a password is too weak. */
 export function assertValidPassword(password: string): void {
   if (typeof password !== "string" || password.length < 8) {
-    throw new Error("Password must be at least 8 characters long.");
+    throw new ConvexError("Password must be at least 8 characters long.");
   }
   if (password.length > 200) {
-    throw new Error("Password is too long.");
+    throw new ConvexError("Password is too long.");
   }
   if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
-    throw new Error("Password must include at least one letter and one number.");
+    throw new ConvexError("Password must include at least one letter and one number.");
   }
 }
 
@@ -59,7 +60,7 @@ const usernamePassword = ConvexCredentials({
 
       const taken = await ctx.runQuery(internal.authHelpers.usernameExists, { username });
       if (taken) {
-        throw new Error("That username is already taken. Please choose another.");
+        throw new ConvexError("That username is already taken. Please choose another.");
       }
 
       const rawEmail = String(credentials.email ?? "").trim().toLowerCase();
@@ -96,15 +97,17 @@ const usernamePassword = ConvexCredentials({
           account: { id: username, secret: password },
         });
         if (account === null) {
-          throw new Error("Incorrect username or password.");
+          throw new ConvexError("Incorrect username or password.");
         }
         return { userId: account.user._id };
       } catch {
-        throw new Error("Incorrect username or password.");
+        // Surface a single generic message to the client (never the account
+        // state) while avoiding Convex's "Server Error" redaction.
+        throw new ConvexError("Incorrect username or password.");
       }
     }
 
-    throw new Error("Unsupported authentication flow.");
+    throw new ConvexError("Unsupported authentication flow.");
   },
   crypto: {
     hashSecret: async (secret: string) => await new Scrypt().hash(secret),

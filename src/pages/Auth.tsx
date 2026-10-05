@@ -63,8 +63,17 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   }
 
   function friendly(err: unknown, fallback: string) {
-    const raw = err instanceof Error ? err.message : fallback;
-    return raw.split("\n")[0].replace(/^.*Error:\s*/, "").slice(0, 200);
+    // Convex delivers user-safe messages (ConvexError) on `err.data`; plain
+    // Errors are redacted to "Server Error" in deployed deployments.
+    const data = (err as { data?: unknown } | null)?.data;
+    const fromData =
+      typeof data === "string"
+        ? data
+        : data && typeof data === "object" && typeof (data as { message?: unknown }).message === "string"
+          ? String((data as { message: string }).message)
+          : null;
+    const raw = fromData ?? (err instanceof Error ? err.message : fallback);
+    return String(raw).split("\n")[0].replace(/^.*Error:\s*/, "").slice(0, 200);
   }
 
   // --- Username + password (no email required) ---
