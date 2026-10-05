@@ -12,6 +12,7 @@ import GifPicker from "./GifPicker";
 import InlineGif from "./InlineGif";
 import MentionText from "./MentionText";
 import { gifUrlsIn } from "@/lib/message-links";
+import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
@@ -63,6 +64,7 @@ export default function DmView({
   const report = useMutation(api.social.report);
   const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
   const attach = useMutation(api.uploads.attach);
+  const requestCleanup = useMutation(api.storage.requestCleanup);
   const addMembers = useMutation(api.dms.addGroupMembers);
   const renameGroup = useMutation(api.dms.renameGroup);
   const removeMember = useMutation(api.dms.removeGroupMember);
@@ -153,7 +155,10 @@ export default function DmView({
       stopTyping();
       setDraft("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Message failed to send.");
+      // Recoverable storage/usage-limit failure: cleanup runs in the background.
+      if (!handleStorageError(err, requestCleanup, (m) => toast.error(m))) {
+        toast.error(err instanceof Error ? err.message : "Message failed to send.");
+      }
     } finally {
       setBusy(false);
     }
@@ -256,7 +261,8 @@ export default function DmView({
         )}
         {messages && messages.length === 0 && search && <EmptyState title="No results found." body={`Nothing matches “${search}”.`} />}
 
-        {messages?.map((m) => {
+        {/* Memoized so typing in the composer does not re-render every message. */}
+        {useMemo(() => messages?.map((m) => {
           const mine = m.userId === myUserId;
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
           const inlineGifs = gifUrlsIn(m.body);
@@ -328,7 +334,7 @@ export default function DmView({
               </div>
             </article>
           );
-        })}
+        }), [messages, myUserId, openMenu, onOpenProfile, react, setPinned, deleteDmForMe, deleteDmForEveryone, report])}
         {typing && typing.length > 0 && <p className="fc-typing">{typingLabel(typing)}</p>}
         <div ref={bottom} />
       </div>

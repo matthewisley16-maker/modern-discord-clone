@@ -1,5 +1,6 @@
 import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
+import { isStorageLimitError } from "@/lib/maintenance";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient, useConvexAuth } from "convex/react";
@@ -75,6 +76,29 @@ class RootErrorBoundary extends React.Component<
   }
   render() {
     if (this.state.hasError) {
+      // A Convex storage/usage-limit error must never destroy the session or
+      // leave a blank page. Show a calm housekeeping notice with a retry path;
+      // the background retention job reclaims space so a reload recovers.
+      const storageish = isStorageLimitError(this.state.message);
+      if (storageish) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
+            <div className="max-w-md text-center">
+              <p className="text-sm font-semibold">Freecord is doing a little housekeeping</p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                We&apos;re tidying up old messages to keep everything running. Your account and
+                communities are safe — try again in a moment.
+              </p>
+              <button
+                className="mt-4 rounded-md border border-border px-3 py-1.5 text-xs font-medium"
+                onClick={() => window.location.reload()}
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        );
+      }
       return (
         <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
           <div className="max-w-lg text-center">

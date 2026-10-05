@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
@@ -13,6 +13,7 @@ import GifPicker from "./GifPicker";
 import InlineGif from "./InlineGif";
 import MentionText from "./MentionText";
 import { gifUrlsIn } from "@/lib/message-links";
+import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
 import { toast } from "sonner";
 import { CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
@@ -70,6 +71,7 @@ export default function ChannelView({
   const hiddenIds = useQuery(api.deletion.myHiddenIds, {});
   const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
   const attach = useMutation(api.uploads.attach);
+  const requestCleanup = useMutation(api.storage.requestCleanup);
   const { play: playSound } = useMessageSound();
   const [confirmDelete, setConfirmDelete] = useState<{ messageId: Id<"messages"> } | null>(null);
   const [longPressFor, setLongPressFor] = useState<string | null>(null);
@@ -123,8 +125,16 @@ export default function ChannelView({
   }, [messages, myUserId, playSound]);
 
   const canSend = permissions.includes("sendMessages");
-  const hidden = new Set(hiddenIds ?? []);
-  const visible = messages?.filter((m) => !hidden.has(m._id as string)).filter((m) => !search || m.body.toLowerCase().includes(search.toLowerCase()));
+  // Derived from query data, not from the composer draft, so typing does not
+  // recompute the list. Memoized so the whole message list can bail out of
+  // re-rendering on every keystroke (the main cause of composer lag).
+  const visible = useMemo(() => {
+    const hidden = new Set(hiddenIds ?? []);
+    const term = search.toLowerCase();
+    return messages
+      ?.filter((m) => !hidden.has(m._id as string))
+      .filter((m) => !search || m.body.toLowerCase().includes(term));
+  }, [messages, hiddenIds, search]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -151,7 +161,11 @@ export default function ChannelView({
       stopTyping();
       setDraft("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Message failed to send.");
+      // A storage/usage-limit error is recoverable: cleanup runs in the
+      // background and the user just sees a short housekeeping notice.
+      if (!handleStorageError(err, requestCleanup, (m) => toast.error(m))) {
+        toast.error(err instanceof Error ? err.message : "Message failed to send.");
+      }
     } finally { setBusy(false); }
   }
 
@@ -251,7 +265,7 @@ export default function ChannelView({
         )}
         {messages && messages.length > 0 && visible?.length === 0 && <EmptyState title="No results found." body={`Nothing matches “${search}”.`} />}
 
-        {visible?.map((m) => {
+        {useMemo(() => visible?.map((m) => {
           const mine = m.userId === myUserId;
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
           const inlineGifs = gifUrlsIn(m.body);
@@ -332,7 +346,7 @@ export default function ChannelView({
               </div>
             </article>
           );
-        })}
+        }), [visible, myUserId, menuFor, longPressFor, canModerate, onOpenProfile, react, pin, deleteForMe, deleteForEveryone, report])}
         {typing && typing.length > 0 && <p className="fc-typing">{typingLabel(typing)}</p>}
         <div ref={bottom} />
       </div>

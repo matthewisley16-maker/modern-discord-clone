@@ -348,7 +348,9 @@ const schema = defineSchema(
       hiddenAt: v.number(),
     })
       .index("by_user", ["userId"])
-      .index("by_user_message", ["userId", "messageId"]),
+      .index("by_user_message", ["userId", "messageId"])
+      // Lets storage cleanup remove "hidden for me" markers whose message is gone.
+      .index("by_message", ["messageId"]),
 
     messages: defineTable({
       channelId: v.id("channels"),
@@ -385,7 +387,10 @@ const schema = defineSchema(
       dmMessageId: v.optional(v.id("dmMessages")),
     })
       .index("by_message", ["messageId"])
-      .index("by_dm_message", ["dmMessageId"]),
+      .index("by_dm_message", ["dmMessageId"])
+      // Used by storage cleanup to detect a storage object that is still
+      // referenced by another message before deleting it (orphan check).
+      .index("by_storage", ["storageId"]),
 
     invites: defineTable({
       serverId: v.id("servers"),
@@ -491,6 +496,49 @@ const schema = defineSchema(
     rateLimits: defineTable({ key: v.string(), count: v.number(), windowStart: v.number() })
       .index("by_key", ["key"]),
     moderationLogs: defineTable({ action: v.string(), actorId: v.optional(v.id("users")), detail: v.string() }),
+
+    // ---------- Storage / retention maintenance ----------
+    //
+    // Configurable retention + thresholds for the automatic message-history
+    // cleanup. Values are optional overrides on top of the code defaults and
+    // the STORAGE_* environment variables, so they can be tuned later without
+    // changing (or rewriting) the application.
+    storageConfig: defineTable({
+      key: v.string(), // singleton: "config"
+      retentionMs: v.optional(v.number()), // recent messages protected this long
+      batchSize: v.optional(v.number()),
+      batchSizeCritical: v.optional(v.number()),
+      maxBatchesPerRun: v.optional(v.number()),
+      maxBatchesCritical: v.optional(v.number()),
+      warningRatio: v.optional(v.number()),
+      cleanupRatio: v.optional(v.number()),
+      criticalRatio: v.optional(v.number()),
+      safeRatio: v.optional(v.number()),
+      budgetBytes: v.optional(v.number()), // storage budget this app manages to
+      budgetRows: v.optional(v.number()), // message-row budget this app manages to
+      protectPinned: v.optional(v.boolean()), // pinned messages are never auto-pruned
+      staleTypingMs: v.optional(v.number()),
+      staleSignalMs: v.optional(v.number()),
+    }).index("by_key", ["key"]),
+
+    // Single-row operational state + lock for the cleanup job. The lock stops
+    // multiple cron ticks and multiple browser clients from running cleanup at
+    // the same time.
+    storageState: defineTable({
+      key: v.string(), // "global" or "scope:<serverId>"
+      lockedUntil: v.optional(v.number()),
+      lockedBy: v.optional(v.string()),
+      lastRunAt: v.optional(v.number()),
+      lastStatus: v.optional(v.string()),
+      lastRatio: v.optional(v.number()),
+      lastDeleted: v.optional(v.number()),
+      totalDeleted: v.optional(v.number()),
+      batchesRun: v.optional(v.number()),
+      lastError: v.optional(v.string()),
+      lastErrorAt: v.optional(v.number()),
+      consecutiveErrors: v.optional(v.number()),
+      truncated: v.optional(v.boolean()),
+    }).index("by_key", ["key"]),
     auditLogs: defineTable({
       action: v.string(),
       actorId: v.optional(v.id("users")),
