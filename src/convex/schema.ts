@@ -597,7 +597,11 @@ const schema = defineSchema(
       endedAt: v.optional(v.number()),
     })
       .index("by_to", ["toId", "status"])
-      .index("by_from", ["fromId"]),
+      .index("by_from", ["fromId"])
+      // Joining an invitation always asks "is this call still running?" — and
+      // that question is asked from a reactive query, so it must not scan every
+      // call ever placed.
+      .index("by_conversation", ["conversationId", "status"]),
 
     /**
      * Invitations to join an EXISTING call.

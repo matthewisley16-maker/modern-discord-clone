@@ -134,6 +134,7 @@ export default function Dashboard() {
   const endCall = useMutation(api.calls.endCall);
   const timeoutCall = useMutation(api.calls.timeoutCall);
   const clearConversationSignals = useMutation(api.calls.clearConversationSignals);
+  const clearMyConversationSignals = useMutation(api.calls.clearMyConversationSignals);
   const startDirect = useMutation(api.dms.startDirect);
   const setMuted = useMutation(api.dms.setMuted);
   const setPinned = useMutation(api.dms.setPinned);
@@ -600,8 +601,13 @@ export default function Dashboard() {
     setDmCall(null);
     setCallMinimized(false);
     // A guest joined an existing call: leaving is purely local. It must not end
-    // the owner's call, nor clear signaling the remaining participants use.
-    if (invited) return;
+    // the owner's call, nor clear signaling the remaining participants still
+    // use — only MY rows for this conversation, so a leftover offer cannot be
+    // replayed against the next call.
+    if (invited) {
+      if (conversationId) { try { await clearMyConversationSignals({ conversationId }); } catch { /* noop */ } }
+      return;
+    }
     if (inviteId) { try { await endCall({ inviteId }); } catch { /* already ended */ } }
     // Drop any signaling left in the conversation so the next call starts clean
     // and a stale offer can never revive the connection we just closed.
@@ -1302,6 +1308,7 @@ export default function Dashboard() {
             myUserId={me.userId}
             media={dmCall.media}
             minimized={callMinimized}
+            canInvite={dmCall.invited !== true}
             onMinimize={() => setCallMinimized(true)}
             onExpand={() => setCallMinimized(false)}
             onLeave={endDmCall}

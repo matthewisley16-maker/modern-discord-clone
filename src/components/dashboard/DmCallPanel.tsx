@@ -65,6 +65,7 @@ export default function DmCallPanel({
   media,
   onLeave,
   minimized = false,
+  canInvite = true,
   onMinimize,
   onExpand,
 }: {
@@ -77,6 +78,10 @@ export default function DmCallPanel({
   media: "voice" | "video";
   onLeave: () => void;
   minimized?: boolean;
+  /** False for a guest who joined by accepting an invitation: they are not a
+   *  party to the running call, so they cannot hand out invitations to it (the
+   *  server refuses those too). */
+  canInvite?: boolean;
   onMinimize?: () => void;
   onExpand?: () => void;
 }) {
@@ -755,7 +760,7 @@ export default function DmCallPanel({
             {view === "compact" ? peerName : `${title} · ${peerName}`}
           </span>
           <span className="fc-callwin-head-btns">
-            <button aria-label="Invite people" title="Invite people" onClick={(e) => { e.stopPropagation(); setInviteOpen(true); }}><UserPlus size={14} /></button>
+            {canInvite && <button aria-label="Invite people" title="Invite people" onClick={(e) => { e.stopPropagation(); setInviteOpen(true); }}><UserPlus size={14} /></button>}
             {view === "float" && (
               <button aria-label="Minimize call window" title="Minimize" onClick={(e) => { e.stopPropagation(); setViewAndNotify("compact"); }}><Minimize2 size={14} /></button>
             )}
@@ -859,9 +864,11 @@ export default function DmCallPanel({
           <button className={screenOn ? "active" : ""} onClick={() => void toggleScreen()} aria-label={screenOn ? "Stop sharing screen" : "Share screen"} title={screenOn ? "Stop sharing" : "Share screen"}>
             <MonitorUp size={16} />
           </button>
-          <button onClick={() => setInviteOpen(true)} aria-label="Invite people to this call" title="Invite people">
-            <UserPlus size={16} />
-          </button>
+          {canInvite && (
+            <button onClick={() => setInviteOpen(true)} aria-label="Invite people to this call" title="Invite people">
+              <UserPlus size={16} />
+            </button>
+          )}
           {view === "full"
             ? <button onClick={() => setViewAndNotify("float")} aria-label="Shrink call window" title="Shrink"><Minimize2 size={16} /></button>
             : <button onClick={() => setViewAndNotify("full")} aria-label="Expand call window" title="Expand"><Maximize2 size={16} /></button>}

@@ -4,6 +4,11 @@ import { mutation, query } from "./_generated/server";
 import { areFriends, avatarUrlOf, currentUserId, displayNameOf, hasChannelPermission, isBlockedEitherWay, isTimedOut, membershipOf, notify, presenceInfoOf } from "./lib";
 import type { Ctx } from "./lib";
 import type { Id } from "./_generated/dataModel";
+// Shared with the client and with the unit tests: the invitation state-machine
+// rules are pure, so they live in one place instead of being re-inlined per
+// mutation (and they are the only part of this feature that can be covered by
+// a runnable test).
+import { INVITATION_TTL_MS, isAcceptable, isLiveInvitationFor } from "../lib/call-invitations";
 
 /**
  * Community call invitations.
@@ -24,8 +29,7 @@ import type { Id } from "./_generated/dataModel";
  * Used when an invite is created (for the invitee) AND again when it is
  * accepted, so a permission/lock/ban change between the two is always honoured.
  */
-/** How long an invitation stays acceptable before it expires. */
-const INVITATION_TTL_MS = 15 * 60_000;
+/** How long an invitation stays acceptable before it expires (`INVITATION_TTL_MS` in `src/lib/call-invitations`). */
 
 /**
  * The call currently running in a DM conversation, if any. Used only to prove
@@ -33,10 +37,15 @@ const INVITATION_TTL_MS = 15 * 60_000;
  * never starts one.
  */
 async function activeDmCallForConversation(ctx: Ctx, conversationId: Id<"dmConversations">) {
-  const rows = await ctx.db.query("callInvites").collect();
-  return rows.find(
-    (c) => c.conversationId === conversationId && (c.status === "ringing" || c.status === "accepted"),
-  ) ?? null;
+  // Indexed lookup: this runs from a reactive query (`dmInviteCandidates`), so
+  // a whole-table scan of every call ever placed would be unacceptable.
+  const rows = await ctx.db
+    .query("callInvites")
+    .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+    .collect();
+  // An answered call always wins over a stray newer ringing row: an invitation
+  // must point at the call that is actually live, not at an unanswered one.
+  return rows.find((c) => c.status === "accepted") ?? rows.find((c) => c.status === "ringing") ?? null;
 }
 
 async function assertCanJoinCommunityCall(ctx: Ctx, channelId: Id<"channels">, userId: Id<"users">) {
@@ -170,9 +179,7 @@ export const inviteToCommunityCall = mutation({
       .query("callInvitations")
       .withIndex("by_to", (q) => q.eq("toId", toUserId).eq("status", "pending"))
       .collect();
-    const duplicate = theirPending.find(
-      (inv) => inv.fromId === me && inv.channelId === channelId && inv.expiresAt > Date.now(),
-    );
+    const duplicate = theirPending.find((inv) => isLiveInvitationFor(inv, { fromId: me, channelId, now: Date.now() }));
     if (duplicate) return duplicate._id;
 
     // Channel capacity is enforced here so an invite can never overfill a room.
@@ -239,18 +246,28 @@ export const inviteToDmCall = mutation({
     if (!active) {
       throw new ConvexError("There's no active call in this conversation to invite them to.");
     }
+    // Only someone actually IN this call may hand out invitations to it — the
+    // same rule the community path enforces with a voice-session lookup. A
+    // third conversation member must never be able to point an invitation at
+    // a call they have no part in.
+    if (active.fromId !== me && active.toId !== me) {
+      throw new ConvexError("Join the call before inviting people to it.");
+    }
+    // An unanswered (ringing) call is not yet joinable — wait for it to be
+    // picked up, exactly like the two people already in it did.
+    if (active.status !== "accepted") {
+      throw new ConvexError("The call hasn't been answered yet.");
+    }
     // Server-side duplicate protection: never invite someone who is already a
     // participant of the running call (the client also hides the button).
-    if (active.fromId === toUserId || (active.status === "accepted" && active.toId === toUserId)) {
+    if (active.fromId === toUserId || active.toId === toUserId) {
       throw new ConvexError("They're already in this call.");
     }
     const pending = await ctx.db
       .query("callInvitations")
       .withIndex("by_to", (q) => q.eq("toId", toUserId).eq("status", "pending"))
       .collect();
-    const duplicate = pending.find(
-      (inv) => inv.fromId === me && inv.conversationId === conversationId && inv.expiresAt > Date.now(),
-    );
+    const duplicate = pending.find((inv) => isLiveInvitationFor(inv, { fromId: me, conversationId, now: Date.now() }));
     if (duplicate) return duplicate._id;
     const now = Date.now();
     const id = await ctx.db.insert("callInvitations", {
@@ -291,7 +308,7 @@ export const pendingInvitations = query({
     const now = Date.now();
     const out = [];
     for (const inv of rows.sort((a, b) => b.createdAt - a.createdAt).slice(0, 8)) {
-      if (inv.expiresAt <= now) continue; // expired — never offered
+      if (!isAcceptable(inv, now)) continue; // expired / already resolved — never offered
       const channel = inv.channelId ? await ctx.db.get(inv.channelId) : null;
       // A community invitation whose channel is gone is dead: skip it.
       if (inv.channelId && !channel) continue;
@@ -331,9 +348,12 @@ export const respondInvitation = mutation({
     const me = await currentUserId(ctx);
     const invite = await ctx.db.get(invitationId);
     if (!invite || invite.toId !== me) throw new ConvexError("This call invitation is no longer available.");
-    if (invite.status !== "pending") throw new ConvexError("This call invitation is no longer available.");
-    if (invite.expiresAt <= Date.now()) {
-      await ctx.db.patch(invitationId, { status: "expired", resolvedAt: Date.now() });
+    if (!isAcceptable(invite, Date.now())) {
+      // Only a genuinely pending-but-stale row changes state; a row that was
+      // already resolved is reported without a pointless write.
+      if (invite.status === "pending") {
+        await ctx.db.patch(invitationId, { status: "expired", resolvedAt: Date.now() });
+      }
       throw new ConvexError("This call invitation is no longer available.");
     }
 
@@ -433,7 +453,7 @@ export const dmInviteCandidates = query({
     const now = Date.now();
     const invitedIds = new Set<string>(
       (await ctx.db.query("callInvitations").withIndex("by_from", (q) => q.eq("fromId", me)).collect())
-        .filter((i) => i.status === "pending" && i.conversationId === conversationId && i.expiresAt > now)
+        .filter((i) => isLiveInvitationFor(i, { fromId: me, conversationId, now }))
         .map((i) => i.toId as string),
     );
     const members = await ctx.db
@@ -491,7 +511,7 @@ export const communityInviteCandidates = query({
     const now = Date.now();
     const invitedIds = new Set(
       (await ctx.db.query("callInvitations").withIndex("by_from", (q) => q.eq("fromId", me)).collect())
-        .filter((i) => i.status === "pending" && i.channelId === channelId && i.expiresAt > now)
+        .filter((i) => isLiveInvitationFor(i, { fromId: me, channelId, now }))
         .map((i) => i.toId as string),
     );
     const rows: { userId: Id<"users">; name: string; username: string; avatarUrl: string | null; presence: string; role: string; friend: boolean; inCall: boolean; invited: boolean }[] = [];
@@ -632,7 +652,21 @@ export const getCall = query({
     const me = await getAuthUserId(ctx);
     if (!me) return null;
     const invite = await ctx.db.get(inviteId);
-    if (!invite || (invite.fromId !== me && invite.toId !== me)) return null;
+    if (!invite) return null;
+    if (invite.fromId !== me && invite.toId !== me) {
+      // A guest who accepted an invitation is attached to the SAME call but is
+      // not a party to the ringing row. They may still observe its status
+      // read-only — otherwise their panel would never notice the owner hanging
+      // up and would keep the microphone live in a ghost call. `endCall` stays
+      // restricted to the original pair, so a guest can never end it.
+      const conversationId = invite.conversationId;
+      if (!conversationId) return null;
+      const member = await ctx.db
+        .query("dmMembers")
+        .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", me))
+        .unique();
+      if (!member) return null;
+    }
     return {
       _id: invite._id,
       status: invite.status,
@@ -660,6 +694,35 @@ export const clearDmSignal = mutation({
  * when a call ends so the next call starts from a clean slate (no stale
  * offers/candidates that would trigger a renegotiation).
  */
+/**
+ * Clear only MY signaling rows for a conversation.
+ *
+ * A guest who joined an existing call by accepting an invitation must NOT call
+ * `clearConversationSignals` on leave: that deletes the owner's in-flight ICE
+ * for the call they are still running. This scoped variant keeps a guest's
+ * departure purely local — it drops only rows I sent and rows addressed to me,
+ * so a leftover offer of mine cannot be replayed against the next call started
+ * in the same conversation, while the participants' signaling stays untouched.
+ */
+export const clearMyConversationSignals = mutation({
+  args: { conversationId: v.id("dmConversations") },
+  handler: async (ctx, { conversationId }) => {
+    const me = await currentUserId(ctx);
+    const member = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", me))
+      .unique();
+    if (!member) return;
+    const rows = await ctx.db
+      .query("dmCallSignals")
+      .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+      .collect();
+    for (const r of rows) {
+      if (r.toUserId === me || r.fromUserId === me) await ctx.db.delete(r._id);
+    }
+  },
+});
+
 export const clearConversationSignals = mutation({
   args: { conversationId: v.id("dmConversations") },
   handler: async (ctx, { conversationId }) => {
@@ -721,10 +784,10 @@ export const outgoingCall = query({
   handler: async (ctx) => {
     const me = await getAuthUserId(ctx);
     if (!me) return null;
-    const mine = await ctx.db.query("callInvites").collect();
-    const recent = mine
-      .filter((c) => c.fromId === me)
-      .sort((a, b) => b._creationTime - a._creationTime)[0];
+    // Indexed by caller: this is a reactive query, so it must not scan every
+    // call ever placed just to find the latest one I started.
+    const mine = await ctx.db.query("callInvites").withIndex("by_from", (q) => q.eq("fromId", me)).collect();
+    const recent = [...mine].sort((a, b) => b._creationTime - a._creationTime)[0];
     if (!recent) return null;
     // A ringing call expires 60s after it was placed; an accepted call stays
     // valid for the whole call; a finished call lingers briefly so the caller
