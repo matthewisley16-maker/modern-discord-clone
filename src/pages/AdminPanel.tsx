@@ -110,6 +110,14 @@ export default function AdminPanel() {
   const communities = useQuery(api.admin.listCommunities, {});
   const auditLogs = useQuery(api.admin.listAuditLogs, { limit: 150 });
   const settings = useQuery(api.admin.getPlatformSettings, {});
+  // Read-only diagnostic: detects synthetic/test records that have leaked into
+  // production. It never deletes anything — it only reports, so a moderator can
+  // decide whether to run the verified cleanup operation.
+  const syntheticAudit = useQuery(api.maintenance.syntheticAudit, {});
+  const syntheticCount = syntheticAudit?.syntheticCount ?? 0;
+  // TOTAL USERS must reflect legitimate production accounts only, so detected
+  // synthetic records are excluded from the displayed count.
+  const legitimateUsers = stats?.users === undefined ? undefined : Math.max(0, stats.users - syntheticCount);
   // Admin collections normalized so a malformed payload can never crash the panel.
   const userList = useMemo(() => toSafeArray<NonNullable<typeof users>[number]>(users, { label: "Admin users", source: "api.admin.listUsers" }), [users]);
   const communityList = useMemo(() => toSafeArray<NonNullable<typeof communities>[number]>(communities, { label: "Admin communities", source: "api.admin.listCommunities" }), [communities]);
@@ -238,7 +246,7 @@ export default function AdminPanel() {
         {/* Overview stat cards */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           {[
-            { label: "Users", value: stats?.users, icon: Users },
+            { label: "Users", value: legitimateUsers, icon: Users },
             { label: "Owner Admins", value: stats?.owners, icon: Crown },
             { label: "Admins", value: stats?.admins, icon: ShieldCheck },
             { label: "Moderators", value: stats?.moderators, icon: UserCog },
@@ -256,6 +264,35 @@ export default function AdminPanel() {
             </Card>
           ))}
         </div>
+
+        {/* Synthetic/test-data diagnostic (read-only) */}
+        {syntheticCount > 0 && (
+          <Card className="mt-4 border-amber-400/30 bg-amber-400/[0.06]">
+            <CardContent className="flex items-start gap-3 py-4">
+              <ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-300" />
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-amber-200">
+                  Synthetic records detected: {syntheticCount}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {syntheticCount} of {syntheticAudit?.totalUsers ?? 0} accounts match the test-data generator
+                  pattern (a generated username with a password credential and no real email) and are
+                  excluded from the user count above. Test/demo data must never be created in production.
+                  This check is read-only — nothing is deleted automatically.
+                </p>
+                {(syntheticAudit?.sample.length ?? 0) > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {syntheticAudit?.sample.map((name) => (
+                      <Badge key={name} variant="outline" className="border-amber-400/30 text-amber-200/80">
+                        {name}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Tabs defaultValue="users" className="mt-6">
           <TabsList className="bg-white/5">

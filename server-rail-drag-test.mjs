@@ -17,7 +17,8 @@ import {
   withoutServer,
 } from "./src/lib/server-rail.ts";
 
-const URL = "https://academic-porcupine-929.convex.cloud";
+import { guardedDeploymentUrl } from "./test-support/guard.mjs";
+const URL = guardedDeploymentUrl("https://academic-porcupine-929.convex.cloud");
 const stamp = Date.now().toString(36);
 let pass = 0, fail = 0;
 const ok = (name) => { pass++; console.log(`PASS: ${name}`); };
