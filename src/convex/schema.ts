@@ -599,6 +599,37 @@ const schema = defineSchema(
       .index("by_to", ["toId", "status"])
       .index("by_from", ["fromId"]),
 
+    /**
+     * Invitations to join an EXISTING call.
+     *
+     * Deliberately NOT `callInvites`: that table IS the direct-call/ringing
+     * system. An invitation must never ring, auto-connect, or touch the
+     * recipient's camera/microphone — it is a notification they may accept or
+     * decline. It references the already-running call (a channel's voice
+     * session, or a conversation's DM call) and never creates a call of its own.
+     */
+    callInvitations: defineTable({
+      fromId: v.id("users"),
+      toId: v.id("users"),
+      conversationId: v.optional(v.id("dmConversations")),
+      channelId: v.optional(v.id("channels")),
+      media: v.union(v.literal("voice"), v.literal("video")),
+      status: v.union(
+        v.literal("pending"),
+        v.literal("accepted"),
+        v.literal("declined"),
+        v.literal("expired"),
+        v.literal("cancelled"),
+      ),
+      createdAt: v.number(),
+      expiresAt: v.number(),
+      resolvedAt: v.optional(v.number()),
+    })
+      .index("by_to", ["toId", "status"])
+      .index("by_from", ["fromId"])
+      .index("by_channel", ["channelId"])
+      .index("by_conversation", ["conversationId"]),
+
     /** WebRTC signaling for a DM/group call, scoped to the conversation. */
     dmCallSignals: defineTable({
       conversationId: v.id("dmConversations"),

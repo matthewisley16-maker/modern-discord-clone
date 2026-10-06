@@ -57,6 +57,8 @@ export function Avatar({
   lastSeen,
   decorationId,
   reducedMotion,
+  dotSide = "right",
+  showAllStates = false,
 }: {
   name: string;
   color?: string;
@@ -66,19 +68,31 @@ export function Avatar({
   lastSeen?: number | null;
   decorationId?: string | null;
   reducedMotion?: boolean;
+  /** Which side of the avatar the status dot sits on (default: bottom-right). */
+  dotSide?: "left" | "right";
+  /**
+   * When true, an offline/invisible user still gets a dot (grey) instead of
+   * relying on the absence of one. Defaults to false so every existing caller
+   * keeps the app-wide convention unchanged.
+   */
+  showAllStates?: boolean;
 }) {
   const key = color ?? colorFor(name);
-  // Only Online (green), Idle (amber) and Do Not Disturb (red) get a dot.
-  // Invisible and Offline deliberately show NO indicator — absence of a dot
-  // means "Invisible/Offline", exactly like the presence spec.
-  const showDot = presence === "online" || presence === "idle" || presence === "dnd";
+  // By default only Online (green), Idle (amber) and Do Not Disturb (red) get a
+  // dot — absence means "Invisible/Offline", exactly like the presence spec.
+  // Lists that opt in with `showAllStates` render a grey dot instead, so the
+  // state is visible directly in the row.
+  const showDot = showAllStates
+    ? Boolean(presence)
+    : presence === "online" || presence === "idle" || presence === "dnd";
   const meta = presence && showDot ? PRESENCE_META[presence] : undefined;
+  // Real presence only: offline/invisible users report their true last-seen.
   const title = presence === "offline" || presence === "invisible" ? formatLastSeen(lastSeen) : meta?.label;
   return (
     <span className="fc-avatar" style={{ width: size, height: size, background: url ? undefined : AVATAR_BG[key] ?? "#7c5cf6" }} title={title}>
       {url ? <img src={url} alt="" /> : initialsOf(name)}
       <ProfileDecoration decorationId={decorationId} size={size} reducedMotion={reducedMotion} />
-      {meta && <i style={{ background: meta.color }} />}
+      {meta && <i className={dotSide === "left" ? "left" : undefined} style={{ background: meta.color }} title={meta.label} aria-label={meta.label} />}
     </span>
   );
 }

@@ -341,6 +341,30 @@ function countOrphans(o: Orphans) {
 }
 
 /**
+ * One-off safety sweep for the invitation model.
+ *
+ * Community invitations were previously stored as RINGING `callInvites` rows,
+ * which made an invitation behave like an incoming call (it rang, and it opened
+ * the incoming-call UI). Invitations now live in `callInvitations` and never
+ * ring, so any leftover ringing channel invite is cancelled here. Rows are
+ * cancelled, never deleted, and real — non-channel — direct calls are untouched.
+ */
+export const cancelLegacyChannelCallInvites = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("callInvites").collect();
+    let cancelled = 0;
+    for (const row of rows) {
+      if (row.channelId && (row.status === "ringing" || row.status === "accepted")) {
+        await ctx.db.patch(row._id, { status: "cancelled", endedAt: Date.now() });
+        cancelled += 1;
+      }
+    }
+    return { cancelled };
+  },
+});
+
+/**
  * Removes ONLY rows whose parent no longer exists (see `collectOrphans`). This
  * never targets a row that still resolves to a live user, community, channel or
  * conversation, so legitimate data is never affected. `dryRun` reports what

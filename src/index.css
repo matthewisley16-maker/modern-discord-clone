@@ -305,6 +305,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-avatar { position: relative; display: grid; place-items: center; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; flex-shrink: 0; overflow: visible; isolation: isolate; }
 .fc-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .fc-avatar i { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #121218; z-index: 3; }
+/* Friends / DM list variant: the status dot sits to the LEFT of the avatar.
+   The row keeps its padding and `overflow: visible`, so it is never clipped. */
+.fc-avatar i.left { right: auto; left: -1px; }
 .fc-empty { text-align: center; padding: 60px 20px; color: #8b87a0; }
 .fc-empty svg { margin: 0 auto 12px; color: #a78bfa; }
 .fc-empty h3 { font-size: 16px; color: #e9e6f5; margin-bottom: 6px; }
@@ -491,7 +494,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-modal-form label { font-size: 12px; font-weight: 600; color: #a79fd0; }
 .fc-checkbox-row { flex-direction: row !important; align-items: center; gap: 8px; font-weight: 400 !important; color: #b7b1cc !important; }
 .fc-checkbox-row input { width: 15px; height: 15px; accent-color: #8b5cf6; }
-.fc-rail-img { width: 100%; height: 100%; border-radius: 14px; object-fit: cover; }
+.fc-rail-img { width: 100%; height: 100%; border-radius: 14px; object-fit: cover; -webkit-user-drag: none; }
 .fc-sidebar-banner-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .35; }
 .fc-owner-note { margin: 10px 14px 0; font-size: 11px; color: #7c7890; line-height: 1.6; }
 .fc-icon-row { display: flex; align-items: center; gap: 14px; }
@@ -679,6 +682,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-invite-note { font-size: 11px; color: #8b87a0; white-space: nowrap; }
 .fc-invite-note.sent { color: #3ddc97; }
 .fc-invite-empty { padding: 14px 8px; text-align: center; font-size: 12px; color: #8b87a0; }
+/* ---- Call invitations (notification only — never a ringing call) ---- */
+.fc-invite-banner { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-bottom: 1px solid rgba(255,255,255,.07); background: rgba(139,92,246,.1); }
+.fc-invite-card { display: flex; align-items: flex-start; gap: 9px; padding: 8px 9px; border-radius: 10px; background: rgba(255,255,255,.04); border: 1px solid rgba(139,92,246,.28); }
+.fc-invite-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.fc-invite-info strong { font-size: 12px; color: #eeecf6; }
+.fc-invite-info small { font-size: 11px; color: #9b97ad; line-height: 1.4; }
+.fc-invite-card-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 /* The DM status dot sits on the avatar edge: never clip it in a list row. */
 .fc-dm-row, .fc-dm { overflow: visible; }
 /* ---- Voice channel participant count + expand ---- */

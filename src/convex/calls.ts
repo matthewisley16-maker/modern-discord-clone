@@ -24,6 +24,21 @@ import type { Id } from "./_generated/dataModel";
  * Used when an invite is created (for the invitee) AND again when it is
  * accepted, so a permission/lock/ban change between the two is always honoured.
  */
+/** How long an invitation stays acceptable before it expires. */
+const INVITATION_TTL_MS = 15 * 60_000;
+
+/**
+ * The call currently running in a DM conversation, if any. Used only to prove
+ * that an invitation points at a call that actually exists — the invitation
+ * never starts one.
+ */
+async function activeDmCallForConversation(ctx: Ctx, conversationId: Id<"dmConversations">) {
+  const rows = await ctx.db.query("callInvites").collect();
+  return rows.find(
+    (c) => c.conversationId === conversationId && (c.status === "ringing" || c.status === "accepted"),
+  ) ?? null;
+}
+
 async function assertCanJoinCommunityCall(ctx: Ctx, channelId: Id<"channels">, userId: Id<"users">) {
   const channel = await ctx.db.get(channelId);
   if (!channel) throw new ConvexError("That call is no longer available.");
@@ -149,17 +164,16 @@ export const inviteToCommunityCall = mutation({
     const target = await ctx.db.query("voiceSessions").withIndex("by_user", (q) => q.eq("userId", toUserId)).unique();
     if (target?.channelId === channelId) throw new ConvexError("They're already in this call.");
 
-    // Re-sending to the same person for the same call reuses the live invite.
-    const theirInvites = await ctx.db
-      .query("callInvites")
-      .withIndex("by_to", (q) => q.eq("toId", toUserId).eq("status", "ringing"))
+    // Duplicate protection: an identical, still-valid pending invitation is
+    // reused rather than creating a second one for the same person + call.
+    const theirPending = await ctx.db
+      .query("callInvitations")
+      .withIndex("by_to", (q) => q.eq("toId", toUserId).eq("status", "pending"))
       .collect();
-    const duplicate = theirInvites.find((inv) => inv.fromId === me && inv.channelId === channelId);
+    const duplicate = theirPending.find(
+      (inv) => inv.fromId === me && inv.channelId === channelId && inv.expiresAt > Date.now(),
+    );
     if (duplicate) return duplicate._id;
-    // A previous still-ringing invite for a different call is superseded.
-    for (const inv of theirInvites) {
-      if (inv.fromId === me) await ctx.db.patch(inv._id, { status: "missed", endedAt: Date.now() });
-    }
 
     // Channel capacity is enforced here so an invite can never overfill a room.
     const limit = channel.userLimit ?? 0;
@@ -169,25 +183,285 @@ export const inviteToCommunityCall = mutation({
     }
 
     const kind = media ?? (mine.video ? "video" : "voice");
-    const id = await ctx.db.insert("callInvites", {
+    const now = Date.now();
+    const id = await ctx.db.insert("callInvitations", {
       fromId: me,
       toId: toUserId,
       channelId,
       media: kind,
-      status: "ringing",
-      startedAt: Date.now(),
+      status: "pending",
+      createdAt: now,
+      expiresAt: now + INVITATION_TTL_MS,
     });
     const server = await ctx.db.get(channel.serverId);
+    // NOTIFICATION ONLY. This is a `callInvitations` row, never a `callInvites`
+    // one, so it cannot ring, cannot appear as an incoming call, and never
+    // touches the recipient's camera, microphone or WebRTC.
     await notify(
       ctx,
       toUserId,
       "call",
-      kind === "video" ? "Invited to a video call" : "Invited to a voice call",
-      `${await displayNameOf(ctx, me)} invited you to join #${channel.name} in ${server?.name ?? "a community"}.`,
-      `?server=${channel.serverId}&channel=${channelId}&voice=1`,
+      kind === "video" ? "🎥 Community Video Call Invite" : "🔊 Community Voice Call Invite",
+      `${await displayNameOf(ctx, me)} invited you to join the ${kind} call in ${server?.name ?? "a community"} / #${channel.name}.`,
+      `?invite=${id}`,
       me,
     );
     return id;
+  },
+});
+
+/**
+ * Invite a conversation member into the call that is ALREADY running in a DM.
+ * Notification only — no ringing, no auto-connect, no media. Validated against
+ * the live call so an invitation can never point at a call that is not there.
+ */
+export const inviteToDmCall = mutation({
+  args: {
+    conversationId: v.id("dmConversations"),
+    toUserId: v.id("users"),
+    media: v.union(v.literal("voice"), v.literal("video")),
+  },
+  handler: async (ctx, { conversationId, toUserId, media }) => {
+    const me = await currentUserId(ctx);
+    if (me === toUserId) throw new ConvexError("You can't invite yourself.");
+    const mine = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", me))
+      .unique();
+    if (!mine) throw new ConvexError("You're not part of this conversation.");
+    const theirs = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", toUserId))
+      .unique();
+    if (!theirs) throw new ConvexError("You can only invite members of this conversation.");
+    if (await isBlockedEitherWay(ctx, me, toUserId)) throw new ConvexError("You can't invite this user.");
+    const active = await activeDmCallForConversation(ctx, conversationId);
+    if (!active) {
+      throw new ConvexError("There's no active call in this conversation to invite them to.");
+    }
+    // Server-side duplicate protection: never invite someone who is already a
+    // participant of the running call (the client also hides the button).
+    if (active.fromId === toUserId || (active.status === "accepted" && active.toId === toUserId)) {
+      throw new ConvexError("They're already in this call.");
+    }
+    const pending = await ctx.db
+      .query("callInvitations")
+      .withIndex("by_to", (q) => q.eq("toId", toUserId).eq("status", "pending"))
+      .collect();
+    const duplicate = pending.find(
+      (inv) => inv.fromId === me && inv.conversationId === conversationId && inv.expiresAt > Date.now(),
+    );
+    if (duplicate) return duplicate._id;
+    const now = Date.now();
+    const id = await ctx.db.insert("callInvitations", {
+      fromId: me,
+      toId: toUserId,
+      conversationId,
+      media,
+      status: "pending",
+      createdAt: now,
+      expiresAt: now + INVITATION_TTL_MS,
+    });
+    await notify(
+      ctx,
+      toUserId,
+      "call",
+      media === "video" ? "🎥 Video Call Invite" : "🔊 Voice Call Invite",
+      `${await displayNameOf(ctx, me)} invited you to join a ${media} call.`,
+      `?invite=${id}`,
+      me,
+    );
+    return id;
+  },
+});
+
+/**
+ * Invitations waiting on me. ONE indexed subscription drives the whole UI —
+ * expired rows are simply not offered, so there is no polling and no sweeper.
+ */
+export const pendingInvitations = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await getAuthUserId(ctx);
+    if (!me) return [];
+    const rows = await ctx.db
+      .query("callInvitations")
+      .withIndex("by_to", (q) => q.eq("toId", me).eq("status", "pending"))
+      .collect();
+    const now = Date.now();
+    const out = [];
+    for (const inv of rows.sort((a, b) => b.createdAt - a.createdAt).slice(0, 8)) {
+      if (inv.expiresAt <= now) continue; // expired — never offered
+      const channel = inv.channelId ? await ctx.db.get(inv.channelId) : null;
+      // A community invitation whose channel is gone is dead: skip it.
+      if (inv.channelId && !channel) continue;
+      const server = channel ? await ctx.db.get(channel.serverId) : null;
+      const fromUser = await ctx.db.get(inv.fromId);
+      out.push({
+        invitationId: inv._id,
+        fromId: inv.fromId,
+        fromName: await displayNameOf(ctx, inv.fromId),
+        fromUsername: fromUser?.username ?? null,
+        fromAvatarUrl: await avatarUrlOf(ctx, inv.fromId),
+        media: inv.media,
+        channelId: channel?._id ?? null,
+        channelName: channel?.name ?? null,
+        serverId: server?._id ?? null,
+        serverName: server?.name ?? null,
+        conversationId: inv.conversationId ?? null,
+        createdAt: inv.createdAt,
+        expiresAt: inv.expiresAt,
+      });
+    }
+    return out;
+  },
+});
+
+/**
+ * Accept or decline an invitation.
+ *
+ * Accepting NEVER starts a call — it validates that the referenced call is
+ * still there and that the user may still join, marks the invitation accepted,
+ * and hands the client the target so it can join the EXISTING call. Declining
+ * touches nothing at all (no media, no WebRTC, no call UI).
+ */
+export const respondInvitation = mutation({
+  args: { invitationId: v.id("callInvitations"), accept: v.boolean() },
+  handler: async (ctx, { invitationId, accept }) => {
+    const me = await currentUserId(ctx);
+    const invite = await ctx.db.get(invitationId);
+    if (!invite || invite.toId !== me) throw new ConvexError("This call invitation is no longer available.");
+    if (invite.status !== "pending") throw new ConvexError("This call invitation is no longer available.");
+    if (invite.expiresAt <= Date.now()) {
+      await ctx.db.patch(invitationId, { status: "expired", resolvedAt: Date.now() });
+      throw new ConvexError("This call invitation is no longer available.");
+    }
+
+    if (!accept) {
+      await ctx.db.patch(invitationId, { status: "declined", resolvedAt: Date.now() });
+      return { joined: false as const, target: null };
+    }
+
+    if (invite.channelId) {
+      // Re-validated at accept time: permissions, locks, bans and the channel's
+      // very existence can all have changed since the invitation was sent.
+      const channel = await assertCanJoinCommunityCall(ctx, invite.channelId, me);
+      await ctx.db.patch(invitationId, { status: "accepted", resolvedAt: Date.now() });
+      const server = await ctx.db.get(channel.serverId);
+      return {
+        joined: true as const,
+        target: {
+          kind: "community" as const,
+          channelId: channel._id,
+          channelName: channel.name,
+          serverId: channel.serverId,
+          serverName: server?.name ?? "a community",
+        },
+      };
+    }
+
+    if (invite.conversationId) {
+      const member = await ctx.db
+        .query("dmMembers")
+        .withIndex("by_pair", (q) => q.eq("conversationId", invite.conversationId!).eq("userId", me))
+        .unique();
+      if (!member) throw new ConvexError("This call invitation is no longer available.");
+      // The invitation must still point at a RUNNING call. Nothing is created
+      // here: the returned `callId` is the existing session the user attaches to.
+      const active = await activeDmCallForConversation(ctx, invite.conversationId);
+      if (!active) {
+        await ctx.db.patch(invitationId, { status: "expired", resolvedAt: Date.now() });
+        throw new ConvexError("This call invitation is no longer available.");
+      }
+      await ctx.db.patch(invitationId, { status: "accepted", resolvedAt: Date.now() });
+      const fromUser = await ctx.db.get(invite.fromId);
+      return {
+        joined: true as const,
+        target: {
+          kind: "dm" as const,
+          conversationId: invite.conversationId,
+          media: invite.media,
+          callId: active._id,
+          peerId: invite.fromId,
+          peerName: await displayNameOf(ctx, invite.fromId),
+          peerUsername: fromUser?.username ?? null,
+          peerAvatarUrl: await avatarUrlOf(ctx, invite.fromId),
+        },
+      };
+    }
+
+    throw new ConvexError("This call invitation is no longer available.");
+  },
+});
+
+/** Dismiss / withdraw an invitation. Either side may resolve it. */
+export const cancelInvitation = mutation({
+  args: { invitationId: v.id("callInvitations") },
+  handler: async (ctx, { invitationId }) => {
+    const me = await currentUserId(ctx);
+    const invite = await ctx.db.get(invitationId);
+    if (!invite) return;
+    if (invite.fromId !== me && invite.toId !== me) throw new ConvexError("Invitation not found.");
+    if (invite.status !== "pending") return; // only a real state change is written
+    await ctx.db.patch(invitationId, { status: "cancelled", resolvedAt: Date.now() });
+  },
+});
+
+/**
+ * Who can I invite into the DM / group-DM call that is ALREADY running in this
+ * conversation? Only members of the conversation, never someone outside it, and
+ * never someone already in the call or already holding a pending invitation
+ * from me for it. Read-only, indexed and bounded: the picker is an explicit
+ * user action, so it never polls and never scans the whole users table.
+ */
+export const dmInviteCandidates = query({
+  args: { conversationId: v.id("dmConversations") },
+  handler: async (ctx, { conversationId }) => {
+    const me = await getAuthUserId(ctx);
+    if (!me) return null;
+    const mine = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", me))
+      .unique();
+    if (!mine) return null;
+    // No active call in this conversation means there is nothing to invite to.
+    const active = await activeDmCallForConversation(ctx, conversationId);
+    if (!active) return null;
+    const inCall = new Set<string>(
+      active.status === "accepted" ? [active.fromId as string, active.toId as string] : [active.fromId as string],
+    );
+    const now = Date.now();
+    const invitedIds = new Set<string>(
+      (await ctx.db.query("callInvitations").withIndex("by_from", (q) => q.eq("fromId", me)).collect())
+        .filter((i) => i.status === "pending" && i.conversationId === conversationId && i.expiresAt > now)
+        .map((i) => i.toId as string),
+    );
+    const members = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+      .take(200);
+    const rows: { userId: Id<"users">; name: string; username: string; avatarUrl: string | null; presence: string; friend: boolean; inCall: boolean; invited: boolean }[] = [];
+    for (const m of members) {
+      if (rows.length >= 60) break;
+      if (m.userId === me) continue;
+      if (await isBlockedEitherWay(ctx, me, m.userId)) continue;
+      const user = await ctx.db.get(m.userId);
+      if (!user) continue;
+      const { status } = await presenceInfoOf(ctx, m.userId, me);
+      rows.push({
+        userId: m.userId,
+        name: await displayNameOf(ctx, m.userId),
+        username: user.username ?? "",
+        avatarUrl: await avatarUrlOf(ctx, m.userId),
+        presence: status,
+        friend: await areFriends(ctx, me, m.userId),
+        inCall: inCall.has(m.userId),
+        invited: invitedIds.has(m.userId),
+      });
+    }
+    const rank = (p: string) => (p === "online" ? 0 : p === "idle" ? 1 : p === "dnd" ? 2 : 3);
+    rows.sort((a, b) => Number(a.inCall) - Number(b.inCall) || rank(a.presence) - rank(b.presence) || Number(b.friend) - Number(a.friend) || a.name.localeCompare(b.name));
+    return rows;
   },
 });
 
@@ -212,7 +486,15 @@ export const communityInviteCandidates = query({
     const inCall = new Set(
       (await ctx.db.query("voiceSessions").withIndex("by_channel", (q) => q.eq("channelId", channelId)).collect()).map((s) => s.userId as string),
     );
-    const rows: { userId: Id<"users">; name: string; username: string; avatarUrl: string | null; presence: string; role: string; friend: boolean; inCall: boolean }[] = [];
+    // People I already invited to THIS call show "Invitation already pending"
+    // instead of offering another invite button.
+    const now = Date.now();
+    const invitedIds = new Set(
+      (await ctx.db.query("callInvitations").withIndex("by_from", (q) => q.eq("fromId", me)).collect())
+        .filter((i) => i.status === "pending" && i.channelId === channelId && i.expiresAt > now)
+        .map((i) => i.toId as string),
+    );
+    const rows: { userId: Id<"users">; name: string; username: string; avatarUrl: string | null; presence: string; role: string; friend: boolean; inCall: boolean; invited: boolean }[] = [];
     for (const m of members) {
       if (rows.length >= 60) break;
       if (m.userId === me) continue;
@@ -233,6 +515,7 @@ export const communityInviteCandidates = query({
         // Already in the call — the UI shows "Already in call" instead of
         // offering a button that would create a duplicate invitation.
         inCall: inCall.has(m.userId),
+        invited: invitedIds.has(m.userId),
       });
     }
     const rank = (p: string) => (p === "online" ? 0 : p === "idle" ? 1 : p === "dnd" ? 2 : 3);
@@ -270,6 +553,19 @@ export const endCall = mutation({
     // ringing is treated as "missed" for the recipient.
     const finalStatus = invite.status === "accepted" ? "ended" : "missed";
     await ctx.db.patch(inviteId, { status: finalStatus, endedAt: Date.now() });
+    // Ending the call kills any invitations pointing at it, so a pending
+    // invitation can never be accepted into a finished call.
+    if (invite.conversationId) {
+      const pending = await ctx.db
+        .query("callInvitations")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", invite.conversationId))
+        .collect();
+      for (const invitation of pending) {
+        if (invitation.status === "pending") {
+          await ctx.db.patch(invitation._id, { status: "cancelled", resolvedAt: Date.now() });
+        }
+      }
+    }
     const other = invite.fromId === me ? invite.toId : invite.fromId;
     await notify(ctx, other, "call", finalStatus === "ended" ? "Call ended" : "Missed call", `${await displayNameOf(ctx, me)} ${finalStatus === "ended" ? "ended the call" : "cancelled the call"}.`, invite.conversationId ? `?dm=${invite.conversationId}` : "/dashboard", me);
   },

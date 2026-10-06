@@ -112,6 +112,17 @@ export default function Dashboard() {
   const joinByCode = useMutation(api.communities.joinByCode);
   const leaveCommunity = useMutation(api.communities.leave);
   const markAllRead = useMutation(api.social.markAllNotificationsRead);
+  // Pending "join my existing call" invitations addressed to me.
+  const invitations = useQuery(api.calls.pendingInvitations, {});
+  const invitationItems = useMemo(
+    () => toSafeArray<NonNullable<typeof invitations>[number]>(invitations, {
+      label: "Call invitations",
+      source: "api.calls.pendingInvitations",
+    }),
+    [invitations],
+  );
+  const respondInvitation = useMutation(api.calls.respondInvitation);
+  const cancelInvitation = useMutation(api.calls.cancelInvitation);
   const markRead = useMutation(api.social.markNotificationRead);
   const setNotifRead = useMutation(api.social.setNotificationRead);
   const deleteNotif = useMutation(api.social.deleteNotification);
@@ -183,6 +194,10 @@ export default function Dashboard() {
     name: string;
     username?: string | null;
     media: "voice" | "video";
+    /** True when this panel was opened by accepting an invitation: the user is
+     *  a guest in someone else's running call, so leaving must never end that
+     *  call for its owner nor wipe signaling they still need. */
+    invited?: boolean;
   } | null>(null);
   // Which call UI is showing: full screen or the floating minimized window.
   // Minimizing never touches the connection — the panel stays mounted.
@@ -295,6 +310,59 @@ export default function Dashboard() {
     if (!conversationList.some((c) => c.conversationId === conversationId)) setConversationId(null);
   }, [section, conversationId, conversations, conversationList]);
 
+  // ---- Invitations to join an EXISTING call --------------------------------
+  // Notification-only by design: an invitation NEVER rings, never appears as an
+  // incoming call, and never touches the camera/microphone. One indexed
+  // subscription drives the list; nothing polls.
+  async function acceptInvitation(inv: { invitationId: string }) {
+    try {
+      const res = await respondInvitation({ invitationId: inv.invitationId as Id<"callInvitations">, accept: true });
+      setNotifOpen(false);
+      if (!res.joined || !res.target) return;
+      if (res.target.kind === "community") {
+        // Join the SAME community call the inviter is already in.
+        setCallMinimized(false);
+        setMobileNav(false);
+        setCommunityId(res.target.serverId);
+        setSection("community");
+        setChannelId(res.target.channelId);
+        await joinVoice(res.target.channelId, res.target.channelName);
+      } else {
+        // DM / group DM: join the call that is ALREADY running in this
+        // conversation. Nothing new is created — the panel attaches to the
+        // existing session (same conversation, same signaling) with the person
+        // who invited us, exactly like a direct call but without any ringing.
+        openConversation(res.target.conversationId);
+        setCallMinimized(false);
+        setMobileNav(false);
+        setDmCall({
+          inviteId: res.target.callId,
+          conversationId: res.target.conversationId,
+          peerId: res.target.peerId,
+          name: res.target.peerName,
+          username: res.target.peerUsername,
+          media: res.target.media,
+          invited: true,
+        });
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "This call invitation is no longer available.");
+    }
+  }
+
+  async function declineInvitation(inv: { invitationId: string }) {
+    try {
+      await respondInvitation({ invitationId: inv.invitationId as Id<"callInvitations">, accept: false });
+      toast.success("Invitation declined.");
+    } catch {
+      toast.error("Could not decline the invitation.");
+    }
+  }
+
+  async function dismissInvitation(inv: { invitationId: string }) {
+    try { await cancelInvitation({ invitationId: inv.invitationId as Id<"callInvitations"> }); } catch { /* already resolved */ }
+  }
+
   function openCommunity(id: string) {
     setCommunityId(id as Id<"servers">);
     setChannelId(null);
@@ -372,9 +440,15 @@ export default function Dashboard() {
     const dm = p.get("dm");
     const message = p.get("message");
     const profile = p.get("profile");
+    const invite = p.get("invite");
     try {
       if (profile) {
         setProfileUserId(profile);
+      } else if (invite) {
+        // An invitation to join an EXISTING call. Opening it only reveals the
+        // Accept/Decline card — it never auto-accepts, never joins the call and
+        // never touches the camera or microphone.
+        setNotifOpen(true);
       } else if (dm) {
         openConversation(dm as Id<"dmConversations">);
       } else if (server) {
@@ -522,8 +596,12 @@ export default function Dashboard() {
   async function endDmCall() {
     const inviteId = dmCall?.inviteId;
     const conversationId = dmCall?.conversationId;
+    const invited = dmCall?.invited === true;
     setDmCall(null);
     setCallMinimized(false);
+    // A guest joined an existing call: leaving is purely local. It must not end
+    // the owner's call, nor clear signaling the remaining participants use.
+    if (invited) return;
     if (inviteId) { try { await endCall({ inviteId }); } catch { /* already ended */ } }
     // Drop any signaling left in the conversation so the next call starts clean
     // and a stale offer can never revive the connection we just closed.
@@ -892,6 +970,8 @@ export default function Dashboard() {
                     decorationId={c.members?.[0]?.decorationId}
                     presence={c.type === "group" ? undefined : c.members?.[0]?.presence}
                     lastSeen={c.members?.[0]?.lastSeen}
+                    dotSide="left"
+                    showAllStates
                   />
                   <span className="fc-dm-name">{c.type === "group" ? `${c.name} · ${c.memberCount}` : c.name}</span>
                   {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
@@ -929,6 +1009,8 @@ export default function Dashboard() {
                         decorationId={c.members?.[0]?.decorationId}
                         presence={c.type === "group" ? undefined : c.members?.[0]?.presence}
                         lastSeen={c.members?.[0]?.lastSeen}
+                        dotSide="left"
+                        showAllStates
                       />
                       <span className="fc-dm-name">{c.name}</span>
                       {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
@@ -1004,7 +1086,32 @@ export default function Dashboard() {
                 <button onClick={async () => { try { const n = await clearNotifs({}); toast.success(n ? "Notifications cleared." : "Nothing to clear."); } catch { toast.error("Could not clear notifications."); } }}>Clear all</button>
               </div>
             </div>
-            {notifications && notificationItems.length === 0 && <p className="fc-sidebar-empty">You're all caught up.</p>}
+            {invitationItems.length > 0 && (
+              <div className="fc-invite-banner">
+                {invitationItems.map((inv) => (
+                  <div key={inv.invitationId} className="fc-invite-card">
+                    <Avatar name={inv.fromName} size={34} url={inv.fromAvatarUrl} />
+                    <div className="fc-invite-info">
+                      <strong>{inv.media === "video" ? "🎥 Video Call Invite" : "🔊 Voice Call Invite"}</strong>
+                      <small>
+                        {inv.fromName} invited you to join the {inv.media} call
+                        {inv.serverName ? ` in ${inv.serverName}${inv.channelName ? ` / #${inv.channelName}` : ""}` : ""}.
+                      </small>
+                      <small className="fc-muted">
+                        {new Date(inv.createdAt).toLocaleTimeString()}
+                        {" · expires "}{new Date(inv.expiresAt).toLocaleTimeString()}
+                      </small>
+                    </div>
+                    <div className="fc-invite-card-actions">
+                      <Button size="sm" onClick={() => void acceptInvitation(inv)}>Accept</Button>
+                      <Button size="sm" variant="outline" onClick={() => void declineInvitation(inv)}>Decline</Button>
+                      <Button size="sm" variant="ghost" aria-label="Dismiss invitation" title="Dismiss" onClick={() => void dismissInvitation(inv)}>✕</Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {notifications && notificationItems.length === 0 && invitationItems.length === 0 && <p className="fc-sidebar-empty">You're all caught up.</p>}
             {notificationItems.map((n) => (
               <div key={n._id} className={`fc-notif-row ${n.read ? "" : "unread"}`}>
                 <button className="fc-notif" onClick={() => openNotification(n)} title={n.read ? "Read" : "Unread"}>

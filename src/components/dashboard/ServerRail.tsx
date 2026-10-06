@@ -440,7 +440,12 @@ export default function ServerRail({
 
   function ServerIcon({ server }: { server: RailCommunity }) {
     return server.iconUrl
-      ? <img src={server.iconUrl} alt="" className="fc-rail-img" />
+      // `draggable={false}` stops the BROWSER's native image drag from hijacking
+      // the gesture: without it, a small pointer movement while pressing the
+      // icon starts an HTML5 drag, which cancels the follow-up `click` and made
+      // the community icon feel unclickable. Our own pointer-based drag still
+      // works exactly as before.
+      ? <img src={server.iconUrl} alt="" className="fc-rail-img" draggable={false} />
       : <Fragment>{initialsOf(server.name)}</Fragment>;
   }
 
@@ -672,7 +677,7 @@ export default function ServerRail({
             {drag.kind === "folder"
               ? <Folder size={20} />
               : s?.iconUrl
-                ? <img src={s.iconUrl} alt="" />
+                ? <img src={s.iconUrl} alt="" draggable={false} />
                 : <span>{initialsOf(s?.name ?? "")}</span>}
           </div>
         );

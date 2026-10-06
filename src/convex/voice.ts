@@ -358,6 +358,14 @@ export const leaveVoiceSession = mutation({
         await ctx.db.patch(invite._id, { status: "cancelled", endedAt: Date.now() });
       }
     }
+    // Pending INVITATIONS I sent for those calls die with them too, so nobody
+    // can accept their way into a call that is no longer running.
+    const sentInvitations = await ctx.db.query("callInvitations").withIndex("by_from", (q) => q.eq("fromId", userId)).collect();
+    for (const invitation of sentInvitations) {
+      if (invitation.status === "pending" && invitation.channelId && channels.has(invitation.channelId as string)) {
+        await ctx.db.patch(invitation._id, { status: "cancelled", resolvedAt: Date.now() });
+      }
+    }
   },
 });
 
@@ -392,6 +400,12 @@ export const endCommunityCall = mutation({
     for (const invite of invites) {
       if (invite.status === "ringing" && invite.channelId === channelId) {
         await ctx.db.patch(invite._id, { status: "cancelled", endedAt: Date.now() });
+      }
+    }
+    const invitations = await ctx.db.query("callInvitations").withIndex("by_channel", (q) => q.eq("channelId", channelId)).collect();
+    for (const invitation of invitations) {
+      if (invitation.status === "pending") {
+        await ctx.db.patch(invitation._id, { status: "cancelled", resolvedAt: Date.now() });
       }
     }
     await audit(ctx, "voice.endCall", me, `Ended the call in #${channel.name}`, "channel", channelId);

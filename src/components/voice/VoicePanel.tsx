@@ -859,8 +859,8 @@ export default function VoicePanel({
                   </span>
                   {c.inCall ? (
                     <span className="fc-invite-note">Already in call</span>
-                  ) : invited[c.userId] ? (
-                    <span className="fc-invite-note sent">Invited</span>
+                  ) : c.invited || invited[c.userId] ? (
+                    <span className="fc-invite-note sent">Invitation already pending</span>
                   ) : (
                     <Button size="sm" disabled={inviteBusy === c.userId} onClick={() => void inviteMember(c.userId)}>
                       Invite

@@ -55,7 +55,7 @@ export default function HomeView({
           {incomingRequests.map((r) => (
             <div key={r.requestId} className="fc-row">
               <button className="fc-row-main" onClick={() => onOpenProfile(r.userId)}>
-                <Avatar name={r.displayName} color={r.avatarColor} presence={r.presence} url={r.avatarUrl} decorationId={r.decorationId} />
+                <Avatar name={r.displayName} color={r.avatarColor} presence={r.presence} url={r.avatarUrl} decorationId={r.decorationId} dotSide="left" showAllStates />
                 <span><strong>{r.displayName}</strong><small>@{r.username}</small></span>
               </button>
               <div className="fc-row-actions">
@@ -73,7 +73,7 @@ export default function HomeView({
           {outgoingRequests.map((r) => (
             <div key={r.requestId} className="fc-row">
               <div className="fc-row-main">
-                <Avatar name={r.displayName} color={r.avatarColor} presence={r.presence} url={r.avatarUrl} decorationId={r.decorationId} />
+                <Avatar name={r.displayName} color={r.avatarColor} presence={r.presence} url={r.avatarUrl} decorationId={r.decorationId} dotSide="left" showAllStates />
                 <span><strong>{r.displayName}</strong><small>Waiting for a response</small></span>
               </div>
               <Button size="sm" variant="ghost" onClick={() => run("Request cancelled", () => cancel({ requestId: r.requestId }))}>Cancel</Button>
@@ -95,7 +95,7 @@ export default function HomeView({
           friendList.map((f) => (
             <div key={f.userId} className="fc-row">
               <button className="fc-row-main" onClick={() => onOpenProfile(f.userId)}>
-                <Avatar name={f.displayName} color={f.avatarColor} presence={f.presence} url={f.avatarUrl} lastSeen={f.lastSeen} decorationId={f.decorationId} />
+                <Avatar name={f.displayName} color={f.avatarColor} presence={f.presence} url={f.avatarUrl} lastSeen={f.lastSeen} decorationId={f.decorationId} dotSide="left" showAllStates />
                 <span>
                   <strong>{f.displayName}</strong>
                   <small>{f.presence === "offline" ? formatLastSeen(f.lastSeen) : f.customStatus || `@${f.username}`}</small>
@@ -125,7 +125,7 @@ export default function HomeView({
           suggestions.map((p) => (
             <div key={p.userId} className="fc-row">
               <button className="fc-row-main" onClick={() => onOpenProfile(p.userId)}>
-                <Avatar name={p.displayName} color={p.avatarColor} presence={p.presence} url={p.avatarUrl} decorationId={p.decorationId} />
+                <Avatar name={p.displayName} color={p.avatarColor} presence={p.presence} url={p.avatarUrl} decorationId={p.decorationId} dotSide="left" showAllStates />
                 <span><strong>{p.displayName}</strong><small>@{p.username}</small></span>
               </button>
               <Button size="sm" variant="outline" onClick={() => run("Friend request sent", () => sendRequest({ toId: p.userId as unknown as Id<"users"> }))}>
@@ -144,7 +144,7 @@ export default function HomeView({
           followingList.map((f) => (
             <div key={f.userId} className="fc-row">
               <button className="fc-row-main" onClick={() => onOpenProfile(f.userId)}>
-                <Avatar name={f.displayName} color={f.avatarColor} presence={f.presence} url={f.avatarUrl} decorationId={f.decorationId} />
+                <Avatar name={f.displayName} color={f.avatarColor} presence={f.presence} url={f.avatarUrl} decorationId={f.decorationId} dotSide="left" showAllStates />
                 <span><strong>{f.displayName}</strong><small>@{f.username}</small></span>
               </button>
             </div>

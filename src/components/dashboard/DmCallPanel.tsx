@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { toSafeArray } from "@/lib/collection";
@@ -6,7 +6,10 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
 import { toast } from "sonner";
-import { Maximize, Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Video, VideoOff, Volume2, VolumeX, X } from "lucide-react";
+import { Maximize, Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Search, UserPlus, Video, VideoOff, Volume2, VolumeX, X } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { PRESENCE_META } from "./ui";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "@/components/voice/screenShare";
 import "@/components/voice/screenShare.css";
 
@@ -147,6 +150,44 @@ export default function DmCallPanel({
   useEffect(() => { myUserIdRef.current = myUserId; }, [myUserId]);
   useEffect(() => { mediaRef.current = media; }, [media]);
   useEffect(() => { sendSignalRef.current = sendSignal; }, [sendSignal]);
+
+  // ---- Invite people into the call that is ALREADY running here -------------
+  // Notification only: sending an invitation never rings the recipient, never
+  // connects them and never touches their camera/microphone. They join only by
+  // pressing Accept on the notification. The picker is loaded on demand (it is
+  // `skip`ped while closed), so no extra subscription runs during a call.
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteSearch, setInviteSearch] = useState("");
+  const [inviteBusy, setInviteBusy] = useState<string | null>(null);
+  const [invited, setInvited] = useState<Record<string, boolean>>({});
+  const inviteCandidates = useQuery(api.calls.dmInviteCandidates, inviteOpen ? { conversationId } : "skip");
+  const candidateList = useMemo(
+    () => toSafeArray<NonNullable<NonNullable<typeof inviteCandidates>>[number]>(inviteCandidates, {
+      label: "DM invite candidates",
+      source: "api.calls.dmInviteCandidates",
+    }),
+    [inviteCandidates],
+  );
+  const filteredCandidates = useMemo(() => {
+    const term = inviteSearch.trim().toLowerCase();
+    if (!term) return candidateList;
+    return candidateList.filter((c) => c.name.toLowerCase().includes(term) || c.username.toLowerCase().includes(term));
+  }, [candidateList, inviteSearch]);
+  const inviteToCall = useMutation(api.calls.inviteToDmCall);
+
+  /** Invite a conversation member into THIS call — never a new, separate call. */
+  async function inviteMember(userId: string) {
+    setInviteBusy(userId);
+    try {
+      await inviteToCall({ conversationId, toUserId: userId as Id<"users">, media: mediaRef.current });
+      setInvited((prev) => ({ ...prev, [userId]: true }));
+      toast.success("Invitation sent.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not send the invitation.");
+    } finally {
+      setInviteBusy(null);
+    }
+  }
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -473,6 +514,10 @@ export default function DmCallPanel({
     if (!pc) return;
     (async () => {
       for (const s of signalList) {
+        // Only the peer this panel is connected to may steer its connection.
+        // A participant who joined the conversation later can therefore never
+        // disturb an existing 1:1 call by relaying signals at us.
+        if (s.fromUserId !== peerIdRef.current) continue;
         if (processedSignals.current.has(s._id)) continue;
         processedSignals.current.add(s._id);
         try {
@@ -710,6 +755,7 @@ export default function DmCallPanel({
             {view === "compact" ? peerName : `${title} · ${peerName}`}
           </span>
           <span className="fc-callwin-head-btns">
+            <button aria-label="Invite people" title="Invite people" onClick={(e) => { e.stopPropagation(); setInviteOpen(true); }}><UserPlus size={14} /></button>
             {view === "float" && (
               <button aria-label="Minimize call window" title="Minimize" onClick={(e) => { e.stopPropagation(); setViewAndNotify("compact"); }}><Minimize2 size={14} /></button>
             )}
@@ -813,12 +859,67 @@ export default function DmCallPanel({
           <button className={screenOn ? "active" : ""} onClick={() => void toggleScreen()} aria-label={screenOn ? "Stop sharing screen" : "Share screen"} title={screenOn ? "Stop sharing" : "Share screen"}>
             <MonitorUp size={16} />
           </button>
+          <button onClick={() => setInviteOpen(true)} aria-label="Invite people to this call" title="Invite people">
+            <UserPlus size={16} />
+          </button>
           {view === "full"
             ? <button onClick={() => setViewAndNotify("float")} aria-label="Shrink call window" title="Shrink"><Minimize2 size={16} /></button>
             : <button onClick={() => setViewAndNotify("full")} aria-label="Expand call window" title="Expand"><Maximize2 size={16} /></button>}
           <button className="danger" onClick={onLeave} aria-label="End call" title="End call"><PhoneOff size={16} /></button>
         </div>
       </div>
+
+      {/* Invite picker — conversation members who can join THIS same call.
+          Sending an invitation is a notification only: it never rings, never
+          connects, and never turns on anyone's camera or microphone. */}
+      {inviteOpen && (
+        <Dialog open onOpenChange={(open) => { if (!open) { setInviteOpen(false); setInviteSearch(""); } }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Invite to this call</DialogTitle>
+              <DialogDescription>
+                They&apos;ll get a notification and join this same call only if they accept.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="fc-invite-search">
+              <Search size={14} />
+              <Input
+                value={inviteSearch}
+                onChange={(e) => setInviteSearch(e.target.value)}
+                placeholder="Search name or username"
+                aria-label="Search conversation members"
+              />
+            </div>
+            <ul className="fc-invite-list">
+              {inviteCandidates === undefined && <li className="fc-invite-empty">Loading people…</li>}
+              {inviteCandidates !== undefined && filteredCandidates.length === 0 && (
+                <li className="fc-invite-empty">No one else can be invited to this call right now.</li>
+              )}
+              {filteredCandidates.map((c) => (
+                <li key={c.userId} className="fc-invite-row">
+                  <ProfileAvatar name={c.name} url={c.avatarUrl} presence={c.presence} size={32} />
+                  <span className="fc-invite-who">
+                    <strong>{c.name}</strong>
+                    <small>
+                      @{c.username}{c.friend ? " · Friend" : ""}
+                      {" · "}{PRESENCE_META[c.presence]?.label ?? "Offline"}
+                    </small>
+                  </span>
+                  {c.inCall ? (
+                    <span className="fc-invite-note">Already in call</span>
+                  ) : c.invited || invited[c.userId] ? (
+                    <span className="fc-invite-note sent">Invitation already pending</span>
+                  ) : (
+                    <Button size="sm" disabled={inviteBusy === c.userId} onClick={() => void inviteMember(c.userId)}>
+                      Invite
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }
