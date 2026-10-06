@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { toSafeArray } from "@/lib/collection";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -206,7 +207,8 @@ export default function CallPanel({ channelId, channelName, myUserId, onLeave }:
     }
   }
 
-  const others = (participants ?? []).filter((p) => p.userId !== myUserId);
+  const participantList = toSafeArray<NonNullable<typeof participants>[number]>(participants, { label: "Voice participants", source: "api.communities.voiceParticipants" });
+  const others = participantList.filter((p) => p.userId !== myUserId);
   const focused = others[0]?.userId;
 
   return (
@@ -214,7 +216,7 @@ export default function CallPanel({ channelId, channelName, myUserId, onLeave }:
       <header className="call-head">
         <div>
           <p className="call-title">{channelName}</p>
-          <p className="call-sub">{(participants?.length ?? 1)} in voice · connected peer-to-peer</p>
+          <p className="call-sub">{participants ? participantList.length : 1} in voice · connected peer-to-peer</p>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="ghost" onClick={() => setLayout(layout === "grid" ? "focus" : "grid")}>

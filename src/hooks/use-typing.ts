@@ -65,7 +65,8 @@ export function useTyping(scope: { channelId?: Id<"channels">; conversationId?: 
 
 /** Human-friendly typing summary: "Alex", "Alex and Sam", "3 people". */
 export function typingLabel(names: string[]): string {
-  const unique = [...new Set(names)].filter(Boolean);
+  // Defensive: never throw on a malformed (non-array) typing payload.
+  const unique = [...new Set(Array.isArray(names) ? names : [])].filter(Boolean);
   if (unique.length === 0) return "";
   if (unique.length === 1) return `${unique[0]} is typing…`;
   if (unique.length === 2) return `${unique[0]} and ${unique[1]} are typing…`;

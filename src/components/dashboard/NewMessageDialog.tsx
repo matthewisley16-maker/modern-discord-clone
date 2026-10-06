@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "./ui";
+import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { Check, Search, Users, X } from "lucide-react";
 
@@ -38,8 +39,12 @@ export default function NewMessageDialog({
   const sendBatch = useMutation(api.dms.sendBatch);
   const createGroup = useMutation(api.dms.createGroup);
 
+  const resultList = useMemo(
+    () => toSafeArray<NonNullable<typeof results>[number]>(results, { label: "Recipient search results", source: "api.users.searchUsers" }),
+    [results],
+  );
   const selectedIds = useMemo(() => new Set(selected.map((s) => s.userId)), [selected]);
-  const candidates = (results ?? []).filter((r) => !selectedIds.has(r.userId));
+  const candidates = resultList.filter((r) => !selectedIds.has(r.userId));
 
   const reset = () => {
     setQuery(""); setSelected([]); setBody(""); setGroupName(""); setMode("separate"); setConfirming(false);

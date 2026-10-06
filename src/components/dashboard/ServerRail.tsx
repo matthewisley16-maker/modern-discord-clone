@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { initialsOf } from "@/components/dashboard/ui";
+import { toSafeArray } from "@/lib/collection";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -97,12 +98,14 @@ export default function ServerRail({
 
   /** Merge saved layout with live memberships (new servers appear, gone ones drop). */
   const items = useMemo<RailItem[]>(() => {
-    const layout = org?.layout ?? [];
-    const folders = (org?.folders ?? []).map((f) => ({ ...f, serverIds: f.serverIds.filter((s) => byId.has(s)) }));
+    const layout = toSafeArray<string>(org?.layout, { label: "Server rail layout", source: "api.serverOrg.get" });
+    const folders = toSafeArray<NonNullable<NonNullable<typeof org>["folders"]>[number]>(org?.folders, { label: "Server rail folders", source: "api.serverOrg.get" })
+      .map((f) => ({ ...f, serverIds: toSafeArray<string>(f.serverIds, { label: "Server folder members", source: "api.serverOrg.get" }).filter((s) => byId.has(s)) }));
     const folderById = new Map(folders.map((f) => [f.id, f]));
     const placed = new Set<string>();
     const out: RailItem[] = [];
     for (const entry of layout) {
+      if (typeof entry !== "string") continue;
       if (entry.startsWith("folder:")) {
         const f = folderById.get(entry.slice(7));
         if (!f || placed.has(entry)) continue;
@@ -146,8 +149,10 @@ export default function ServerRail({
       }));
     // No-op guard: the drag handlers only call this when an operation FINISHES,
     // and if the resulting order equals the saved one we skip the write entirely.
-    if (org && railSignature(org.layout ?? [], org.folders ?? []) === railSignature(layout, folders)) return;
-    saveOrg({ layout, folders, recent: org?.recent ?? [] }).catch((e) => {
+    const savedLayout = toSafeArray<string>(org?.layout, { label: "Server rail layout", source: "api.serverOrg.get" });
+    const savedFolders = toSafeArray<NonNullable<NonNullable<typeof org>["folders"]>[number]>(org?.folders, { label: "Server rail folders", source: "api.serverOrg.get" });
+    if (org && railSignature(savedLayout, savedFolders) === railSignature(layout, folders)) return;
+    saveOrg({ layout, folders, recent: toSafeArray<string>(org?.recent, { label: "Recent servers", source: "api.serverOrg.get" }) }).catch((e) => {
       toast.error(e instanceof Error ? e.message : "Could not save your server layout.");
     });
   }
@@ -381,11 +386,11 @@ export default function ServerRail({
 
   function createFolder(name: string, color: string) {
     const id = newFolderId();
-    const folders = [...org?.folders?.map((f) => ({ ...f, color: f.color ?? null })) ?? [], { id, name, color, collapsed: false, serverIds: [] }];
+    const folders = [...toSafeArray<NonNullable<NonNullable<typeof org>["folders"]>[number]>(org?.folders, { label: "Server rail folders", source: "api.serverOrg.get" }).map((f) => ({ ...f, color: f.color ?? null })), { id, name, color, collapsed: false, serverIds: [] }];
     saveOrg({
-      layout: [...(org?.layout ?? []), `folder:${id}`],
+      layout: [...toSafeArray<string>(org?.layout, { label: "Server rail layout", source: "api.serverOrg.get" }), `folder:${id}`],
       folders: folders.map((f) => ({ id: f.id, name: f.name, ...(f.color ? { color: f.color } : {}), collapsed: f.collapsed, serverIds: f.serverIds })),
-      recent: org?.recent ?? [],
+      recent: toSafeArray<string>(org?.recent, { label: "Recent servers", source: "api.serverOrg.get" }),
     }).catch(() => toast.error("Could not create the folder."));
   }
 
@@ -400,7 +405,7 @@ export default function ServerRail({
 
   // ----- overflow switcher data -----
 
-  const recentIds = (org?.recent ?? []).filter((s) => byId.has(s));
+  const recentIds = toSafeArray<string>(org?.recent, { label: "Recent servers", source: "api.serverOrg.get" }).filter((s) => byId.has(s));
   const overflowVisible = communities.length > OVERFLOW_THRESHOLD;
 
   const term = overflowQuery.trim().toLowerCase();

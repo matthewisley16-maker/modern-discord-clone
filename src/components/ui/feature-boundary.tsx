@@ -53,8 +53,8 @@ export class FeatureBoundary extends Component<
           }
         >
           <AlertTriangle className="size-5 opacity-70" aria-hidden="true" />
-          <p className="text-sm font-medium text-foreground">{label} couldn&apos;t load.</p>
-          <p className="text-xs">The rest of Freecord is still working.</p>
+          <p className="text-sm font-medium text-foreground">Something went wrong</p>
+          <p className="text-xs">{label} couldn&apos;t load — the rest of Freecord is still working.</p>
           <button
             type="button"
             className="mt-1 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"

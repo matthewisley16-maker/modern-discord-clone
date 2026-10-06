@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
+import { toSafeArray } from "@/lib/collection";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
@@ -90,15 +91,19 @@ export default function ServerPermissions({ serverId }: { serverId: Id<"servers"
   const [editing, setEditing] = useState<null | { id: string; name: string; color: string; permissions: string[] }>(null);
   const [channelId, setChannelId] = useState<string>("");
 
-  const perms = new Set(details?.permissions ?? []);
+  const perms = new Set(toSafeArray<string>(details?.permissions, { label: "Community permissions", source: "api.communities.details" }));
   const isOwner = details?.isOwner ?? false;
   const can = (p: string) => isOwner || perms.has(p);
 
   if (!details) return <p className="fc-muted">Loading server administration…</p>;
 
+  // Normalized community collections so a malformed payload can never crash the panel.
+  const roleList = toSafeArray<NonNullable<typeof details>["roles"][number]>(details.roles, { label: "Community roles", source: "api.communities.details" });
+  const memberList = toSafeArray<NonNullable<typeof details>["members"][number]>(details.members, { label: "Community members", source: "api.communities.details" });
+  const banList = toSafeArray<NonNullable<typeof bans>[number]>(bans, { label: "Banned members", source: "api.communities.listBans" });
   const canManageRoles = can("manageRoles");
   const canManageChannels = can("manageChannels");
-  const channelList = details.channels.filter((c) => (c.type ?? "text") === "text");
+  const channelList = toSafeArray<NonNullable<typeof details>["channels"][number]>(details.channels, { label: "Community channels", source: "api.communities.details" }).filter((c) => (c.type ?? "text") === "text");
   const activeChannelId = channelId || (channelList[0]?._id as string | undefined) || "";
 
   const run = async (fn: () => Promise<unknown>, okMsg: string) => {
@@ -122,8 +127,8 @@ export default function ServerPermissions({ serverId }: { serverId: Id<"servers"
       {tab === "roles" && (
         <div className="fc-perms-panel">
           {!canManageRoles && <p className="fc-muted">You need the “Manage roles” permission to edit roles.</p>}
-          {details.roles.length === 0 && canManageRoles && <p className="fc-muted">No custom roles yet. Create one below.</p>}
-          {details.roles.map((role) => (
+          {roleList.length === 0 && canManageRoles && <p className="fc-muted">No custom roles yet. Create one below.</p>}
+          {roleList.map((role) => (
             <div key={role._id} className="fc-role-row">
               {editing?.id === role._id ? (
                 <div className="fc-role-edit">
@@ -191,7 +196,7 @@ export default function ServerPermissions({ serverId }: { serverId: Id<"servers"
       {tab === "members" && (
         <div className="fc-perms-panel">
           <p className="fc-muted">Roles are per community — changing someone here never affects their roles in other servers.</p>
-          {details.members.map((m) => {
+          {memberList.map((m) => {
             const isServerOwner = details.server.ownerId === m.userId;
             return (
               <div key={m.userId} className="fc-member-row">
@@ -256,7 +261,7 @@ export default function ServerPermissions({ serverId }: { serverId: Id<"servers"
               {activeChannelId && (
                 <ChannelOverrideGrid
                   channelId={activeChannelId as Id<"channels">}
-                  roles={details.roles.map((r) => ({ id: r._id as string, name: r.name }))}
+                  roles={roleList.map((r) => ({ id: r._id as string, name: r.name }))}
                   busy={busy}
                   onSave={(overrides) => run(() => updateOverrides({ channelId: activeChannelId as Id<"channels">, overrides: overrides as never }), "Channel permissions saved.")}
                 />
@@ -274,8 +279,8 @@ export default function ServerPermissions({ serverId }: { serverId: Id<"servers"
       {tab === "bans" && (
         <div className="fc-perms-panel">
           {!can("banMembers") && <p className="fc-muted">You need the “Ban members” permission to manage bans.</p>}
-          {bans && bans.length === 0 && <p className="fc-muted">No banned members.</p>}
-          {bans?.map((b) => (
+          {bans && banList.length === 0 && <p className="fc-muted">No banned members.</p>}
+          {banList.map((b) => (
             <div key={b.userId} className="fc-member-row">
               <div className="fc-member-row-name"><strong>{b.name}</strong><small>{b.reason || "No reason given"}</small></div>
               {can("banMembers") && (

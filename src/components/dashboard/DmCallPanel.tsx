@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { toSafeArray } from "@/lib/collection";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
@@ -72,6 +73,8 @@ export default function DmCallPanel({
   onExpand?: () => void;
 }) {
   const signals = useQuery(api.calls.pollDmSignals, { conversationId });
+  // Normalized so a malformed signaling payload can never break the call loop.
+  const signalList = toSafeArray<NonNullable<typeof signals>[number]>(signals, { label: "DM call signals", source: "api.calls.pollDmSignals" });
   const sendSignal = useMutation(api.calls.sendDmSignal);
   const clearSignal = useMutation(api.calls.clearDmSignal);
 
@@ -379,11 +382,11 @@ export default function DmCallPanel({
 
   // ---- Apply incoming signaling (each message exactly once) ----
   useEffect(() => {
-    if (!signals || !pcReady) return;
+    if (signals === undefined || !pcReady) return;
     const pc = pcRef.current;
     if (!pc) return;
     (async () => {
-      for (const s of signals) {
+      for (const s of signalList) {
         if (processedSignals.current.has(s._id)) continue;
         processedSignals.current.add(s._id);
         try {
@@ -425,7 +428,7 @@ export default function DmCallPanel({
         try { await clearSignal({ signalId: s._id }); } catch { /* noop */ }
       }
     })();
-  }, [signals, pcReady, clearSignal, send, classifyRemote]);
+  }, [signals, signalList, pcReady, clearSignal, send, classifyRemote]);
 
   // ---- Controls (operate on existing tracks; never rebuild the connection) ----
   function toggleMute() {

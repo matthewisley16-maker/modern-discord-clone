@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { toSafeArray } from "@/lib/collection";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +25,9 @@ export default function Onboarding() {
   const discover = useQuery(api.communities.discover, {});
   const joinCommunity = useMutation(api.communities.join);
   const searchUsers = useQuery(api.users.searchUsers, { q: "" });
+  // Normalized collections so a malformed payload can never crash onboarding.
+  const discoverList = toSafeArray<NonNullable<typeof discover>[number]>(discover, { label: "Discovered communities", source: "api.communities.discover" });
+  const searchUserList = toSafeArray<NonNullable<typeof searchUsers>[number]>(searchUsers, { label: "People search results", source: "api.users.searchUsers" });
 
   const [step, setStep] = useState(0);
   const [displayName, setDisplayName] = useState("");
@@ -141,7 +145,7 @@ export default function Onboarding() {
                 <Input className="pl-9" placeholder="Search communities" value={query} onChange={(e) => setQuery(e.target.value)} />
               </div>
               <div className="max-h-56 space-y-2 overflow-y-auto">
-                {(discover ?? [])
+                {discoverList
                   .filter((c) => c.name.toLowerCase().includes(query.toLowerCase()))
                   .slice(0, 8)
                   .map((c) => (
@@ -156,11 +160,11 @@ export default function Onboarding() {
                       }}>Join</Button>
                     </div>
                   ))}
-                {(discover ?? []).length === 0 && (
+                {discoverList.length === 0 && (
                   <p className="py-6 text-center text-sm text-muted-foreground">No public communities yet. Create your own!</p>
                 )}
               </div>
-              <p className="flex items-center gap-2 text-xs text-muted-foreground"><Users className="h-3.5 w-3.5" /> {searchUsers?.length ?? 0} people are already on Freecord.</p>
+              <p className="flex items-center gap-2 text-xs text-muted-foreground"><Users className="h-3.5 w-3.5" /> {searchUserList.length} people are already on Freecord.</p>
             </div>
           )}
 

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import ProfileAvatar from "./ProfileAvatar";
 import ProfileEffect from "./ProfileEffect";
 import { BADGES, DECORATIONS, EFFECTS, FRAMES, NAME_EFFECTS, NAME_FONTS, NAMEPLATES, THEMES, WIDGET_TYPES, nameStyle, plateStyle } from "@/lib/cosmetics";
+import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { ImagePlus, RotateCcw, Save, Trash2, X } from "lucide-react";
 
@@ -53,8 +54,9 @@ export default function ProfileEditor({ onClose }: { onClose: () => void }) {
       bio: me.bio,
       pronouns: me.pronouns,
       customStatus: me.customStatus,
-      interests: me.interests.join(", "),
-      socialLinks: me.socialLinks,
+      // Collections normalized so a malformed record can never crash the editor.
+      interests: toSafeArray<string>(me.interests, { label: "Profile interests", source: "api.profiles.myProfile" }).join(", "),
+      socialLinks: toSafeArray<NonNullable<typeof me.socialLinks>[number]>(me.socialLinks, { label: "Profile social links", source: "api.profiles.myProfile" }),
       theme: me.theme,
       decorationId: me.decorationId ?? "",
       frameId: me.frameId ?? "frame_none",
@@ -62,9 +64,9 @@ export default function ProfileEditor({ onClose }: { onClose: () => void }) {
       nameplateId: me.nameplateId ?? "plate_none",
       nameFont: me.nameFont,
       nameEffect: me.nameEffect,
-      nameColors: me.nameColors.length ? me.nameColors : ["#ffffff"],
-      badges: me.badges,
-      widgets: me.widgets,
+      nameColors: toSafeArray<string>(me.nameColors, { label: "Profile name colors", source: "api.profiles.myProfile" }).length ? me.nameColors : ["#ffffff"],
+      badges: toSafeArray<string>(me.badges, { label: "Profile badges", source: "api.profiles.myProfile" }),
+      widgets: toSafeArray<NonNullable<typeof me.widgets>[number]>(me.widgets, { label: "Profile widgets", source: "api.profiles.myProfile" }),
       activityType: me.activity?.type ?? "playing",
       activityName: me.activity?.name ?? "",
       privacy: { ...me.privacy },

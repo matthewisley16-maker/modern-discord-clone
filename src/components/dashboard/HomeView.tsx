@@ -1,6 +1,8 @@
+import { useMemo } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { toSafeArray } from "@/lib/collection";
 import { Button } from "@/components/ui/button";
 import { Avatar, EmptyState, SectionHeader, formatLastSeen } from "./ui";
 import { toast } from "sonner";
@@ -21,6 +23,12 @@ export default function HomeView({
   const requests = useQuery(api.social.listRequests, {});
   const following = useQuery(api.social.listFollowing, {});
   const people = useQuery(api.users.searchUsers, { q: "" });
+  // Collections normalized once; a malformed payload can never crash a render.
+  const friendList = useMemo(() => toSafeArray<NonNullable<typeof friends>[number]>(friends, { label: "Friends", source: "api.social.listFriends" }), [friends]);
+  const incomingRequests = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof requests>["incoming"]>[number]>(requests?.incoming, { label: "Incoming friend requests", source: "api.social.listRequests" }), [requests]);
+  const outgoingRequests = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof requests>["outgoing"]>[number]>(requests?.outgoing, { label: "Outgoing friend requests", source: "api.social.listRequests" }), [requests]);
+  const followingList = useMemo(() => toSafeArray<NonNullable<typeof following>[number]>(following, { label: "Following", source: "api.social.listFollowing" }), [following]);
+  const peopleList = useMemo(() => toSafeArray<NonNullable<typeof people>[number]>(people, { label: "People search results", source: "api.users.searchUsers" }), [people]);
   const respond = useMutation(api.social.respondFriendRequest);
   const cancel = useMutation(api.social.cancelFriendRequest);
   const startDirect = useMutation(api.dms.startDirect);
@@ -31,8 +39,8 @@ export default function HomeView({
     catch (e) { toast.error(e instanceof Error ? e.message : "Action failed."); }
   }
 
-  const friendIds = new Set((friends ?? []).map((f) => f.userId as string));
-  const suggestions = (people ?? []).filter((p) => !friendIds.has(p.userId)).slice(0, 6);
+  const friendIds = new Set(friendList.map((f) => f.userId as string));
+  const suggestions = peopleList.filter((p) => !friendIds.has(p.userId)).slice(0, 6);
 
   return (
     <div className="fc-scroll-view">
@@ -41,10 +49,10 @@ export default function HomeView({
         <h2>Friends</h2>
       </div>
 
-      {requests && requests.incoming.length > 0 && (
+      {incomingRequests.length > 0 && (
         <section className="fc-block">
-          <SectionHeader title={`INCOMING REQUESTS — ${requests.incoming.length}`} />
-          {requests.incoming.map((r) => (
+          <SectionHeader title={`INCOMING REQUESTS — ${incomingRequests.length}`} />
+          {incomingRequests.map((r) => (
             <div key={r.requestId} className="fc-row">
               <button className="fc-row-main" onClick={() => onOpenProfile(r.userId)}>
                 <Avatar name={r.displayName} color={r.avatarColor} presence={r.presence} url={r.avatarUrl} decorationId={r.decorationId} />
@@ -59,10 +67,10 @@ export default function HomeView({
         </section>
       )}
 
-      {requests && requests.outgoing.length > 0 && (
+      {outgoingRequests.length > 0 && (
         <section className="fc-block">
           <SectionHeader title="OUTGOING REQUESTS" />
-          {requests.outgoing.map((r) => (
+          {outgoingRequests.map((r) => (
             <div key={r.requestId} className="fc-row">
               <div className="fc-row-main">
                 <Avatar name={r.displayName} color={r.avatarColor} presence={r.presence} url={r.avatarUrl} decorationId={r.decorationId} />
@@ -75,8 +83,8 @@ export default function HomeView({
       )}
 
       <section className="fc-block">
-        <SectionHeader title={`ALL FRIENDS — ${friends?.length ?? 0}`} />
-        {friends && friends.length === 0 ? (
+        <SectionHeader title={`ALL FRIENDS — ${friendList.length}`} />
+        {friends && friendList.length === 0 ? (
           <EmptyState
             icon={<Users size={30} />}
             title="Your friends list is empty."
@@ -84,7 +92,7 @@ export default function HomeView({
             action={<Button className="mt-3" onClick={onDiscover}>Discover communities</Button>}
           />
         ) : (
-          friends?.map((f) => (
+          friendList.map((f) => (
             <div key={f.userId} className="fc-row">
               <button className="fc-row-main" onClick={() => onOpenProfile(f.userId)}>
                 <Avatar name={f.displayName} color={f.avatarColor} presence={f.presence} url={f.avatarUrl} lastSeen={f.lastSeen} decorationId={f.decorationId} />
@@ -129,11 +137,11 @@ export default function HomeView({
       </section>
 
       <section className="fc-block">
-        <SectionHeader title={`FOLLOWING — ${following?.length ?? 0}`} />
-        {following && following.length === 0 ? (
+        <SectionHeader title={`FOLLOWING — ${followingList.length}`} />
+        {following && followingList.length === 0 ? (
           <p className="fc-muted">You're not following anyone yet. Following is separate from friendship.</p>
         ) : (
-          following?.map((f) => (
+          followingList.map((f) => (
             <div key={f.userId} className="fc-row">
               <button className="fc-row-main" onClick={() => onOpenProfile(f.userId)}>
                 <Avatar name={f.displayName} color={f.avatarColor} presence={f.presence} url={f.avatarUrl} decorationId={f.decorationId} />

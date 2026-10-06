@@ -7,6 +7,7 @@ import ProfileAvatar from "./ProfileAvatar";
 import ProfileEffect from "./ProfileEffect";
 import FollowListModal from "./FollowListModal";
 import { BADGES, nameStyle, plateStyle } from "@/lib/cosmetics";
+import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { ArrowLeft, MessageCircle, Phone, UserCheck, UserPlus, Video } from "lucide-react";
 
@@ -40,8 +41,12 @@ export default function FullProfile({
     );
   }
 
-  const badges = (profile.badges ?? []).map((id) => BADGES.find((b) => b.id === id)).filter(Boolean);
-  const widgets = [...(profile.widgets ?? [])].sort((a, b) => a.position - b.position);
+  // Profile sub-collections normalized so a malformed record can never crash.
+  const badges = toSafeArray<NonNullable<typeof profile.badges>[number]>(profile.badges, { label: "Profile badges", source: "api.profiles.getProfile" }).map((id) => BADGES.find((b) => b.id === id)).filter(Boolean);
+  const widgets = [...toSafeArray<NonNullable<typeof profile.widgets>[number]>(profile.widgets, { label: "Profile widgets", source: "api.profiles.getProfile" })].sort((a, b) => a.position - b.position);
+  const mutualCommunities = toSafeArray<NonNullable<typeof profile.mutualCommunities>[number]>(profile.mutualCommunities, { label: "Profile mutual communities", source: "api.profiles.getProfile" });
+  const interests = toSafeArray<NonNullable<typeof profile.interests>[number]>(profile.interests, { label: "Profile interests", source: "api.profiles.getProfile" });
+  const socialLinks = toSafeArray<NonNullable<typeof profile.socialLinks>[number]>(profile.socialLinks, { label: "Profile social links", source: "api.profiles.getProfile" });
 
   function widgetBody(type: string, content?: string) {
     switch (type) {
@@ -53,21 +58,21 @@ export default function FullProfile({
           : <p className="fc-muted">No activity right now.</p>;
       case "communities":
       case "mutuals":
-        return profile!.mutualCommunities.length > 0
-          ? <ul className="pf-list">{profile!.mutualCommunities.map((c) => <li key={c._id}>{c.name}</li>)}</ul>
+        return mutualCommunities.length > 0
+          ? <ul className="pf-list">{mutualCommunities.map((c) => <li key={c._id}>{c.name}</li>)}</ul>
           : <p className="fc-muted">No mutual communities.</p>;
       case "friends":
         return <p className="pf-bio">{profile!.followers} followers · {profile!.following} following</p>;
       case "interests":
-        return profile!.interests.length > 0
-          ? <div className="pf-tags">{profile!.interests.map((i) => <span key={i} className="fc-tag">{i}</span>)}</div>
+        return interests.length > 0
+          ? <div className="pf-tags">{interests.map((i) => <span key={i} className="fc-tag">{i}</span>)}</div>
           : <p className="fc-muted">No interests listed.</p>;
       case "links":
-        return profile!.socialLinks.length > 0
-          ? <ul className="pf-list">{profile!.socialLinks.map((l) => <li key={l.url}><a href={l.url} target="_blank" rel="noreferrer noopener">{l.label || l.url}</a></li>)}</ul>
+        return socialLinks.length > 0
+          ? <ul className="pf-list">{socialLinks.map((l) => <li key={l.url}><a href={l.url} target="_blank" rel="noreferrer noopener">{l.label || l.url}</a></li>)}</ul>
           : <p className="fc-muted">No links added.</p>;
       case "stats":
-        return <p className="pf-bio">{badges.length} badges · {profile!.mutualCommunities.length} mutual communities</p>;
+        return <p className="pf-bio">{badges.length} badges · {mutualCommunities.length} mutual communities</p>;
       case "custom":
         return <p className="pf-bio">{content || "Nothing here yet."}</p>;
       default:

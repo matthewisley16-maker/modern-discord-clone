@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Avatar, formatLastSeen, PRESENCE_META } from "@/components/dashboard/ui";
+import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { Search, Users, X } from "lucide-react";
 
@@ -50,10 +51,11 @@ export default function FollowListModal({
 
   const rows: Card[] = useMemo(() => {
     if (!data) return [];
-    const list = tab === "followers" ? data.followers : tab === "following" ? data.following : data.mutuals;
+    const raw = tab === "followers" ? data.followers : tab === "following" ? data.following : data.mutuals;
+    const list = toSafeArray<Card>(raw, { label: `Follow list (${tab})`, source: "api.social.followLists" });
     const q = query.trim().toLowerCase();
-    if (!q) return list as Card[];
-    return (list as Card[]).filter((c) => c.displayName.toLowerCase().includes(q) || c.username.toLowerCase().includes(q));
+    if (!q) return list;
+    return list.filter((c) => c.displayName.toLowerCase().includes(q) || c.username.toLowerCase().includes(q));
   }, [data, tab, query]);
 
   async function toggle(card: Card) {
@@ -70,9 +72,9 @@ export default function FollowListModal({
   }
 
   const counts = {
-    followers: data?.followers.length ?? 0,
-    following: data?.following.length ?? 0,
-    mutuals: data?.mutuals.length ?? 0,
+    followers: toSafeArray<Card>(data?.followers, { label: "Followers", source: "api.social.followLists" }).length,
+    following: toSafeArray<Card>(data?.following, { label: "Following", source: "api.social.followLists" }).length,
+    mutuals: toSafeArray<Card>(data?.mutuals, { label: "Mutuals", source: "api.social.followLists" }).length,
   };
 
   return (

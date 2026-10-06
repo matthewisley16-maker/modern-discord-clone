@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { toSafeArray } from "@/lib/collection";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +19,7 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
   const updateProfile = useMutation(api.users.updateProfile);
   const updateSettings = useMutation(api.users.updateSettings);
   const sessions = useQuery(api.users.mySessions, {});
+  const sessionList = toSafeArray<NonNullable<typeof sessions>[number]>(sessions, { label: "Sessions", source: "api.users.mySessions" });
   const revokeSession = useMutation(api.users.revokeSession);
   const revokeOthers = useMutation(api.users.revokeOtherSessions);
   const deleteAccount = useMutation(api.users.deleteAccount);
@@ -529,7 +531,7 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
             <section className="fc-settings-section">
               <h3><Monitor size={16} /> Sessions & devices</h3>
               <p className="fc-muted">You can revoke any session you don't recognize.</p>
-              {(sessions ?? []).map((sess) => (
+              {sessionList.map((sess) => (
                 <div key={sess.sessionId} className="fc-session-row">
                   <div>
                     <p><strong>{sess.current ? "This device" : "Other session"}</strong></p>

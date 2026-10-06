@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { toSafeArray } from "@/lib/collection";
 import { Avatar, EmptyState, SectionHeader } from "./ui";
 import { Hash, Search, Users } from "lucide-react";
 
@@ -15,6 +16,11 @@ export default function SearchView({
 }) {
   const [filter, setFilter] = useState<"all" | "people" | "communities" | "messages" | "channels">("all");
   const results = useQuery(api.search.global, query.trim() ? { q: query, filter } : "skip");
+  // Each result bucket is normalized so a malformed payload can never crash a render.
+  const peopleList = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof results>["people"]>[number]>(results?.people, { label: "Search people", source: "api.search.global" }), [results]);
+  const communityResults = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof results>["communities"]>[number]>(results?.communities, { label: "Search communities", source: "api.search.global" }), [results]);
+  const channelResults = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof results>["channels"]>[number]>(results?.channels, { label: "Search channels", source: "api.search.global" }), [results]);
+  const messageResults = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof results>["messages"]>[number]>(results?.messages, { label: "Search messages", source: "api.search.global" }), [results]);
 
   if (!query.trim()) {
     return (
@@ -29,7 +35,7 @@ export default function SearchView({
     );
   }
 
-  const total = results ? results.people.length + results.communities.length + results.messages.length + results.channels.length : 0;
+  const total = results ? peopleList.length + communityResults.length + messageResults.length + channelResults.length : 0;
 
   return (
     <div className="fc-scroll-view">
@@ -46,10 +52,10 @@ export default function SearchView({
       {results === undefined && <p className="fc-muted">Searching…</p>}
       {results && total === 0 && <EmptyState icon={<Search size={30} />} title="No results found." body={`Nothing matched “${query}”. Try a different search.`} />}
 
-      {results && results.people.length > 0 && (
+      {peopleList.length > 0 && (
         <section className="fc-block">
-          <SectionHeader title={`PEOPLE — ${results.people.length}`} />
-          {results.people.map((p) => (
+          <SectionHeader title={`PEOPLE — ${peopleList.length}`} />
+          {peopleList.map((p) => (
             <button key={p.userId} className="fc-row fc-row-main" onClick={() => onOpenProfile(p.userId)}>
               <Avatar name={p.displayName} color={p.avatarColor} url={p.avatarUrl} decorationId={p.decorationId} />
               <span><strong>{p.displayName}</strong><small>@{p.username}</small></span>
@@ -58,10 +64,10 @@ export default function SearchView({
         </section>
       )}
 
-      {results && results.communities.length > 0 && (
+      {communityResults.length > 0 && (
         <section className="fc-block">
-          <SectionHeader title={`COMMUNITIES — ${results.communities.length}`} />
-          {results.communities.map((c) => (
+          <SectionHeader title={`COMMUNITIES — ${communityResults.length}`} />
+          {communityResults.map((c) => (
             <button key={c.serverId} className="fc-row fc-row-main" onClick={() => onOpenCommunity(c.serverId)}>
               <span className="fc-community-icon" style={{ background: "linear-gradient(135deg,#7c5cf6,#4c1d95)" }}>{c.name.slice(0, 1).toUpperCase()}</span>
               <span><strong>{c.name}</strong><small>{c.description || "No description"} · {c.memberCount} members</small></span>
@@ -70,10 +76,10 @@ export default function SearchView({
         </section>
       )}
 
-      {results && results.channels.length > 0 && (
+      {channelResults.length > 0 && (
         <section className="fc-block">
-          <SectionHeader title={`CHANNELS — ${results.channels.length}`} />
-          {results.channels.map((c) => (
+          <SectionHeader title={`CHANNELS — ${channelResults.length}`} />
+          {channelResults.map((c) => (
             <div key={c.channelId} className="fc-row">
               <div className="fc-row-main"><Hash size={16} /><span><strong>{c.name}</strong><small>{c.communityName}</small></span></div>
             </div>
@@ -81,10 +87,10 @@ export default function SearchView({
         </section>
       )}
 
-      {results && results.messages.length > 0 && (
+      {messageResults.length > 0 && (
         <section className="fc-block">
-          <SectionHeader title={`MESSAGES — ${results.messages.length}`} />
-          {results.messages.map((m) => (
+          <SectionHeader title={`MESSAGES — ${messageResults.length}`} />
+          {messageResults.map((m) => (
             <div key={m.messageId} className="fc-row">
               <div className="fc-row-main">
                 <Users size={16} />

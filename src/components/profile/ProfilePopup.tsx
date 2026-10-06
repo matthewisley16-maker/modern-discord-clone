@@ -7,6 +7,7 @@ import ProfileAvatar from "./ProfileAvatar";
 import ProfileEffect from "./ProfileEffect";
 import FollowListModal from "./FollowListModal";
 import { BADGES, nameStyle, plateStyle } from "@/lib/cosmetics";
+import { toSafeArray } from "@/lib/collection";
 import { formatLastSeen } from "@/components/dashboard/ui";
 import FloatingMenu from "@/components/ui/floating-menu";
 import { toast } from "sonner";
@@ -69,7 +70,10 @@ export default function ProfilePopup({
   }
 
   const themeColors = profile.themeColors;
-  const badges = (profile.badges ?? []).map((id) => BADGES.find((b) => b.id === id)).filter(Boolean);
+  // Profile sub-collections normalized so a malformed record can never crash.
+  const badges = toSafeArray<NonNullable<typeof profile.badges>[number]>(profile.badges, { label: "Profile badges", source: "api.profiles.getProfile" }).map((id) => BADGES.find((b) => b.id === id)).filter(Boolean);
+  const mutualCommunities = toSafeArray<NonNullable<typeof profile.mutualCommunities>[number]>(profile.mutualCommunities, { label: "Profile mutual communities", source: "api.profiles.getProfile" });
+  const socialLinks = toSafeArray<NonNullable<typeof profile.socialLinks>[number]>(profile.socialLinks, { label: "Profile social links", source: "api.profiles.getProfile" });
   const presenceMeta = { online: "Online", idle: "Idle", dnd: "Do Not Disturb", invisible: "Invisible", offline: "Offline" }[profile.presence] ?? "Offline";
 
   return (
@@ -152,18 +156,18 @@ export default function ProfilePopup({
         <p className="pf-section-label">MEMBER SINCE</p>
         <p className="pf-bio">{new Date(profile.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}</p>
 
-        {profile.mutualCommunities.length > 0 && (
+        {mutualCommunities.length > 0 && (
           <>
-            <p className="pf-section-label">MUTUAL COMMUNITIES — {profile.mutualCommunities.length}</p>
-            <ul className="pf-list">{profile.mutualCommunities.slice(0, 5).map((c) => <li key={c._id}>{c.name}</li>)}</ul>
+            <p className="pf-section-label">MUTUAL COMMUNITIES — {mutualCommunities.length}</p>
+            <ul className="pf-list">{mutualCommunities.slice(0, 5).map((c) => <li key={c._id}>{c.name}</li>)}</ul>
           </>
         )}
 
-        {profile.socialLinks.length > 0 && (
+        {socialLinks.length > 0 && (
           <>
             <p className="pf-section-label">LINKS</p>
             <ul className="pf-list">
-              {profile.socialLinks.map((l) => (
+              {socialLinks.map((l) => (
                 <li key={l.url}><a href={l.url} target="_blank" rel="noreferrer noopener">{l.label || l.url}</a></li>
               ))}
             </ul>

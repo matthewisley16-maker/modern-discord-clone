@@ -25,6 +25,7 @@ import NewMessageDialog from "@/components/dashboard/NewMessageDialog";
 import SecretChatsDialog, { ProtectConversationDialog } from "@/components/dashboard/SecretChats";
 import { Avatar, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
+import { toSafeArray, toSafeArrayField } from "@/lib/collection";
 import { trackOp } from "@/lib/usage-monitor";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
@@ -70,6 +71,25 @@ export default function Dashboard() {
   const voiceSession = useQuery(api.communities.myVoiceSession, {});
   const incomingCall = useQuery(api.calls.incomingCall, {});
   const outgoingCall = useQuery(api.calls.outgoingCall, {});
+
+  // ---- Collection shape normalization -------------------------------------
+  // Every list that feeds the sidebar / DM UI is normalized exactly once here,
+  // so a null (still loading), object, string or legacy record could never
+  // reach a `.map`/`.filter`/`.find` and crash the Dashboard.
+  const communityList = useMemo(
+    () => toSafeArray<NonNullable<typeof communities>[number]>(communities, { label: "Your communities", source: "api.communities.listMine" }),
+    [communities],
+  );
+  const conversationList = useMemo(
+    () => toSafeArray<NonNullable<typeof conversations>[number]>(conversations, { label: "DM conversations", source: "api.dms.listConversations" }),
+    [conversations],
+  );
+  const activeConversations = useMemo(() => conversationList.filter((c) => !c.archived), [conversationList]);
+  const archivedConversations = useMemo(() => conversationList.filter((c) => c.archived), [conversationList]);
+  const notificationItems = useMemo(
+    () => toSafeArrayField<NonNullable<NonNullable<typeof notifications>["items"]>[number]>(notifications, "items", { label: "Notifications", source: "api.social.listNotifications" }),
+    [notifications],
+  );
 
   const setStatus = useMutation(api.profiles.setPresence);
   const heartbeat = useMutation(api.profiles.heartbeat);
@@ -176,9 +196,38 @@ export default function Dashboard() {
   const channelTree = useQuery(api.voice.channelTree, communityId ? { serverId: communityId } : "skip");
 
   const details = useQuery(api.communities.details, communityId ? { serverId: communityId } : "skip");
-  const channel = details?.channels.find((c) => c._id === channelId) ?? details?.channels.find((c) => c.type !== "voice");
+  // Normalized community/channel collections (see the collection helpers).
+  const detailsChannels = useMemo(
+    () => toSafeArray<NonNullable<typeof details>["channels"][number]>(details?.channels, { label: "Community channels", source: "api.communities.details" }),
+    [details],
+  );
+  const detailsMembers = useMemo(
+    () => toSafeArray<NonNullable<typeof details>["members"][number]>(details?.members, { label: "Community members", source: "api.communities.details" }),
+    [details],
+  );
+  const detailsRoles = useMemo(
+    () => toSafeArray<NonNullable<typeof details>["roles"][number]>(details?.roles, { label: "Community roles", source: "api.communities.details" }),
+    [details],
+  );
+  const detailsPermissions = useMemo(
+    () => toSafeArray<string>(details?.permissions, { label: "Community permissions", source: "api.communities.details" }),
+    [details],
+  );
+  const channelCategories = useMemo(
+    () => toSafeArray<NonNullable<typeof channelTree>["byCategory"][number]>(channelTree?.byCategory, { label: "Channel categories", source: "api.voice.channelTree" }),
+    [channelTree],
+  );
+  const channelUncategorized = useMemo(
+    () => toSafeArray<NonNullable<typeof channelTree>["uncategorized"][number]>(channelTree?.uncategorized, { label: "Uncategorized channels", source: "api.voice.channelTree" }),
+    [channelTree],
+  );
+  const channelCategoryList = useMemo(
+    () => toSafeArray<NonNullable<typeof channelTree>["categories"][number]>(channelTree?.categories, { label: "Channel category list", source: "api.voice.channelTree" }),
+    [channelTree],
+  );
+  const channel = detailsChannels.find((c) => c._id === channelId) ?? detailsChannels.find((c) => c.type !== "voice");
   // Owner (and managers with manageChannels) can reorganize the sidebar.
-  const canManageChannels = Boolean(details?.permissions.includes("manageChannels"));
+  const canManageChannels = detailsPermissions.includes("manageChannels");
 
   // Presence heartbeat so others see us online, and resume any voice session.
   //
@@ -233,10 +282,10 @@ export default function Dashboard() {
 
   // Keep the selected community valid.
   useEffect(() => {
-    if (communityId && details && !details.channels.some((c) => c._id === channelId)) {
-      setChannelId(details.channels.find((c) => c.type !== "voice")?._id ?? null);
+    if (communityId && details && !detailsChannels.some((c) => c._id === channelId)) {
+      setChannelId(detailsChannels.find((c) => c.type !== "voice")?._id ?? null);
     }
-  }, [details, communityId, channelId]);
+  }, [details, detailsChannels, communityId, channelId]);
 
   function openCommunity(id: string) {
     setCommunityId(id as Id<"servers">);
@@ -366,7 +415,7 @@ export default function Dashboard() {
     setDragId(null);
     setDragOverId(null);
     if (!id || id === targetId || !communityId || !channelTree) return;
-    const all = [...channelTree.uncategorized, ...channelTree.byCategory.flatMap((g) => g.channels)];
+    const all = [...channelUncategorized, ...channelCategories.flatMap((g) => g.channels)];
     const from = all.find((c) => c._id === id);
     const to = all.find((c) => c._id === targetId);
     if (!from || !to) return;
@@ -389,7 +438,7 @@ export default function Dashboard() {
     const id = dragCategoryId;
     setDragCategoryId(null);
     if (!id || id === targetId || !communityId || !channelTree) return;
-    const ids = channelTree.categories.map((c) => c._id as string);
+    const ids = channelCategoryList.map((c) => c._id as string);
     const from = ids.indexOf(id);
     const to = ids.indexOf(targetId);
     if (from < 0 || to < 0) return;
@@ -435,8 +484,8 @@ export default function Dashboard() {
 
   async function startDmCall(media: "voice" | "video") {
     if (!conversationId) return;
-    const convo = conversations?.find((c) => c.conversationId === conversationId);
-    const target = convo?.members[0];
+    const convo = conversationList.find((c) => c.conversationId === conversationId);
+    const target = convo?.members?.[0];
     if (!target) { toast.error("There's no one else in this conversation to call."); return; }
     try {
       await inviteCall({ toId: target.userId as Id<"users">, conversationId, media });
@@ -472,8 +521,12 @@ export default function Dashboard() {
   /** A single channel row, with voice participants and drag-and-drop reordering. */
   function renderChannelRow(c: { _id: Id<"channels">; name: string; type?: string | null; userLimit?: number | null; isPrivate?: boolean | null }) {
     const isVoice = c.type === "voice" || c.type === "video";
-    const participants = channelTree?.voiceParticipants[c._id as string] ?? [];
-    const canManage = Boolean(details?.permissions.includes("manageChannels"));
+    const voiceMap = channelTree?.voiceParticipants;
+    const participants = toSafeArray<NonNullable<NonNullable<typeof voiceMap>[string]>[number]>(
+      voiceMap?.[c._id as string],
+      { label: "Voice participants", source: "api.voice.channelTree" },
+    );
+    const canManage = detailsPermissions.includes("manageChannels");
     return (
       <div
         key={c._id}
@@ -649,7 +702,7 @@ export default function Dashboard() {
         {/* Server rail: drag-and-drop ordering, folders, and the overflow switcher. */}
         <FeatureBoundary label="Communities" fallback={null}>
           <ServerRail
-            communities={(communities ?? []) as { _id: string; name: string; iconUrl?: string | null }[]}
+            communities={(communityList) as { _id: string; name: string; iconUrl?: string | null }[]}
             communityId={section === "community" ? communityId : null}
             onOpen={(id) => openCommunity(id)}
             onCreate={() => openModal("createCommunity")}
@@ -668,7 +721,7 @@ export default function Dashboard() {
           <>
             <div className="fc-sidebar-head">
               <span className="fc-sidebar-title">{details.server.name}</span>
-              {details.permissions.includes("manageCommunity") && (
+              {detailsPermissions.includes("manageCommunity") && (
                 <button aria-label="Community settings" title="Community settings" onClick={() => setCommunitySettingsOpen(true)}><Settings size={16} /></button>
               )}
               <button className="fc-close-mobile" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={17} /></button>
@@ -681,7 +734,7 @@ export default function Dashboard() {
             </div>
             <div className="fc-sidebar-section">
               <span>TEXT CHANNELS</span>
-              {details.permissions.includes("createChannels") && (
+              {detailsPermissions.includes("createChannels") && (
                 <>
                   <button aria-label="Create a category" title="Create a category" onClick={() => openModal("category")}><Plus size={15} /></button>
                   <button aria-label="Create channel" title="Create channel" onClick={() => openModal("channel")}><Plus size={15} /></button>
@@ -690,7 +743,7 @@ export default function Dashboard() {
             </div>
             {channelTree && (
               <>
-                {channelTree.byCategory.map(({ category, channels }) => (
+                {channelCategories.map(({ category, channels }) => (
                   <div
                     key={category._id}
                     className={`fc-cat-group ${dragOverId === category._id ? "drag-over" : ""}`}
@@ -725,10 +778,10 @@ export default function Dashboard() {
                     {channels.map((c) => renderChannelRow(c))}
                   </div>
                 ))}
-                {channelTree.uncategorized.map((c) => renderChannelRow(c))}
+                {channelUncategorized.map((c) => renderChannelRow(c))}
               </>
             )}
-            {!channelTree && details.channels.map((c) => (
+            {!channelTree && detailsChannels.map((c) => (
               <button key={c._id} className={`fc-channel ${channel?._id === c._id ? "active" : ""}`} onClick={() => { setChannelId(c._id); setMobileNav(false); }}>
                 <Hash size={17} /> {c.name}
               </button>
@@ -737,10 +790,10 @@ export default function Dashboard() {
               <Users size={16} /> Invite your people
             </button>
             <button className="fc-sidebar-action" onClick={() => { setSettingsOpen(true); setMobileNav(false); }}><Settings size={17} /> Settings</button>
-            {communities && communities.length > 0 && (
+            {communityList.length > 0 && (
               <>
                 <div className="fc-sidebar-section"><span>YOUR COMMUNITIES</span></div>
-                {communities.map((c) => (
+                {communityList.map((c) => (
                   <button key={c._id} className={`fc-sidebar-action community ${communityId === c._id ? "active" : ""}`} onClick={() => openCommunity(c._id)}>
                     <span className="fc-sidebar-community-icon">
                       {(c as { iconUrl?: string | null }).iconUrl
@@ -752,7 +805,7 @@ export default function Dashboard() {
                 ))}
               </>
             )}
-            {communities && communities.length === 0 && (
+            {communities && communityList.length === 0 && (
               <div className="fc-communities-empty">
                 <strong>No communities yet</strong>
                 <small>Create a community or join one to get started.</small>
@@ -781,10 +834,10 @@ export default function Dashboard() {
             {/* Settings is also reachable from the expanded sidebar (in addition to the user panel). */}
             <button className="fc-sidebar-action" onClick={() => { setSettingsOpen(true); setMobileNav(false); }}><Settings size={17} /> Settings</button>
 
-            {communities && communities.length > 0 && (
+            {communityList.length > 0 && (
               <>
                 <div className="fc-sidebar-section"><span>COMMUNITIES</span></div>
-                {communities.map((c) => (
+                {communityList.map((c) => (
                   <button key={c._id} className="fc-sidebar-action community" onClick={() => openCommunity(c._id)}>
                     <span className="fc-sidebar-community-icon">
                       {(c as { iconUrl?: string | null }).iconUrl
@@ -796,7 +849,7 @@ export default function Dashboard() {
                 ))}
               </>
             )}
-            {communities && communities.length === 0 && (
+            {communities && communityList.length === 0 && (
               <div className="fc-communities-empty">
                 <strong>No communities yet</strong>
                 <small>Create a community or join one to get started.</small>
@@ -808,10 +861,10 @@ export default function Dashboard() {
               <span>CONVERSATIONS</span>
               <button aria-label="New message" title="New message" onClick={() => setNewMessageOpen(true)}><Plus size={13} /></button>
             </div>
-            {conversations && conversations.length === 0 && (
+            {conversations && conversationList.length === 0 && (
               <p className="fc-sidebar-empty">No conversations yet. Start one with the ＋ button.</p>
             )}
-            {conversations?.filter((c) => !c.archived).map((c) => (
+            {activeConversations.map((c) => (
               <div key={c.conversationId} className="fc-dm-row">
                 <button
                   className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
@@ -836,12 +889,12 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
-            {(conversations?.filter((c) => c.archived).length ?? 0) > 0 && (
+            {archivedConversations.length > 0 && (
               <>
                 <button className="fc-sidebar-action" onClick={() => setArchivedOpen((v) => !v)}>
-                  📥 Archived ({conversations!.filter((c) => c.archived).length})
+                  📥 Archived ({archivedConversations.length})
                 </button>
-                {archivedOpen && conversations!.filter((c) => c.archived).map((c) => (
+                {archivedOpen && archivedConversations.map((c) => (
                   <div key={c.conversationId} className="fc-dm-row">
                     <button
                       className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
@@ -922,8 +975,8 @@ export default function Dashboard() {
                 <button onClick={async () => { try { const n = await clearNotifs({}); toast.success(n ? "Notifications cleared." : "Nothing to clear."); } catch { toast.error("Could not clear notifications."); } }}>Clear all</button>
               </div>
             </div>
-            {notifications && notifications.items.length === 0 && <p className="fc-sidebar-empty">You're all caught up.</p>}
-            {notifications?.items.map((n) => (
+            {notifications && notificationItems.length === 0 && <p className="fc-sidebar-empty">You're all caught up.</p>}
+            {notificationItems.map((n) => (
               <div key={n._id} className={`fc-notif-row ${n.read ? "" : "unread"}`}>
                 <button className="fc-notif" onClick={() => openNotification(n)} title={n.read ? "Read" : "Unread"}>
                   <strong>{n.title}</strong>
@@ -979,7 +1032,7 @@ export default function Dashboard() {
                 channelName={channel.name}
                 channelDescription={channel.description}
                 myUserId={me?.userId ?? ""}
-                permissions={details.permissions}
+                permissions={detailsPermissions}
                 onOpenProfile={setProfileUserId}
                 onJoinVoice={() => joinVoice(channel._id, channel.name)}
                 isVoice={channel.type === "voice"}
@@ -993,8 +1046,8 @@ export default function Dashboard() {
             </FeatureBoundary>
           </div>            {section === "community" && details && (
             <aside className="fc-members" aria-label="Community members">
-              <div className="fc-members-head">MEMBERS — {details.members.length}</div>
-              {details.members.map((m) => (
+              <div className="fc-members-head">MEMBERS — {detailsMembers.length}</div>
+              {detailsMembers.map((m) => (
                 <button key={m.userId} className="fc-member" onClick={() => setProfileUserId(m.userId)}>
                   <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={30} url={m.avatarUrl} lastSeen={m.lastSeen} decorationId={m.decorationId} />
                   <span>
@@ -1202,7 +1255,7 @@ export default function Dashboard() {
                   <label htmlFor="modal-category">Category</label>
                   <select id="modal-category" className="fc-select" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
                     <option value="">No category</option>
-                    {channelTree?.categories.map((cat) => <option key={cat._id} value={cat._id}>{cat.name}</option>)}
+                    {channelCategoryList.map((cat) => <option key={cat._id} value={cat._id}>{cat.name}</option>)}
                   </select>
                   {channelType !== "text" && (
                     <>
@@ -1226,7 +1279,7 @@ export default function Dashboard() {
                                 {r.charAt(0).toUpperCase() + r.slice(1)}
                               </label>
                             ))}
-                            {details?.roles.filter((r) => r.name !== "owner").map((r) => (
+                            {detailsRoles.filter((r) => r.name !== "owner").map((r) => (
                               <label key={r._id} className={`fc-radio ${allowedRoleIds.includes(r._id) ? "active" : ""}`}>
                                 <input
                                   type="checkbox"

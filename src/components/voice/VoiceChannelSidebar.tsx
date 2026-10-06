@@ -4,6 +4,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toast } from "sonner";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
+import { toSafeArray } from "@/lib/collection";
 import { ChevronDown, Hash, Lock, MicOff, Plus, Settings2, Volume2, VolumeX } from "lucide-react";
 
 export default function VoiceChannelSidebar({
@@ -28,11 +29,16 @@ export default function VoiceChannelSidebar({
 
   if (!tree) return <p className="fc-sidebar-empty">Loading channels…</p>;
 
+  // Normalized once so a malformed channel tree can never crash the sidebar.
+  const categories = toSafeArray<NonNullable<typeof tree>["byCategory"][number]>(tree.byCategory, { label: "Voice categories", source: "api.voice.channelTree" });
+  const uncategorized = toSafeArray<NonNullable<typeof tree>["uncategorized"][number]>(tree.uncategorized, { label: "Uncategorized voice channels", source: "api.voice.channelTree" });
+
   const toggle = (key: string) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
 
   function ChannelRow({ channel }: { channel: { _id: Id<"channels">; name: string; type?: string | null; userLimit?: number | null; isPrivate?: boolean | null } }) {
     const isVoice = channel.type === "voice" || channel.type === "video";
-    const participants = tree!.voiceParticipants[channel._id as string] ?? [];
+    const voiceMap = tree!.voiceParticipants;
+    const participants = toSafeArray<NonNullable<NonNullable<typeof voiceMap>[string]>[number]>(voiceMap?.[channel._id as string], { label: "Voice participants", source: "api.voice.channelTree" });
     const isActive = activeChannelId === channel._id;
     const atLimit = (channel.userLimit ?? 0) > 0 && participants.length >= (channel.userLimit ?? 0);
 
@@ -131,7 +137,7 @@ export default function VoiceChannelSidebar({
         </button>
       </div>
 
-      {tree.byCategory.map(({ category, channels }) => (
+      {categories.map(({ category, channels }) => (
         <div key={category._id} className="vc-group">
           <button className="vc-category" onClick={() => toggle(category._id)}>
             <ChevronDown size={13} className={collapsed[category._id] ? "rot" : ""} /> {category.name}
@@ -140,7 +146,7 @@ export default function VoiceChannelSidebar({
         </div>
       ))}
 
-      {tree.uncategorized.map((c) => <ChannelRow key={c._id} channel={c} />)}
+      {uncategorized.map((c) => <ChannelRow key={c._id} channel={c} />)}
     </div>
   );
 }

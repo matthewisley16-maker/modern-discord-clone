@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { toSafeArray } from "@/lib/collection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -109,6 +110,10 @@ export default function AdminPanel() {
   const communities = useQuery(api.admin.listCommunities, {});
   const auditLogs = useQuery(api.admin.listAuditLogs, { limit: 150 });
   const settings = useQuery(api.admin.getPlatformSettings, {});
+  // Admin collections normalized so a malformed payload can never crash the panel.
+  const userList = useMemo(() => toSafeArray<NonNullable<typeof users>[number]>(users, { label: "Admin users", source: "api.admin.listUsers" }), [users]);
+  const communityList = useMemo(() => toSafeArray<NonNullable<typeof communities>[number]>(communities, { label: "Admin communities", source: "api.admin.listCommunities" }), [communities]);
+  const auditLogList = useMemo(() => toSafeArray<NonNullable<typeof auditLogs>[number]>(auditLogs, { label: "Admin audit log", source: "api.admin.listAuditLogs" }), [auditLogs]);
 
   const setUserRole = useMutation(api.admin.setUserRole);
   const banUser = useMutation(api.admin.banUser);
@@ -292,8 +297,8 @@ export default function AdminPanel() {
               </CardHeader>
               <CardContent className="space-y-2">
                 {users === undefined && <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>}
-                {users?.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No accounts match.</p>}
-                {users?.map((u) => {
+                {users && userList.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No accounts match.</p>}
+                {userList.map((u) => {
                   const suspended = Boolean(u.suspendedUntil && u.suspendedUntil > Date.now());
                   const manage = canManage(u as AdminUser);
                   return (
@@ -382,10 +387,10 @@ export default function AdminPanel() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {communities?.length === 0 && (
+                      {communities && communityList.length === 0 && (
                         <TableRow><TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">No communities.</TableCell></TableRow>
                       )}
-                      {communities?.map((c) => (
+                      {communityList.map((c) => (
                         <TableRow key={c.serverId}>
                           <TableCell className="max-w-[16rem]">
                             <div className="truncate font-medium">{c.name}</div>
@@ -450,10 +455,10 @@ export default function AdminPanel() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {auditLogs?.length === 0 && (
+                      {auditLogs && auditLogList.length === 0 && (
                         <TableRow><TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">No activity yet.</TableCell></TableRow>
                       )}
-                      {auditLogs?.map((l) => (
+                      {auditLogList.map((l) => (
                         <TableRow key={l.id}>
                           <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{new Date(l.at).toLocaleString()}</TableCell>
                           <TableCell className="whitespace-nowrap text-xs font-medium">{l.action}</TableCell>

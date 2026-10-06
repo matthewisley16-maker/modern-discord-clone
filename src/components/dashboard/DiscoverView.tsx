@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { toSafeArray } from "@/lib/collection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, SectionHeader } from "./ui";
@@ -23,7 +24,10 @@ export default function DiscoverView({
   const results = useQuery(api.communities.discover, { q: query || undefined, category: category ?? undefined });
   const join = useMutation(api.communities.join);
   const mine = useQuery(api.communities.listMine, {});
-  const joinedIds = new Set((mine ?? []).map((s) => s._id as string));
+  // Collections normalized once so a malformed payload can never crash a render.
+  const categoryList = useMemo(() => toSafeArray<NonNullable<typeof categories>[number]>(categories, { label: "Community categories", source: "api.communities.categories" }), [categories]);
+  const resultList = useMemo(() => toSafeArray<NonNullable<typeof results>[number]>(results, { label: "Discovered communities", source: "api.communities.discover" }), [results]);
+  const joinedIds = new Set(toSafeArray<NonNullable<typeof mine>[number]>(mine, { label: "Your communities", source: "api.communities.listMine" }).map((s) => s._id as string));
 
   return (
     <div className="fc-scroll-view">
@@ -41,19 +45,19 @@ export default function DiscoverView({
         <Input placeholder="Search public communities" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search communities" />
       </div>
 
-      {categories && categories.length > 0 && (
+      {categoryList.length > 0 && (
         <div className="fc-filter-row">
           <button className={category === null ? "active" : ""} onClick={() => setCategory(null)}>All</button>
-          {categories.map((c) => (
+          {categoryList.map((c) => (
             <button key={c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>
           ))}
         </div>
       )}
 
       <section className="fc-block">
-        <SectionHeader title={`PUBLIC COMMUNITIES — ${results?.length ?? 0}`} />
+        <SectionHeader title={`PUBLIC COMMUNITIES — ${resultList.length}`} />
         {results === undefined && <p className="fc-muted">Loading communities…</p>}
-        {results && results.length === 0 && (
+        {results && resultList.length === 0 && (
           <EmptyState
             icon={<Compass size={30} />}
             title="No communities found."
@@ -62,7 +66,7 @@ export default function DiscoverView({
           />
         )}
         <div className="fc-community-grid">
-          {results?.map((c) => (
+          {resultList.map((c) => (
             <article key={c.serverId} className="fc-community-card">
               <div className="fc-community-card-head">
                 <span className="fc-community-icon" style={{ background: "linear-gradient(135deg,#7c5cf6,#4c1d95)" }}>{c.name.slice(0, 1).toUpperCase()}</span>
@@ -72,8 +76,8 @@ export default function DiscoverView({
                 </div>
               </div>
               <p className="fc-community-desc">{c.description || "No description yet."}</p>
-              {c.tags.length > 0 && (
-                <div className="fc-tag-row">{c.tags.map((t) => <span key={t} className="fc-tag">{t}</span>)}</div>
+              {toSafeArray<string>(c.tags).length > 0 && (
+                <div className="fc-tag-row">{toSafeArray<string>(c.tags).map((t) => <span key={t} className="fc-tag">{t}</span>)}</div>
               )}
               <div className="fc-community-card-actions">
                 {joinedIds.has(c.serverId) ? (

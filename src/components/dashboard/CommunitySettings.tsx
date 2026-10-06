@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { toSafeArray } from "@/lib/collection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -33,7 +34,14 @@ export default function CommunitySettings({
   const [newVoiceLimit, setNewVoiceLimit] = useState(0);
 
   const server = details?.server;
-  const canManage = details?.permissions.includes("manageCommunity") ?? false;
+  // Normalized collections so a malformed payload can never crash settings.
+  const detailsPermissions = toSafeArray<string>(details?.permissions, { label: "Community permissions", source: "api.communities.details" });
+  const roleList = toSafeArray<NonNullable<typeof details>["roles"][number]>(details?.roles, { label: "Community roles", source: "api.communities.details" });
+  const voiceChannelList = [
+    ...toSafeArray<NonNullable<typeof channelTree>["uncategorized"][number]>(channelTree?.uncategorized, { label: "Uncategorized channels", source: "api.voice.channelTree" }),
+    ...toSafeArray<NonNullable<typeof channelTree>["byCategory"][number]>(channelTree?.byCategory, { label: "Channel categories", source: "api.voice.channelTree" }).flatMap((g) => g.channels),
+  ];
+  const canManage = detailsPermissions.includes("manageCommunity");
   const isOwner = details?.isOwner ?? false;
 
   const [name, setName] = useState(server?.name ?? "");
@@ -227,8 +235,7 @@ export default function CommunitySettings({
               ><Plus className="mr-1 h-4 w-4" /> Create voice channel</Button>
             </div>
             <ul className="fc-voice-manage">
-              {(channelTree?.uncategorized ?? [])
-                .concat(channelTree?.byCategory.flatMap((g) => g.channels) ?? [])
+              {voiceChannelList
                 .filter((c) => c.type === "voice" || c.type === "video")
                 .map((c) => (
                   <li key={c._id}>
@@ -271,7 +278,7 @@ export default function CommunitySettings({
                             </label>
                           );
                         })}
-                        {(details.roles ?? []).filter((r) => r.name !== "owner").map((r) => {
+                        {roleList.filter((r) => r.name !== "owner").map((r) => {
                           const allowed = (c.allowedRoleIds ?? []).includes(r._id);
                           return (
                             <label key={r._id} className={`fc-radio ${allowed ? "active" : ""}`}>
@@ -304,7 +311,7 @@ export default function CommunitySettings({
             </ul>
 
             <h3><LayoutList size={16} /> Channels &amp; categories</h3>
-            <ChannelManager serverId={serverId} roles={(details.roles ?? []).map((r) => ({ _id: r._id as string, name: r.name }))} />
+            <ChannelManager serverId={serverId} roles={roleList.map((r) => ({ _id: r._id as string, name: r.name }))} />
 
             {/* Server-level administration: roles, members, channel permissions,
                 bans. Scoped to THIS community and enforced on the backend — it is

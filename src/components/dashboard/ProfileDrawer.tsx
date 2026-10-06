@@ -3,6 +3,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Avatar, PRESENCE_META } from "./ui";
+import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { Calendar, Flag, MessageCircle, ShieldOff, UserMinus, UserPlus, X } from "lucide-react";
 
@@ -39,6 +40,9 @@ export default function ProfileDrawer({
   }
 
   const presence = PRESENCE_META[profile.presence] ?? PRESENCE_META.offline;
+  // Profile sub-collections normalized so a malformed record can never crash.
+  const mutualCommunities = toSafeArray<NonNullable<typeof profile.mutualCommunities>[number]>(profile.mutualCommunities, { label: "Profile mutual communities", source: "api.users.publicProfile" });
+  const badges = toSafeArray<NonNullable<typeof profile.badges>[number]>(profile.badges, { label: "Profile badges", source: "api.users.publicProfile" });
 
   return (
     <aside className="fc-drawer" role="complementary" aria-label={`${profile.displayName} profile`}>
@@ -54,12 +58,12 @@ export default function ProfileDrawer({
         <div className="fc-drawer-stats">
           <div><strong>{profile.followers}</strong><span>Followers</span></div>
           <div><strong>{profile.following}</strong><span>Following</span></div>
-          <div><strong>{profile.mutualCommunities.length}</strong><span>Mutual</span></div>
+          <div><strong>{mutualCommunities.length}</strong><span>Mutual</span></div>
         </div>
 
-        {profile.badges.length > 0 && (
+        {badges.length > 0 && (
           <div className="fc-drawer-badges">
-            {profile.badges.map((b) => <span key={b} className="fc-badge-tag">{b}</span>)}
+            {badges.map((b) => <span key={b} className="fc-badge-tag">{b}</span>)}
           </div>
         )}
 
@@ -74,11 +78,11 @@ export default function ProfileDrawer({
           <p className="fc-drawer-meta"><Calendar size={13} /> Joined {new Date(profile.createdAt).toLocaleDateString()}</p>
         )}
 
-        {profile.mutualCommunities.length > 0 && (
+        {mutualCommunities.length > 0 && (
           <>
             <p className="fc-drawer-label">MUTUAL COMMUNITIES</p>
             <ul className="fc-drawer-list">
-              {profile.mutualCommunities.map((c) => <li key={c._id}>{c.name}</li>)}
+              {mutualCommunities.map((c) => <li key={c._id}>{c.name}</li>)}
             </ul>
           </>
         )}

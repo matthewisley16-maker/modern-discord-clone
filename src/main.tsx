@@ -87,15 +87,15 @@ class RootErrorBoundary extends React.Component<
       return (
         <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
           <div className="max-w-lg text-center">
-            <p className="text-sm font-semibold">Freecord couldn&apos;t finish loading</p>
+            <p className="text-sm font-semibold">Something went wrong</p>
             <p className="mt-2 text-xs text-muted-foreground break-words">
-              {this.state.message || "Something went wrong while starting the app."}
+              {this.state.message || "Freecord couldn't finish loading. Please try again."}
             </p>
             <button
               className="mt-4 rounded-md border border-border px-3 py-1.5 text-xs font-medium"
               onClick={() => window.location.reload()}
             >
-              Reload Freecord
+              Try again
             </button>
             {this.state.stack && (
               <pre className="mt-3 text-left text-[10px] leading-4 text-muted-foreground/80 max-h-40 overflow-auto rounded border border-border/60 p-2">

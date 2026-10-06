@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { toSafeArray } from "@/lib/collection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -49,8 +50,10 @@ export default function ChannelManager({ serverId, roles }: { serverId: Id<"serv
 
   if (!tree) return <p className="fc-muted">Loading channels…</p>;
 
-  const categories: Cat[] = tree.categories as Cat[];
-  const allChannels: Chan[] = [...tree.uncategorized, ...tree.byCategory.flatMap((g) => g.channels)] as Chan[];
+  const categories: Cat[] = toSafeArray<Cat>(tree.categories, { label: "Channel categories", source: "api.voice.channelTree" });
+  const uncategorized: Chan[] = toSafeArray<Chan>(tree.uncategorized, { label: "Uncategorized channels", source: "api.voice.channelTree" });
+  const byCategory = toSafeArray<NonNullable<typeof tree>["byCategory"][number]>(tree.byCategory, { label: "Channel categories", source: "api.voice.channelTree" });
+  const allChannels: Chan[] = [...uncategorized, ...byCategory.flatMap((g) => g.channels)] as Chan[];
 
   function openCreate(type: "text" | "voice", categoryId: string) {
     setForm({ name: "", description: "", limit: 0, isPrivate: false, roles: [] });
@@ -185,12 +188,12 @@ export default function ChannelManager({ serverId, roles }: { serverId: Id<"serv
           <button className="fc-cm-add" onClick={() => openCreate("text", "")}><Hash size={13} /> Text</button>
           <button className="fc-cm-add" onClick={() => openCreate("voice", "")}><Volume2 size={13} /> Voice</button>
         </div>
-        <ul className="fc-cm-list">{tree.uncategorized.map((c) => channelRow(c as Chan))}</ul>
+        <ul className="fc-cm-list">{uncategorized.map((c) => channelRow(c))}</ul>
       </div>
 
       {/* Categories, each with its channels */}
-      {tree.categories.map((cat) => {
-        const group = tree.byCategory.find((g) => g.category._id === cat._id);
+      {categories.map((cat) => {
+        const group = byCategory.find((g) => g.category._id === cat._id);
         const channels = (group?.channels ?? []) as Chan[];
         return (
           <div

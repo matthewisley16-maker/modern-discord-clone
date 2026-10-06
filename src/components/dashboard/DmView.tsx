@@ -19,6 +19,7 @@ import { useMentions } from "@/hooks/use-mentions";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
 import { normalizeDmMessages } from "@/lib/dm-messages";
+import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { AtSign, Check, CheckCheck, Copy, Download, FileText, Flag, Lock, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
 
@@ -53,7 +54,17 @@ export default function DmView({
   onHighlightHandled?: () => void;
 }) {
   const conversations = useQuery(api.dms.listConversations, {});
-  const convo = conversations?.find((c) => c.conversationId === conversationId);
+  // Normalized once so the conversation list can never be a non-array (null
+  // while loading, a legacy {} record, an object, …) and `.find`/`.map` below
+  // are always safe.
+  const conversationList = useMemo(
+    () => toSafeArray<NonNullable<typeof conversations>[number]>(conversations, {
+      label: "DM conversations",
+      source: "api.dms.listConversations",
+    }),
+    [conversations],
+  );
+  const convo = conversationList.find((c) => c.conversationId === conversationId);
   const [search, setSearch] = useState("");
   const messages = useQuery(api.dms.messages, { conversationId, search: search || undefined });
   // The server withholds every message while a locked conversation is locked,
@@ -77,6 +88,13 @@ export default function DmView({
   // that state, so the gate asks for a real PIN before anything is revealed.
   const needsNewPin = forceNewPin || pinState?.mustChangePin === true;
   const typing = useQuery(api.dms.typingIn, { conversationId });
+  const typingList = useMemo(
+    () => toSafeArray<NonNullable<typeof typing>[number]>(typing, {
+      label: "DM typing indicators",
+      source: "api.dms.typingIn",
+    }),
+    [typing],
+  );
   const send = useMutation(api.dms.sendMessage);
   const edit = useMutation(api.dms.editMessage);
   const deleteDmForEveryone = useMutation(api.deletion.deleteDmForEveryone);
@@ -94,8 +112,22 @@ export default function DmView({
   const leaveGroup = useMutation(api.dms.leaveGroup);
   const setGroupAdmin = useMutation(api.dms.setGroupAdmin);
   const group = useQuery(api.dms.groupDetails, { conversationId });
+  const groupMembers = useMemo(
+    () => toSafeArray<NonNullable<NonNullable<typeof group>["members"]>[number]>(group?.members, {
+      label: "DM group members",
+      source: "api.dms.groupDetails",
+    }),
+    [group],
+  );
   const [memberQuery, setMemberQuery] = useState("");
   const memberResults = useQuery(api.users.searchUsers, { q: memberQuery });
+  const memberResultList = useMemo(
+    () => toSafeArray<NonNullable<typeof memberResults>[number]>(memberResults, {
+      label: "DM member search results",
+      source: "api.users.searchUsers",
+    }),
+    [memberResults],
+  );
 
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<{ id: Id<"dmMessages">; author: string; body: string } | null>(null);
@@ -188,7 +220,16 @@ export default function DmView({
     }
   }
 
-  const title = convo?.type === "group" ? convo.name : convo?.members[0]?.displayName ?? "Conversation";
+  // The conversation's other participants, normalized: a legacy/malformed
+  // `members` value must never break the title or header.
+  const convoMembers = useMemo(
+    () => toSafeArray<NonNullable<typeof convo>["members"][number]>(convo?.members, {
+      label: "DM conversation members",
+      source: "api.dms.listConversations",
+    }),
+    [convo],
+  );
+  const title = convo?.type === "group" ? convo.name : convoMembers[0]?.displayName ?? "Conversation";
 
   function clearPending() {
     setPending((prev) => { prev.forEach((p) => p.previewUrl && URL.revokeObjectURL(p.previewUrl)); return []; });
@@ -278,7 +319,7 @@ export default function DmView({
         <span className="fc-head-icon">{convo?.type === "group" ? <Users size={20} /> : <AtSign size={20} />}</span>
         <div className="fc-head-text">
           <strong>{title}</strong>
-          <small>{convo?.type === "group" ? `${convo.memberCount} members` : convo?.members[0]?.username ? `@${convo.members[0].username}` : ""}</small>
+          <small>{convo?.type === "group" ? `${convo.memberCount} members` : convoMembers[0]?.username ? `@${convoMembers[0].username}` : ""}</small>
         </div>
         <div className="fc-head-actions">
           <button title="Start voice call" aria-label="Start voice call" onClick={() => onStartCall("voice")}><Phone size={18} /></button>
@@ -309,7 +350,7 @@ export default function DmView({
             )}
           </div>
           <div className="fc-group-members">
-            {group.members.map((m) => {
+            {groupMembers.map((m) => {
               const canRemove = (group.isOwner || group.isAdmin) && !m.isOwner && m.userId !== myUserId;
               return (
                 <div key={m.userId} className="fc-group-member">
@@ -338,7 +379,7 @@ export default function DmView({
             <Input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="Add people to this group" />
             {memberQuery.trim() && (
               <div className="fc-group-add-results">
-                {(memberResults ?? []).filter((r) => !group.members.some((m) => m.userId === r.userId)).slice(0, 6).map((r) => (
+                {memberResultList.filter((r) => !groupMembers.some((m) => m.userId === r.userId)).slice(0, 6).map((r) => (
                   <button
                     key={r.userId}
                     onClick={async () => {
@@ -492,7 +533,7 @@ export default function DmView({
             </article>
           );
         }), [messages, myUserId, openMenu, onOpenProfile, react, setPinned, deleteDmForMe, deleteDmForEveryone, report])}
-        {typing && typing.length > 0 && <p className="fc-typing">{typingLabel(typing)}</p>}
+        {typingList.length > 0 && <p className="fc-typing">{typingLabel(typingList)}</p>}
       </div>
 
       {!atBottom && newCount > 0 && (

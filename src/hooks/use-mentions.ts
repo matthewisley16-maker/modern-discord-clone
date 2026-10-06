@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { toSafeArray } from "@/lib/collection";
 
 export type MentionSuggestion = {
   userId: string;
@@ -50,7 +51,11 @@ export function useMentions({
   const [index, setIndex] = useState(0);
 
   const args = token ? { ...(serverId ? { serverId } : {}), ...(conversationId ? { conversationId } : {}), q: token.term } : "skip";
-  const suggestions = (useQuery(api.mentions.candidates, args as never) as MentionSuggestion[] | undefined) ?? [];
+  // Normalized so a malformed candidates payload can never crash the menu.
+  const suggestions = toSafeArray<MentionSuggestion>(
+    useQuery(api.mentions.candidates, args as never) as unknown,
+    { label: "Mention suggestions", source: "api.mentions.candidates" },
+  );
   const open = token !== null && suggestions.length > 0;
 
   const onValueChange = useCallback(

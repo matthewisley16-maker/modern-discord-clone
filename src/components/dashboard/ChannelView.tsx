@@ -15,6 +15,7 @@ import MentionText from "./MentionText";
 import YouTubeEmbeds from "./YouTubeEmbed";
 import { useMessageScroll } from "@/hooks/use-message-scroll";
 import { gifUrlsIn } from "@/lib/message-links";
+import { sanitizeCollectionFields, toSafeArray } from "@/lib/collection";
 import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
 import { toast } from "sonner";
@@ -71,6 +72,21 @@ export default function ChannelView({
   const deleteForMe = useMutation(api.deletion.deleteForMe);
   const canModerate = useQuery(api.deletion.canModerateHere, { channelId });
   const hiddenIds = useQuery(api.deletion.myHiddenIds, {});
+  // Collections normalized once; a malformed payload can never crash a render.
+  const messageList = useMemo(
+    () =>
+      toSafeArray<NonNullable<typeof messages>[number]>(messages, { label: "Channel messages", source: "api.chat.messages" })
+        .map((m) => sanitizeCollectionFields(m, ["reactions", "attachments", "mentionUsers"], { label: "Channel message", source: "api.chat.messages" })),
+    [messages],
+  );
+  const hiddenIdList = useMemo(
+    () => toSafeArray<NonNullable<typeof hiddenIds>[number]>(hiddenIds, { label: "Hidden message ids", source: "api.deletion.myHiddenIds" }),
+    [hiddenIds],
+  );
+  const typingList = useMemo(
+    () => toSafeArray<NonNullable<typeof typing>[number]>(typing, { label: "Channel typing indicators", source: "api.communities.typingIn" }),
+    [typing],
+  );
   const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
   const attach = useMutation(api.uploads.attach);
   const requestCleanup = useMutation(api.storage.requestCleanup);
@@ -93,7 +109,7 @@ export default function ChannelView({
   // GIF picker + the selected (not yet sent) GIF.
   const [gifOpen, setGifOpen] = useState(false);
   const [pendingGif, setPendingGif] = useState<GifValue | null>(null);
-  const { scrollRef, atBottom, newCount, scrollToBottom, onScroll } = useMessageScroll(channelId, messages?.length ?? 0);
+  const { scrollRef, atBottom, newCount, scrollToBottom, onScroll } = useMessageScroll(channelId, messageList.length);
   const fileInput = useRef<HTMLInputElement>(null);
   const msgInput = useRef<HTMLInputElement>(null);
   // Typing heartbeats are throttled and cleared on send, switch, and unmount.
@@ -117,25 +133,25 @@ export default function ChannelView({
   // Play the message SFX when someone else's message arrives in this channel.
   const lastCount = useRef<number | null>(null);
   useEffect(() => {
-    if (!messages) return;
-    if (lastCount.current !== null && messages.length > lastCount.current) {
-      const newest = messages[messages.length - 1];
+    if (messages === undefined) return;
+    if (lastCount.current !== null && messageList.length > lastCount.current) {
+      const newest = messageList[messageList.length - 1];
       if (newest && newest.userId !== myUserId) playSound();
     }
-    lastCount.current = messages.length;
-  }, [messages, myUserId, playSound]);
+    lastCount.current = messageList.length;
+  }, [messages, messageList, myUserId, playSound]);
 
   const canSend = permissions.includes("sendMessages");
   // Derived from query data, not from the composer draft, so typing does not
   // recompute the list. Memoized so the whole message list can bail out of
   // re-rendering on every keystroke (the main cause of composer lag).
   const visible = useMemo(() => {
-    const hidden = new Set(hiddenIds ?? []);
+    const hidden = new Set(hiddenIdList);
     const term = search.toLowerCase();
-    return messages
-      ?.filter((m) => !hidden.has(m._id as string))
+    return messageList
+      .filter((m) => !hidden.has(m._id as string))
       .filter((m) => !search || m.body.toLowerCase().includes(term));
-  }, [messages, hiddenIds, search]);
+  }, [messageList, hiddenIdList, search]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -261,12 +277,12 @@ export default function ChannelView({
         </div>
 
         {messages === undefined && <p className="fc-muted">Loading messages…</p>}
-        {messages && messages.length === 0 && (
+        {messages && messageList.length === 0 && (
           <EmptyState title="A fresh start." body="Be the first to say hello. No sample users or messages here — just your community." />
         )}
-        {messages && messages.length > 0 && visible?.length === 0 && <EmptyState title="No results found." body={`Nothing matches “${search}”.`} />}
+        {messages && messageList.length > 0 && visible.length === 0 && <EmptyState title="No results found." body={`Nothing matches “${search}”.`} />}
 
-        {useMemo(() => visible?.map((m) => {
+        {useMemo(() => visible.map((m) => {
           const mine = m.userId === myUserId;
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
           const inlineGifs = gifUrlsIn(m.body);
@@ -350,7 +366,7 @@ export default function ChannelView({
             </article>
           );
         }), [visible, myUserId, menuFor, longPressFor, canModerate, onOpenProfile, react, pin, deleteForMe, deleteForEveryone, report])}
-        {typing && typing.length > 0 && <p className="fc-typing">{typingLabel(typing)}</p>}
+        {typingList.length > 0 && <p className="fc-typing">{typingLabel(typingList)}</p>}
       </div>
 
       {!atBottom && newCount > 0 && (

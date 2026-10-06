@@ -4,6 +4,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
+import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { Maximize, Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Video, VideoOff, VolumeX, X } from "lucide-react";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "./screenShare";
@@ -48,6 +49,11 @@ export default function VoicePanel({
   onExpand?: () => void;
 }) {
   const details = useQuery(api.voice.voiceChannelDetails, { channelId });
+  // Normalized once so a malformed participant list can never crash the call UI.
+  const participants = useMemo(
+    () => toSafeArray<NonNullable<NonNullable<typeof details>["participants"]>[number]>(details?.participants, { label: "Voice participants", source: "api.voice.voiceChannelDetails" }),
+    [details],
+  );
   const signals = useQuery(api.communities.pollSignals, { channelId });
   const sendSignal = useMutation(api.communities.sendSignal);
   const clearSignal = useMutation(api.communities.clearSignal);
@@ -326,12 +332,12 @@ export default function VoicePanel({
 
   useEffect(() => {
     if (!details || !mediaReady) return;
-    for (const p of details.participants) {
+    for (const p of participants) {
       if (p.userId === myUserId) continue;
       if (!peers.current.has(p.userId)) createPeer(p.userId, myUserId < p.userId);
     }
     // Drop peer connections for people who left (no ghost streams/tiles).
-    const present = new Set(details.participants.map((p) => p.userId as string));
+    const present = new Set(participants.map((p) => p.userId as string));
     for (const [id, pc] of peers.current) {
       if (!present.has(id)) {
         pc.close();
@@ -523,7 +529,6 @@ export default function VoicePanel({
     void el.requestFullscreen?.().catch(() => {});
   }
 
-  const participants = details?.participants ?? [];
   const statusLabel = connection === "connected" ? "Voice Connected" : connection === "connecting" ? "Connecting…" : "Connection Lost";
 
   const screenEntries = useMemo<ScreenEntry[]>(() => {
@@ -535,7 +540,6 @@ export default function VoicePanel({
       if (s) list.push({ id: p.userId, local: false, stream: s, name: p.name });
     }
     return list;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenOn, remoteScreens, participants, myUserId]);
   const activeFocus = screenFocus && screenEntries.some((e) => e.id === screenFocus)
     ? screenFocus

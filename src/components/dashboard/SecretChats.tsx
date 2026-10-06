@@ -5,6 +5,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "./ui";
+import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { Eye, EyeOff, Lock, LockOpen, KeyRound, ShieldCheck, X } from "lucide-react";
 
@@ -248,7 +249,8 @@ export default function SecretChatsDialog({
 
   const unlocked = secrets?.unlocked === true;
   const mustChangePin = secrets?.mustChangePin === true || pinState?.mustChangePin === true;
-  const rows = (secrets?.conversations ?? []) as SecretRow[];
+  // Normalized: a malformed Secret Chats payload can never crash the list.
+  const rows = toSafeArray<SecretRow>(secrets?.conversations, { label: "Secret chats", source: "api.conversationPrivacy.secretChats" });
 
   useEffect(() => {
     if (open) return;
