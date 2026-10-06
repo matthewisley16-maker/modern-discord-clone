@@ -12,6 +12,8 @@ import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
 import InlineGif from "./InlineGif";
 import MentionText from "./MentionText";
+import YouTubeEmbeds from "./YouTubeEmbed";
+import { useMessageScroll } from "@/hooks/use-message-scroll";
 import { gifUrlsIn } from "@/lib/message-links";
 import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
@@ -91,7 +93,7 @@ export default function ChannelView({
   // GIF picker + the selected (not yet sent) GIF.
   const [gifOpen, setGifOpen] = useState(false);
   const [pendingGif, setPendingGif] = useState<GifValue | null>(null);
-  const bottom = useRef<HTMLDivElement>(null);
+  const { scrollRef, atBottom, newCount, scrollToBottom, onScroll } = useMessageScroll(channelId, messages?.length ?? 0);
   const fileInput = useRef<HTMLInputElement>(null);
   const msgInput = useRef<HTMLInputElement>(null);
   // Typing heartbeats are throttled and cleared on send, switch, and unmount.
@@ -99,7 +101,6 @@ export default function ChannelView({
   // @mention autocomplete — real users, prioritized by the viewer's follows.
   const mentions = useMentions({ value: draft, setValue: setDraft, inputRef: msgInput, serverId });
 
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, channelId]);
   useEffect(() => { setSearch(""); setReplyTo(null); setEditing(null); setDraft(""); setGifOpen(false); }, [channelId]);
 
   // Scroll to and flash a message opened from a notification.
@@ -252,7 +253,7 @@ export default function ChannelView({
         </div>
       </header>
 
-      <div className="fc-messages">
+      <div className="fc-messages" ref={scrollRef} onScroll={onScroll}>
         <div className="fc-channel-welcome">
           <span className="fc-welcome-hash"><Hash size={26} /></span>
           <h2>Welcome to #{channelName}</h2>
@@ -306,6 +307,8 @@ export default function ChannelView({
                     {inlineGifs.map((u) => <InlineGif key={u} url={u} />)}
                   </div>
                 )}
+                {/* YouTube links become lazy embeds; the video itself is never copied. */}
+                <YouTubeEmbeds body={m.body} />
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
                     {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}
@@ -348,8 +351,13 @@ export default function ChannelView({
           );
         }), [visible, myUserId, menuFor, longPressFor, canModerate, onOpenProfile, react, pin, deleteForMe, deleteForEveryone, report])}
         {typing && typing.length > 0 && <p className="fc-typing">{typingLabel(typing)}</p>}
-        <div ref={bottom} />
       </div>
+
+      {!atBottom && newCount > 0 && (
+        <button className="fc-new-messages" onClick={() => scrollToBottom(true)}>
+          ↓ {newCount} new message{newCount === 1 ? "" : "s"}
+        </button>
+      )}
 
       {!canSend ? (
         <div className="fc-composer-locked">You don't have permission to send messages in this channel.</div>

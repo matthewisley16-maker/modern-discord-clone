@@ -11,6 +11,8 @@ import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
 import InlineGif from "./InlineGif";
 import MentionText from "./MentionText";
+import YouTubeEmbeds from "./YouTubeEmbed";
+import { useMessageScroll } from "@/hooks/use-message-scroll";
 import { gifUrlsIn } from "@/lib/message-links";
 import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
@@ -87,14 +89,13 @@ export default function DmView({
   // GIF picker + the selected (not yet sent) GIF.
   const [gifOpen, setGifOpen] = useState(false);
   const [pendingGif, setPendingGif] = useState<GifValue | null>(null);
-  const bottom = useRef<HTMLDivElement>(null);
+  const { scrollRef, atBottom, newCount, scrollToBottom, onScroll } = useMessageScroll(conversationId, messages?.length ?? 0);
   const fileInput = useRef<HTMLInputElement>(null);
   const msgInput = useRef<HTMLInputElement>(null);
   const { onType, stop: stopTyping } = useTyping({ conversationId });
   // @mention autocomplete scoped to this conversation's members.
   const mentions = useMentions({ value: draft, setValue: setDraft, inputRef: msgInput, conversationId });
 
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages?.length, conversationId]);
   useEffect(() => { markRead({ conversationId }).catch(() => {}); setSearch(""); setReplyTo(null); setEditing(null); setGifOpen(false); }, [conversationId, markRead]);
 
   // Scroll to and flash a message opened from a notification.
@@ -288,7 +289,7 @@ export default function DmView({
         </div>
       )}
 
-      <div className="fc-messages">
+      <div className="fc-messages" ref={scrollRef} onScroll={onScroll}>
         {messages === undefined && <p className="fc-muted">Loading messages…</p>}
         {messages && messages.length === 0 && !search && (
           <EmptyState
@@ -335,6 +336,8 @@ export default function DmView({
                     {inlineGifs.map((u) => <InlineGif key={u} url={u} />)}
                   </div>
                 )}
+                {/* YouTube links become lazy embeds; the video itself is never copied. */}
+                <YouTubeEmbeds body={m.body} />
                 {m.attachments.length > 0 && (
                   <div className="fc-attachments">
                     {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}
@@ -374,8 +377,13 @@ export default function DmView({
           );
         }), [messages, myUserId, openMenu, onOpenProfile, react, setPinned, deleteDmForMe, deleteDmForEveryone, report])}
         {typing && typing.length > 0 && <p className="fc-typing">{typingLabel(typing)}</p>}
-        <div ref={bottom} />
       </div>
+
+      {!atBottom && newCount > 0 && (
+        <button className="fc-new-messages" onClick={() => scrollToBottom(true)}>
+          ↓ {newCount} new message{newCount === 1 ? "" : "s"}
+        </button>
+      )}
 
       <div className="fc-composer-wrap">
         {replyTo && (

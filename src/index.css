@@ -1222,6 +1222,26 @@ html.fc-light .fc-servers-overflow-row:hover { background: rgba(0,0,0,.05); colo
 .fc-perm-cell.allow { background: rgba(59,165,93,.25); color: #6ee7a0; }
 .fc-perm-cell.deny { background: rgba(240,97,109,.22); color: #ff9aa3; }
 .fc-perm-cell:hover { filter: brightness(1.25); }
+/* YouTube embeds (lazy, no video files stored) + new-messages indicator. */
+.fc-new-messages { position: absolute; left: 50%; transform: translateX(-50%); bottom: 88px; z-index: 6; padding: 6px 14px; border-radius: 999px; background: #8b5cf6; color: #fff; font-size: 12px; font-weight: 600; box-shadow: 0 8px 24px rgba(109,63,245,.45); }
+.fc-new-messages:hover { background: #7c4df0; }
+.fc-yt-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.fc-yt { position: relative; display: flex; flex-direction: column; gap: 4px; width: min(420px, 100%); border: 1px solid rgba(255,255,255,.09); border-radius: 12px; overflow: hidden; background: #12121a; }
+.fc-yt-poster { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; line-height: 0; }
+.fc-yt-poster img { width: 100%; height: 100%; object-fit: cover; opacity: .92; }
+.fc-yt-skeleton { display: block; width: 100%; height: 100%; background: linear-gradient(100deg, #1b1a25 30%, #262435 50%, #1b1a25 70%); background-size: 200% 100%; animation: fc-shimmer 1.4s linear infinite; }
+@keyframes fc-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.fc-yt-play { position: absolute; inset: 0; margin: auto; width: 56px; height: 40px; display: grid; place-items: center; border-radius: 10px; background: rgba(0,0,0,.65); color: #fff; font-size: 18px; }
+.fc-yt-poster:hover .fc-yt-play { background: #f00; }
+.fc-yt-badge { position: absolute; left: 8px; top: 8px; padding: 2px 8px; border-radius: 6px; background: rgba(0,0,0,.7); color: #fff; font-size: 10px; font-weight: 600; letter-spacing: .02em; }
+.fc-yt-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+.fc-yt-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.fc-yt-open { padding: 6px 10px; font-size: 11px; color: #a78bfa; }
+.fc-yt-open:hover { color: #cfbeff; text-decoration: underline; }
+.fc-yt-fallback { display: flex; flex-direction: column; gap: 6px; padding: 12px; font-size: 12px; color: #b7b1cc; }
+.fc-yt-fallback a { color: #a78bfa; }
+html.fc-light .fc-yt { background: #fff; border-color: rgba(0,0,0,.1); }
+
 /* Group-chat management (scoped to one conversation only). */
 .fc-group-title { font-size: 14px; color: #e5e0ff; }
 .fc-group-promote { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: rgba(139,92,246,.18); color: #cfbeff; }
