@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { gifValidator, requireGif } from "./gif";
 import { areFriends, authorCardOf, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
+import { lockStateOf } from "./conversationPrivacy";
 import { resolveMentions } from "./mentions";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
@@ -93,6 +94,10 @@ export const listConversations = query({
     for (const membership of mine) {
       const convo = await ctx.db.get(membership.conversationId);
       if (!convo) continue;
+      // Personal privacy: a hidden conversation never appears in the normal
+      // Chats list, search, previews or recents — only in Secret Chats.
+      const lock = await lockStateOf(ctx, userId, membership);
+      if (lock.hidden) continue;
       const members = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", convo._id)).collect();
       const others = members.filter((m) => m.userId !== userId);
       const otherCards = await Promise.all(others.map((m) => card(ctx, m.userId, userId)));
@@ -117,7 +122,11 @@ export const listConversations = query({
         ownerId: convo.ownerId,
         unread,
         lastMessageAt: convo.lastMessageAt,
-        lastMessage: last && !last.deleted ? last.body.slice(0, 90) : "",
+        // A locked chat keeps its name (Lock Only shows "🔒 Sarah") but never
+        // leaks a message preview until the PIN has been entered.
+        locked: lock.locked,
+        unlocked: lock.unlocked,
+        lastMessage: lock.unlocked && last && !last.deleted ? last.body.slice(0, 90) : "",
       });
     }
     return out.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastMessageAt - a.lastMessageAt);
@@ -133,6 +142,9 @@ export const unreadTotal = query({
     const mine = await ctx.db.query("dmMembers").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
     let total = 0;
     for (const membership of mine) {
+      // Hidden conversations are excluded from the badge total; a locked-but-
+      // visible one still contributes its count (which reveals nothing).
+      if (membership.hidden) continue;
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", membership.conversationId)).collect();
       const lastRead = membership.lastReadAt ?? 0;
       total += messages.filter((m) => m.userId !== userId && m._creationTime > lastRead && !m.deleted).length;
@@ -268,6 +280,9 @@ export const groupDetails = query({
       .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", userId))
       .unique();
     if (!me) return null;
+    // A locked chat must not even reveal its member list until it is unlocked.
+    const lock = await lockStateOf(ctx, userId, me);
+    if (lock.locked && !lock.unlocked) return null;
     const members = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
     const cards = await Promise.all(
       members.map(async (m) => ({
@@ -332,6 +347,10 @@ export const deleteConversation = mutation({
     const me = await currentUserId(ctx);
     const member = await requireMember(ctx, conversationId, me);
     await ctx.db.delete(member._id);
+    // Drop any unlock grant / PIN reset leftovers tied to this conversation.
+    for (const unlock of await ctx.db.query("conversationUnlocks").withIndex("by_user", (q) => q.eq("userId", me)).collect()) {
+      if (unlock.conversationId === conversationId) await ctx.db.delete(unlock._id);
+    }
     const remaining = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
     if (remaining.length === 0) {
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
@@ -408,8 +427,18 @@ export const messages = query({
   args: { conversationId: v.id("dmConversations"), search: v.optional(v.string()) },
   handler: async (ctx, { conversationId, search }) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    await requireMember(ctx, conversationId, userId);
+    if (!userId) return { messages: [], locked: false, readByOthers: 0, memberCount: 0 };
+    const membership = await requireMember(ctx, conversationId, userId);
+    // Server-side lock enforcement: a locked conversation returns NO messages
+    // until the member has proved the PIN. The client cannot opt out of this.
+    const lock = await lockStateOf(ctx, userId, membership);
+    if (lock.locked && !lock.unlocked) {
+      const members = await ctx.db
+        .query("dmMembers")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+        .collect();
+      return { messages: [], locked: true, readByOthers: 0, memberCount: members.length };
+    }
     // "Delete for me" is per-user and never affects other members.
     const hidden = new Set(
       (await ctx.db.query("messageVisibility").withIndex("by_user", (q) => q.eq("userId", userId)).collect()).map((h) => h.messageId),
@@ -461,7 +490,10 @@ export const messages = query({
     const readByOthers = receiptsAllowed && lastMessage
       ? others.filter((o) => (o.lastReadAt ?? 0) >= lastMessage._creationTime).length
       : 0;
-    return Object.assign(result, { readByOthers, memberCount: members.length });
+    // NOTE: this returns a plain object. (Array extra properties are dropped by
+    // Convex's wire format, so the old `readByOthers` on the array never
+    // actually reached the client.)
+    return { messages: result, locked: false, readByOthers, memberCount: members.length };
   },
 });
 
@@ -469,7 +501,13 @@ export const sendMessage = mutation({
   args: { conversationId: v.id("dmConversations"), body: v.string(), replyToId: v.optional(v.id("dmMessages")), gif: v.optional(gifValidator) },
   handler: async (ctx, { conversationId, body, replyToId, gif }) => {
     const me = await currentUserId(ctx);
-    await requireMember(ctx, conversationId, me);
+    const membership = await requireMember(ctx, conversationId, me);
+    // Sending into a chat you locked requires unlocking it first, so a locked
+    // conversation can never be used without the PIN.
+    const lock = await lockStateOf(ctx, me, membership);
+    if (lock.locked && !lock.unlocked) {
+      throw new ConvexError("This conversation is locked. Enter your PIN to unlock it first.");
+    }
     await enforceRateLimit(ctx, `dmsg:${me}`, 60, 60_000);
     // Validate the GIF server-side; never trust a client-provided media URL.
     const safeGif = gif ? requireGif(gif) : undefined;
@@ -487,6 +525,13 @@ export const sendMessage = mutation({
     const mentioned = await resolveMentions(ctx, text, { conversationId });
     for (const m of members) {
       if (m.userId === me || m.muted) continue;
+      // If the RECIPIENT has locked or hidden this conversation, never leak the
+      // content (or the sender, or a deep link) into the notification.
+      const recipientLock = await lockStateOf(ctx, m.userId, m);
+      if (recipientLock.hidden || recipientLock.locked) {
+        await notify(ctx, m.userId, "dm", "New private message", "Open Secret Chats and enter your PIN to read it.");
+        continue;
+      }
       const isMention = mentioned.some((u) => u.userId === m.userId);
       await notify(
         ctx,
@@ -594,6 +639,15 @@ export const typingIn = query({
   handler: async (ctx, { conversationId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+    // Typing names are part of a conversation's content — withhold them while
+    // the conversation is locked and not yet unlocked.
+    const membership = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", userId))
+      .unique();
+    if (!membership) return [];
+    const lock = await lockStateOf(ctx, userId, membership);
+    if (lock.locked && !lock.unlocked) return [];
     const rows = await ctx.db
       .query("typing")
       .withIndex("by_scope", (q) => q.eq("scope", `dm:${conversationId}`))

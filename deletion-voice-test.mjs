@@ -135,8 +135,8 @@ await expectOk("DM delete-for-me hides it only for B", async () => {
   const convo = await A.client.mutation(api.dms.startDirect, { userId: B.userId });
   const m = await A.client.mutation(api.dms.sendMessage, { conversationId: convo, body: "dm hello" });
   await B.client.mutation(api.deletion.deleteDmForMe, { messageId: m });
-  const forA = await A.client.query(api.dms.messages, { conversationId: convo });
-  const forB = await B.client.query(api.dms.messages, { conversationId: convo });
+  const forA = (await A.client.query(api.dms.messages, { conversationId: convo })).messages;
+  const forB = (await B.client.query(api.dms.messages, { conversationId: convo })).messages;
   if (!forA.some((x) => x._id === m)) throw new Error("A lost the DM");
   if (forB.some((x) => x._id === m)) throw new Error("B still sees the DM");
   dmId = convo;
@@ -144,8 +144,8 @@ await expectOk("DM delete-for-me hides it only for B", async () => {
 await expectTrue("DM delete-for-everyone removes it for both", async () => {
   const m = await A.client.mutation(api.dms.sendMessage, { conversationId: dmId, body: "dm gone" });
   await A.client.mutation(api.deletion.deleteDmForEveryone, { messageId: m });
-  const forA = await A.client.query(api.dms.messages, { conversationId: dmId });
-  const forB = await B.client.query(api.dms.messages, { conversationId: dmId });
+  const forA = (await A.client.query(api.dms.messages, { conversationId: dmId })).messages;
+  const forB = (await B.client.query(api.dms.messages, { conversationId: dmId })).messages;
   return !forA.some((x) => x._id === m) && !forB.some((x) => x._id === m);
 });
 await expectError("only the author can delete a DM for everyone", async () => {

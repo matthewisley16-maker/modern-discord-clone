@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { GifValue } from "@/convex/gif";
@@ -19,7 +19,7 @@ import { useMentions } from "@/hooks/use-mentions";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
 import { toast } from "sonner";
-import { AtSign, Check, CheckCheck, Copy, Download, FileText, Flag, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
+import { AtSign, Check, CheckCheck, Copy, Download, FileText, Flag, Lock, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
 
 const EMOJIS = ["😀", "😂", "🙌", "❤️", "🔥", "👍", "🎉", "👋", "✨", "😮", "😢", "🙏"];
 const REACTIONS = ["👍", "❤️", "😂", "🔥", "🎉"];
@@ -55,6 +55,21 @@ export default function DmView({
   const convo = conversations?.find((c) => c.conversationId === conversationId);
   const [search, setSearch] = useState("");
   const messages = useQuery(api.dms.messages, { conversationId, search: search || undefined });
+  // The server withholds every message while a locked conversation is locked,
+  // so an empty `messageList` here is authoritative — not a UI decision.
+  const messageList = useMemo(() => messages?.messages ?? [], [messages]);
+  const unlockConversation = useAction(api.conversationPrivacy.unlockConversation);
+  const finishPinReset = useAction(api.conversationPrivacy.finishPinReset);
+  const pinState = useQuery(api.conversationPrivacy.pinState, {});
+  const [pin, setPinDraft] = useState("");
+  const [newPin, setNewPinDraft] = useState("");
+  const [confirmPin, setConfirmPinDraft] = useState("");
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinError, setPinError] = useState("");
+  const [forceNewPin, setForceNewPin] = useState(false);
+  // A reset leaves the PIN as the temporary 0000; the server grants nothing in
+  // that state, so the gate asks for a real PIN before anything is revealed.
+  const needsNewPin = forceNewPin || pinState?.mustChangePin === true;
   const typing = useQuery(api.dms.typingIn, { conversationId });
   const send = useMutation(api.dms.sendMessage);
   const edit = useMutation(api.dms.editMessage);
@@ -89,7 +104,7 @@ export default function DmView({
   // GIF picker + the selected (not yet sent) GIF.
   const [gifOpen, setGifOpen] = useState(false);
   const [pendingGif, setPendingGif] = useState<GifValue | null>(null);
-  const { scrollRef, atBottom, newCount, scrollToBottom, onScroll } = useMessageScroll(conversationId, messages?.length ?? 0);
+  const { scrollRef, atBottom, newCount, scrollToBottom, onScroll } = useMessageScroll(conversationId, messageList.length);
   const fileInput = useRef<HTMLInputElement>(null);
   const msgInput = useRef<HTMLInputElement>(null);
   const { onType, stop: stopTyping } = useTyping({ conversationId });
@@ -114,12 +129,58 @@ export default function DmView({
   const lastCount = useRef<number | null>(null);
   useEffect(() => {
     if (!messages) return;
-    if (lastCount.current !== null && messages.length > lastCount.current) {
-      const newest = messages[messages.length - 1];
+    if (lastCount.current !== null && messageList.length > lastCount.current) {
+      const newest = messageList[messageList.length - 1];
       if (newest && newest.userId !== myUserId) playSound();
     }
-    lastCount.current = messages.length;
-  }, [messages, myUserId, playSound]);
+    lastCount.current = messageList.length;
+  }, [messages, messageList, myUserId, playSound]);
+
+  /**
+   * Ask the server to unlock this conversation. The PIN is only ever sent to
+   * the backend, which verifies it and grants time-limited access to this
+   * session; the returned `mustChangePin` forces the temp-PIN follow-up.
+   */
+  async function submitPin(e: React.FormEvent) {
+    e.preventDefault();
+    setPinBusy(true);
+    setPinError("");
+    try {
+      const res = await unlockConversation({ conversationId, pin });
+      if (res.granted) {
+        setPinDraft("");
+        setForceNewPin(false);
+      } else if (res.mustChangePin) {
+        // Keep the temp PIN in memory: it is the "current PIN" the follow-up
+        // new-PIN step must verify.
+        setForceNewPin(true);
+      }
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message.replace(/^\[.*?\]\s*/, "").split("\n")[0] : "Could not unlock.");
+    } finally {
+      setPinBusy(false);
+    }
+  }
+
+  async function submitNewPin(e: React.FormEvent) {
+    e.preventDefault();
+    if (newPin !== confirmPin) { setPinError("Those PINs don't match."); return; }
+    setPinBusy(true);
+    setPinError("");
+    try {
+      // Replacing the temporary PIN also opens this conversation for the session.
+      await finishPinReset({ currentPin: pin, pin: newPin, confirmPin });
+      setForceNewPin(false);
+      setNewPinDraft("");
+      setConfirmPinDraft("");
+      setPinDraft("");
+      toast.success("New PIN saved.");
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message.replace(/^\[.*?\]\s*/, "").split("\n")[0] : "Could not save the PIN.");
+    } finally {
+      setPinBusy(false);
+    }
+  }
 
   const title = convo?.type === "group" ? convo.name : convo?.members[0]?.displayName ?? "Conversation";
 
@@ -291,17 +352,65 @@ export default function DmView({
 
       <div className="fc-messages" ref={scrollRef} onScroll={onScroll}>
         {messages === undefined && <p className="fc-muted">Loading messages…</p>}
-        {messages && messages.length === 0 && !search && (
+        {messages && messages.locked && (
+          <div className="fc-lock-gate" role="form" aria-label="Unlock conversation">
+            <span className="fc-lock-gate-icon"><Lock size={26} /></span>
+            <h3>{needsNewPin ? "Choose a new PIN" : `${title} is locked`}</h3>
+            <p className="fc-muted">
+              {needsNewPin
+                ? "Your PIN was reset to the temporary 0000. Create your own PIN to finish unlocking — nothing is shown until you do."
+                : "Enter your PIN to see this conversation. Its messages stay on the server until you do."}
+            </p>
+            {!needsNewPin ? (
+              <form onSubmit={submitPin} className="fc-lock-gate-form">
+                <input
+                  autoFocus
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={8}
+                  value={pin}
+                  disabled={pinBusy}
+                  aria-label="PIN"
+                  placeholder="Enter PIN"
+                  onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, ""))}
+                />
+                <Button type="submit" disabled={pinBusy || pin.length < 4}>{pinBusy ? "Checking…" : "Unlock"}</Button>
+              </form>
+            ) : (
+              <form onSubmit={submitNewPin} className="fc-lock-gate-form">
+                <input
+                  type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8}
+                  value={pin} disabled={pinBusy} aria-label="Current PIN" placeholder="Current PIN (0000)"
+                  onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, ""))}
+                />
+                <input
+                  autoFocus type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8}
+                  value={newPin} disabled={pinBusy} aria-label="New PIN" placeholder="New PIN (4–8 digits)"
+                  onChange={(e) => setNewPinDraft(e.target.value.replace(/\D/g, ""))}
+                />
+                <input
+                  type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8}
+                  value={confirmPin} disabled={pinBusy} aria-label="Confirm new PIN" placeholder="Confirm new PIN"
+                  onChange={(e) => setConfirmPinDraft(e.target.value.replace(/\D/g, ""))}
+                />
+                <Button type="submit" disabled={pinBusy || newPin.length < 4 || newPin !== confirmPin}>Save new PIN</Button>
+              </form>
+            )}
+            {pinError && <p className="fc-lock-gate-error">{pinError}</p>}
+          </div>
+        )}
+        {messages && !messages.locked && messageList.length === 0 && !search && (
           <EmptyState
             icon={<MessageCircle size={30} />}
             title={convo?.type === "group" ? `Welcome to ${title}` : `Start a conversation with ${title}`}
             body="Send a message, share a file, or start a call."
           />
         )}
-        {messages && messages.length === 0 && search && <EmptyState title="No results found." body={`Nothing matches “${search}”.`} />}
+        {messages && !messages.locked && messageList.length === 0 && search && <EmptyState title="No results found." body={`Nothing matches “${search}”.`} />}
 
         {/* Memoized so typing in the composer does not re-render every message. */}
-        {useMemo(() => messages?.map((m) => {
+        {useMemo(() => messageList.map((m) => {
           const mine = m.userId === myUserId;
           const grouped = [...new Set(m.reactions.map((r) => r.emoji))];
           const inlineGifs = gifUrlsIn(m.body);
@@ -458,7 +567,7 @@ export default function DmView({
             ))}
           </div>
         )}
-        <form className="fc-composer" onSubmit={submit}>
+        <form className="fc-composer" onSubmit={submit} style={messages?.locked ? { display: "none" } : undefined}>
           <input ref={fileInput} type="file" multiple hidden onChange={(e) => { Array.from(e.target.files ?? []).forEach(stageFile); e.target.value = ""; }} />
           <button type="button" title="Attach a file" aria-label="Attach a file" onClick={() => fileInput.current?.click()}><Paperclip size={19} /></button>
           <button type="button" title="Add emoji" aria-label="Add emoji" onClick={() => { setEmojiOpen((v) => !v); setGifOpen(false); }}><Smile size={19} /></button>
@@ -490,7 +599,7 @@ export default function DmView({
         <div className="fc-composer-note">
           <span>Enter to send · Drag and drop or paste to upload</span>
           <span className="fc-receipt">
-            {(messages as unknown as { readByOthers?: number })?.readByOthers ? <><CheckCheck size={13} /> Read</> : <><Check size={13} /> Sent</>}
+            {messages?.readByOthers ? <><CheckCheck size={13} /> Read</> : <><Check size={13} /> Sent</>}
           </span>
         </div>
       </div>

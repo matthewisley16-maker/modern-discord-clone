@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "./ui";
 import { toast } from "sonner";
-import { Eye, EyeOff, KeyRound, Mail, Mic, Monitor, Palette, Settings2, Shield, Trash2, User, X } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Lock, Mail, Mic, Monitor, Palette, Settings2, Shield, Trash2, User, X } from "lucide-react";
+import SecretChatsDialog from "./SecretChats";
 
 const TABS = ["General", "Profile", "Appearance", "Notifications", "Privacy", "Voice & Video", "Account", "Sessions"] as const;
 type Tab = (typeof TABS)[number];
@@ -69,6 +70,8 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
   const updateAppearance = useMutation(api.profiles.updateAppearance);
 
   const [tab, setTab] = useState<Tab>("General");
+  // Discreet entry point to the PIN-gated Secret Chats screen (Privacy tab).
+  const [secretOpen, setSecretOpen] = useState(false);
   const [displayName, setDisplayName] = useState(me?.profile?.displayName ?? "");
   const [bio, setBio] = useState(me?.profile?.bio ?? "");
   const [customStatus, setCustomStatus] = useState(me?.profile?.customStatus ?? "");
@@ -442,6 +445,19 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
                 </select>
               </label>
               <p className="fc-muted">These settings are enforced on the server.</p>
+
+              {/* Small, discreet lock icon — the Secret Chats entry point. */}
+              <div className="fc-secret-entry">
+                <button
+                  type="button"
+                  className="fc-secret-entry-btn"
+                  aria-label="Secret Chats — locked and hidden conversations"
+                  title="Secret Chats"
+                  onClick={() => setSecretOpen(true)}
+                >
+                  <Lock size={13} />
+                </button>
+              </div>
             </section>
           )}
 
@@ -462,6 +478,10 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
                 </label>
               ))}
             </section>
+          )}
+
+          {tab === "Privacy" && (
+            <SecretChatsDialog open={secretOpen} onClose={() => setSecretOpen(false)} />
           )}
 
           {tab === "Sessions" && (

@@ -152,7 +152,7 @@ await expectTrue("DM suggestions exclude people outside the conversation", async
 });
 await expectOk("A sends a DM mentioning B", () => A.client.mutation(api.dms.sendMessage, { conversationId: convoId, body: `hi @${B.username}` }));
 await expectTrue("the DM message exposes the resolved mention", async () => {
-  const msgs = await A.client.query(api.dms.messages, { conversationId: convoId });
+  const msgs = (await A.client.query(api.dms.messages, { conversationId: convoId })).messages;
   const m = msgs[msgs.length - 1];
   return m && m.mentionUsers.some((u) => u.userId === B.userId);
 });

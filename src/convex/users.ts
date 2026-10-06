@@ -519,6 +519,17 @@ export const deleteAccount = mutation({
     const dmMemberships = await ctx.db.query("dmMembers").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
     for (const dm of dmMemberships) await ctx.db.delete(dm._id);
 
+    // Personal conversation-privacy records (PIN hash, unlock grants, resets).
+    for (const pin of await ctx.db.query("conversationPins").withIndex("by_user", (q) => q.eq("userId", userId)).collect()) {
+      await ctx.db.delete(pin._id);
+    }
+    for (const unlock of await ctx.db.query("conversationUnlocks").withIndex("by_user", (q) => q.eq("userId", userId)).collect()) {
+      await ctx.db.delete(unlock._id);
+    }
+    for (const reset of await ctx.db.query("pinResets").withIndex("by_user", (q) => q.eq("userId", userId)).collect()) {
+      await ctx.db.delete(reset._id);
+    }
+
     // Social graph + notifications + presence + profile.
     for (const table of ["friendRequests", "follows", "blocks", "notifications"] as const) {
       const rows = await ctx.db.query(table).collect();

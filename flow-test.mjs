@@ -114,21 +114,21 @@ await expectOk("A sends a DM", async () => {
   dmMessageId = await A.client.mutation(api.dms.sendMessage, { conversationId, body: "hey bob" });
 });
 await expectOk("B reads the DM", async () => {
-  const msgs = await B.client.query(api.dms.messages, { conversationId });
+  const msgs = (await B.client.query(api.dms.messages, { conversationId })).messages;
   if (msgs.length !== 1) throw new Error("expected 1 message");
 });
 await expectOk("B replies in the DM", () => B.client.mutation(api.dms.sendMessage, { conversationId, body: "hi alice" }));
 await expectOk("DM reply + edit work", async () => {
   const id = await B.client.mutation(api.dms.sendMessage, { conversationId, body: "reply test", replyToId: dmMessageId });
   await B.client.mutation(api.dms.editMessage, { messageId: id, body: "reply edited" });
-  const msgs = await B.client.query(api.dms.messages, { conversationId });
+  const msgs = (await B.client.query(api.dms.messages, { conversationId })).messages;
   const edited = msgs.find((m) => m._id === id);
   if (edited.body !== "reply edited" || !edited.editedAt) throw new Error("edit did not apply");
   if (!edited.reply) throw new Error("reply reference missing");
 });
 await expectOk("DM reactions work", async () => {
   await A.client.mutation(api.dms.toggleReaction, { messageId: dmMessageId, emoji: "🔥" });
-  const msgs = await A.client.query(api.dms.messages, { conversationId });
+  const msgs = (await A.client.query(api.dms.messages, { conversationId })).messages;
   const target = msgs.find((m) => m._id === dmMessageId);
   if (!target.reactions.some((r) => r.emoji === "🔥")) throw new Error("reaction missing");
 });

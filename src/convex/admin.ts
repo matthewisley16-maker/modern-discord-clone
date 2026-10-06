@@ -475,6 +475,11 @@ async function purgeUserData(ctx: MutationCtx, userId: Id<"users">) {
   for (const m of await ctx.db.query("memberships").withIndex("by_user", (q) => q.eq("userId", userId)).collect()) await ctx.db.delete(m._id);
   for (const dm of await ctx.db.query("dmMembers").withIndex("by_user", (q) => q.eq("userId", userId)).collect()) await ctx.db.delete(dm._id);
 
+  // Personal conversation-privacy records (PIN hash, unlock grants, resets).
+  for (const pin of await ctx.db.query("conversationPins").withIndex("by_user", (q) => q.eq("userId", userId)).collect()) await ctx.db.delete(pin._id);
+  for (const unlock of await ctx.db.query("conversationUnlocks").withIndex("by_user", (q) => q.eq("userId", userId)).collect()) await ctx.db.delete(unlock._id);
+  for (const reset of await ctx.db.query("pinResets").withIndex("by_user", (q) => q.eq("userId", userId)).collect()) await ctx.db.delete(reset._id);
+
   const presence = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
   if (presence) await ctx.db.delete(presence._id);
   const profile = await ctx.db.query("profiles").withIndex("by_user", (q) => q.eq("userId", userId)).unique();

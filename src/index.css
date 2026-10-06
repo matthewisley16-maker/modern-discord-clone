@@ -1329,3 +1329,100 @@ html.fc-light .fc-yt { background: #fff; border-color: rgba(0,0,0,.1); }
 html.fc-light .fc-role-row, html.fc-light .fc-member-row { background: rgba(0,0,0,.03); border-color: rgba(0,0,0,.08); }
 html.fc-light .fc-role-name { color: #1c1b22; }
 html.fc-light .fc-perms-tab { color: #4b4a58; }
+
+/* ---------------------------------------------------------------------------
+   Locked & Hidden Conversations (personal conversation privacy)
+--------------------------------------------------------------------------- */
+/* Lock badge on a conversation row in the Chats list. */
+.fc-dm-lock { display: inline-grid; place-items: center; color: #a78bfa; margin-left: 2px; flex-shrink: 0; }
+
+/* Discreet Secret Chats entry point, bottom-right of Settings -> Privacy. */
+.fc-secret-entry { display: flex; justify-content: flex-end; margin-top: 14px; }
+.fc-secret-entry-btn {
+  display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px;
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+  color: #8b87a0; transition: color .15s, background .15s;
+}
+.fc-secret-entry-btn:hover { background: rgba(139,92,246,.16); color: #e5e0ff; }
+html.fc-light .fc-secret-entry-btn { background: rgba(0,0,0,.03); border-color: rgba(0,0,0,.08); color: #6b6880; }
+
+/* Shared dialog chrome */
+.fc-secret-dialog, .fc-secret-screen {
+  width: 100%; max-width: 460px; max-height: 88vh; overflow-y: auto;
+  background: #17161f; border: 1px solid rgba(255,255,255,.1); border-radius: 16px;
+  padding: 18px; box-shadow: 0 28px 70px rgba(0,0,0,.65);
+}
+.fc-secret-screen { max-width: 560px; }
+html.fc-light .fc-secret-dialog, html.fc-light .fc-secret-screen { background: #f6f5fb; border-color: rgba(0,0,0,.1); }
+.fc-secret-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.fc-secret-head h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; margin: 0; }
+.fc-secret-head button { color: #8b87a0; padding: 4px; border-radius: 6px; }
+.fc-secret-head button:hover { background: rgba(255,255,255,.06); color: #fff; }
+
+/* Mode picker (Lock only / Hide & lock) */
+.fc-secret-modes { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.fc-secret-mode {
+  display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,.09); border-radius: 12px; background: rgba(255,255,255,.02);
+}
+.fc-secret-mode:hover { border-color: rgba(167,139,250,.4); }
+.fc-secret-mode.active { border-color: #8b5cf6; background: rgba(139,92,246,.12); }
+.fc-secret-mode input { margin-top: 3px; accent-color: #8b5cf6; }
+.fc-secret-mode-icon { color: #a78bfa; margin-top: 1px; }
+.fc-secret-mode strong { display: block; font-size: 13px; }
+.fc-secret-mode small { display: block; font-size: 11px; color: #8b87a0; line-height: 1.5; margin-top: 2px; }
+
+/* PIN fields */
+.fc-secret-form { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.fc-pin-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #b7b1cc; }
+.fc-pin-input { position: relative; display: flex; align-items: center; }
+.fc-pin-input input { letter-spacing: .35em; font-size: 16px; }
+.fc-pin-input button { position: absolute; right: 8px; color: #8b87a0; padding: 4px; }
+.fc-pin-input button:hover { color: #e5e0ff; }
+
+.fc-secret-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.fc-secret-actions.wrap { flex-wrap: wrap; justify-content: flex-start; }
+.fc-secret-error { margin-top: 10px; font-size: 12px; color: #f0616d; }
+.fc-link-btn { align-self: flex-start; margin-top: 10px; font-size: 12px; color: #a78bfa; text-decoration: underline; }
+.fc-link-btn:hover { color: #e5e0ff; }
+
+/* Gate (PIN entry / new PIN) */
+.fc-secret-gate { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 18px 6px 8px; }
+.fc-secret-gate-icon {
+  display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px;
+  background: rgba(139,92,246,.16); color: #a78bfa; margin-bottom: 10px;
+}
+.fc-secret-gate h4 { margin: 0 0 6px; font-size: 15px; }
+.fc-secret-gate p { margin: 0 0 6px; font-size: 12px; }
+.fc-secret-gate .fc-secret-form { width: 100%; max-width: 300px; text-align: left; }
+.fc-secret-gate .fc-secret-actions { justify-content: center; width: 100%; }
+.fc-secret-gate .fc-link-btn { align-self: center; }
+
+/* Unlocked list */
+.fc-secret-body { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; }
+.fc-secret-summary { display: flex; align-items: center; gap: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8b87a0; margin: 4px 0 2px; }
+.fc-secret-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.07); }
+.fc-secret-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fc-secret-row-name { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #eeecf6; }
+.fc-secret-flag { font-style: normal; font-size: 10px; padding: 1px 6px; border-radius: 999px; background: rgba(139,92,246,.2); color: #c4b5fd; }
+.fc-secret-row-main small { font-size: 11px; color: #8b87a0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-secret-row-tools { display: flex; gap: 4px; flex-shrink: 0; }
+.fc-secret-row-tools button { font-size: 11px; padding: 4px 8px; border-radius: 8px; background: rgba(255,255,255,.05); color: #c9c5da; }
+.fc-secret-row-tools button:hover { background: rgba(139,92,246,.2); color: #fff; }
+.fc-secret-row-tools button.danger { color: #f0616d; }
+.fc-secret-section-title { margin-top: 12px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8b87a0; }
+.fc-secret-change { border-top: 1px solid rgba(255,255,255,.08); padding-top: 12px; }
+html.fc-light .fc-secret-row { background: rgba(0,0,0,.03); border-color: rgba(0,0,0,.08); }
+html.fc-light .fc-secret-row-name { color: #1c1b22; }
+html.fc-light .fc-secret-row-tools button { background: rgba(0,0,0,.05); color: #4b4a58; }
+html.fc-light .fc-secret-mode { background: rgba(0,0,0,.02); border-color: rgba(0,0,0,.09); }
+html.fc-light .fc-pin-field { color: #4b4a58; }
+
+/* PIN gate shown inside a locked conversation (instead of its messages). */
+.fc-lock-gate { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 34px 18px; margin: auto; width: 100%; max-width: 380px; }
+.fc-lock-gate-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; background: rgba(139,92,246,.16); color: #a78bfa; }
+.fc-lock-gate h3 { margin: 0; font-size: 16px; }
+.fc-lock-gate p { margin: 0; font-size: 12px; }
+.fc-lock-gate-form { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 280px; margin-top: 6px; }
+.fc-lock-gate-form input { text-align: center; letter-spacing: .35em; font-size: 16px; }
+.fc-lock-gate-error { font-size: 12px; color: #f0616d; }

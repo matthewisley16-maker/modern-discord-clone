@@ -135,7 +135,7 @@ await expectTrue("DM sidebar shows the other member's picture", async () => {
 });
 await expectTrue("DM messages carry the author's picture", async () => {
   const convos = await A.client.query(api.dms.listConversations, {});
-  const msgs = await A.client.query(api.dms.messages, { conversationId: convos[0].conversationId });
+  const msgs = (await A.client.query(api.dms.messages, { conversationId: convos[0].conversationId })).messages;
   const fromB = msgs.find((m) => m.userId === B.userId);
   return typeof fromB?.authorAvatarUrl === "string" && fromB.authorAvatarUrl.startsWith("http");
 });
@@ -162,7 +162,7 @@ await expectTrue("DM messages carry the author's decoration", async () => {
   const convos = await A.client.query(api.dms.listConversations, {});
   const conversationId = convos[0].conversationId;
   await A.client.mutation(api.dms.sendMessage, { conversationId, body: `deco ${stamp}` });
-  const msgs = await A.client.query(api.dms.messages, { conversationId });
+  const msgs = (await A.client.query(api.dms.messages, { conversationId })).messages;
   return msgs.find((m) => m.body === `deco ${stamp}`)?.authorDecorationId === "dec_stars";
 });
 await expectTrue("DM sidebar card carries the decoration", async () => {

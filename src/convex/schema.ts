@@ -274,6 +274,13 @@ const schema = defineSchema(
       isAdmin: v.optional(v.boolean()),
       // Archived from the owner's own inbox (per member).
       archived: v.optional(v.boolean()),
+      // --- Personal conversation privacy (per member, enforced by the server) ---
+      // `locked`  -> the conversation needs the member's PIN before its
+      //              messages can be read, but stays visible in Chats.
+      // `hidden`  -> the conversation is removed from the normal Chats list and
+      //              only appears in Secret Chats. Always locked as well.
+      locked: v.optional(v.boolean()),
+      hidden: v.optional(v.boolean()),
     })
       .index("by_conversation", ["conversationId"])
       .index("by_user", ["userId"])
@@ -300,6 +307,51 @@ const schema = defineSchema(
       userId: v.id("users"),
       emoji: v.string(),
     }).index("by_message", ["messageId"]),
+
+    /**
+     * One row per account holding the hashed Secret Chats PIN plus its
+     * attempt/lockout bookkeeping. The PIN itself is NEVER stored, returned or
+     * logged — only a one-way hash (and only the server ever sees that).
+     */
+    conversationPins: defineTable({
+      userId: v.id("users"),
+      pinHash: v.string(),
+      failedAttempts: v.number(),
+      lockedUntil: v.optional(v.number()), // temporary lockout after repeated failures
+      mustChangePin: v.optional(v.boolean()), // true while the PIN is the temp "0000"
+      defaultHidden: v.optional(v.boolean()), // where NEW protected conversations go
+      autoLockMinutes: v.optional(v.number()), // how long an unlock lasts
+      updatedAt: v.number(),
+    }).index("by_user", ["userId"]),
+
+    /**
+     * Short-lived unlock grants. `conversationId` is absent for a grant that
+     * covers every locked conversation (issued by the Secret Chats screen); a
+     * concrete id unlocks exactly one conversation (the Lock Only prompt).
+     * Queries must find a live grant before returning locked messages.
+     */
+    conversationUnlocks: defineTable({
+      userId: v.id("users"),
+      conversationId: v.optional(v.id("dmConversations")),
+      expiresAt: v.number(),
+      /**
+       * The auth session that entered the PIN. Grants are scoped to a session,
+       * so signing out (or signing in on another device) locks protected
+       * conversations again immediately.
+       */
+      sessionId: v.optional(v.id("authSessions")),
+    })
+      .index("by_user", ["userId"])
+      .index("by_user_conversation", ["userId", "conversationId"]),
+
+    /** One-time Secret Chats PIN reset codes (hashed, expiring, single use). */
+    pinResets: defineTable({
+      userId: v.id("users"),
+      email: v.string(),
+      codeHash: v.string(),
+      expiresAt: v.number(),
+      attempts: v.number(),
+    }).index("by_user", ["userId"]),
 
     typing: defineTable({
       scope: v.string(), // "dm:<id>" or "channel:<id>"

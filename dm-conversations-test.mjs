@@ -46,7 +46,7 @@ await expectOk("alice starts a direct conversation with bob", async () => {
 });
 await expectOk("alice sends a message", () => A.client.mutation(api.dms.sendMessage, { conversationId: directAB, body: "hey bob" }));
 await expectTrue("bob can read the history", async () => {
-  const m = await B.client.query(api.dms.messages, { conversationId: directAB });
+  const m = (await B.client.query(api.dms.messages, { conversationId: directAB })).messages;
   return m.some((x) => x.body === "hey bob");
 });
 await expectError("a non-participant cannot read the conversation", () => C.client.query(api.dms.messages, { conversationId: directAB }));
@@ -120,7 +120,7 @@ await expectOk("an administrator can remove a member", () => B.client.mutation(a
 await expectOk("a member can leave the group", () => B.client.mutation(api.dms.leaveGroup, { conversationId: groupId }));
 await expectTrue("group messages reach everyone still in the group", async () => {
   await A.client.mutation(api.dms.sendMessage, { conversationId: groupId, body: "who is still here" });
-  const m = await A.client.query(api.dms.messages, { conversationId: groupId });
+  const m = (await A.client.query(api.dms.messages, { conversationId: groupId })).messages;
   return m.some((x) => x.body === "who is still here");
 });
 await expectOk("group owner leaving hands ownership to a remaining member", async () => {
@@ -150,7 +150,7 @@ await expectTrue("a batch recipient cannot see who else received it", async () =
 await expectTrue("the batch message arrived in each recipient's history", async () => {
   const bList = await B.client.query(api.dms.listConversations, {});
   const convo = bList.find((c) => c.members.some((m) => m.userId === A.userId));
-  const msgs = await B.client.query(api.dms.messages, { conversationId: convo.conversationId });
+  const msgs = (await B.client.query(api.dms.messages, { conversationId: convo.conversationId })).messages;
   return msgs.some((m) => m.body.includes("new update"));
 });
 await expectError("a batch with no recipients is rejected", () => A.client.mutation(api.dms.sendBatch, { userIds: [], body: "hi" }));
