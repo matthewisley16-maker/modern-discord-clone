@@ -18,6 +18,7 @@ import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { useTyping, typingLabel } from "@/hooks/use-typing";
+import { normalizeDmMessages } from "@/lib/dm-messages";
 import { toast } from "sonner";
 import { AtSign, Check, CheckCheck, Copy, Download, FileText, Flag, Lock, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
 
@@ -57,7 +58,12 @@ export default function DmView({
   const messages = useQuery(api.dms.messages, { conversationId, search: search || undefined });
   // The server withholds every message while a locked conversation is locked,
   // so an empty `messageList` here is authoritative — not a UI decision.
-  const messageList = useMemo(() => messages?.messages ?? [], [messages]);
+  // Accept both the current `{ messages, ... }` shape and a legacy bare array
+  // so a build/backend mismatch can never crash the list with `x?.map`.
+  const messageList = useMemo(
+    () => normalizeDmMessages<NonNullable<typeof messages>["messages"][number]>(messages),
+    [messages],
+  );
   const unlockConversation = useAction(api.conversationPrivacy.unlockConversation);
   const finishPinReset = useAction(api.conversationPrivacy.finishPinReset);
   const pinState = useQuery(api.conversationPrivacy.pinState, {});

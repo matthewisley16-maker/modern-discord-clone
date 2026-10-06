@@ -209,8 +209,13 @@ export default function ServerRail({
 
   /**
    * Begin a possible drag. Nothing moves until the pointer travels past the
-   * threshold, so ordinary taps/clicks are untouched. Pointer capture keeps the
-   * gesture alive even when the finger/cursor leaves the original element.
+   * threshold, so ordinary taps/clicks are untouched.
+   *
+   * NOTE: capture is deliberately NOT taken here. `setPointerCapture` retargets
+   * the follow-up `click` to the capturing rail item, which would stop the
+   * community icon/name (a child element) from ever receiving its click. We
+   * only capture once a real drag starts, so a plain tap still opens the
+   * community while a drag keeps receiving pointer events.
    */
   function startDrag(e: React.PointerEvent, kind: "server" | "folder", id: string, fromFolder?: string) {
     if ((e.target as HTMLElement).closest(".fc-rail-item-menu")) return;
@@ -225,7 +230,6 @@ export default function ServerRail({
       x: e.clientX, y: e.clientY,
       started: false,
     };
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
   }
 
   /**
@@ -244,6 +248,9 @@ export default function ServerRail({
       justDraggedRef.current = true;
       setMenu(null);
       setDrag({ ...s });
+      // Capture only now that this is a genuine drag, so pointermove events
+      // keep flowing to this item even when the cursor/finger leaves it.
+      try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
     }
     e.preventDefault();
 
