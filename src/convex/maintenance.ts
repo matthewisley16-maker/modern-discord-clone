@@ -78,10 +78,12 @@ export const syntheticAudit = query({
     const me = await ctx.db.get(userId);
     if (me?.role !== "owner_admin" && me?.role !== "owner" && me?.role !== "admin") return null;
     const synthetic = await collectSynthetic(ctx);
+    const orphans = await collectOrphans(ctx);
     return {
       totalUsers: (await ctx.db.query("users").collect()).length,
       syntheticCount: synthetic.length,
       sample: synthetic.slice(0, 10).map((u) => u.username ?? ""),
+      orphanCount: countOrphans(orphans),
     };
   },
 });
@@ -226,5 +228,161 @@ export const purgeSyntheticUsers = internalMutation({
       deletedCount: batch.length,
       remainingSynthetic: synthetic.length - batch.length,
     };
+  },
+});
+
+/**
+ * Rows that reference a parent which no longer exists — leftover test-data
+ * debris from earlier runs that could not be reached by any real user.
+ *
+ * Only three kinds of parent are considered "gone": a user, a community, or a
+ * conversation. A row whose parent still resolves is never collected, so real
+ * data cannot be selected here.
+ */
+async function collectOrphans(ctx: QueryCtx | MutationCtx) {
+  const userIds = new Set((await ctx.db.query("users").collect()).map((u) => u._id as string));
+  const serverIds = new Set((await ctx.db.query("servers").collect()).map((s) => s._id as string));
+  const channelIds = new Set((await ctx.db.query("channels").collect()).map((c) => c._id as string));
+
+  const conversations = await ctx.db.query("dmConversations").collect();
+  const conversationIds = new Set(conversations.map((c) => c._id as string));
+  const dmMembers = await ctx.db.query("dmMembers").collect();
+  const memberCount = new Map<string, number>();
+  for (const member of dmMembers) {
+    const key = member.conversationId as string;
+    memberCount.set(key, (memberCount.get(key) ?? 0) + 1);
+  }
+  // A conversation with no members is unreachable by everyone.
+  const emptyConversations = conversations.filter((c) => (memberCount.get(c._id as string) ?? 0) === 0);
+  const emptyConversationIds = new Set(emptyConversations.map((c) => c._id as string));
+
+  const orphanCategories = (await ctx.db.query("channelCategories").collect()).filter(
+    (c) => !serverIds.has(c.serverId as string),
+  );
+  const orphanChannels = (await ctx.db.query("channels").collect()).filter(
+    (c) => !serverIds.has(c.serverId as string),
+  );
+
+  const messages = await ctx.db.query("messages").collect();
+  const messageIds = new Set(messages.map((m) => m._id as string));
+  const orphanMessages = messages.filter(
+    (m) => !channelIds.has(m.channelId as string) || !userIds.has(m.userId as string),
+  );
+  const orphanMessageIds = new Set(orphanMessages.map((m) => m._id as string));
+
+  const dmMessages = await ctx.db.query("dmMessages").collect();
+  const dmMessageIds = new Set(dmMessages.map((m) => m._id as string));
+  const orphanDmMessages = dmMessages.filter(
+    (m) =>
+      !conversationIds.has(m.conversationId as string) ||
+      emptyConversationIds.has(m.conversationId as string) ||
+      !userIds.has(m.userId as string),
+  );
+  const orphanDmMessageIds = new Set(orphanDmMessages.map((m) => m._id as string));
+
+  const orphanAttachments = (await ctx.db.query("attachments").collect()).filter((a) => {
+    const messageGone = a.messageId ? !messageIds.has(a.messageId as string) || orphanMessageIds.has(a.messageId as string) : true;
+    const dmMessageGone = a.dmMessageId ? !dmMessageIds.has(a.dmMessageId as string) || orphanDmMessageIds.has(a.dmMessageId as string) : true;
+    return messageGone && dmMessageGone;
+  });
+
+  const orphanReactions = (await ctx.db.query("reactions").collect()).filter(
+    (r) => !messageIds.has(r.messageId as string) || orphanMessageIds.has(r.messageId as string),
+  );
+  const orphanDmReactions = (await ctx.db.query("dmReactions").collect()).filter(
+    (r) => !dmMessageIds.has(r.messageId as string) || orphanDmMessageIds.has(r.messageId as string),
+  );
+  const orphanDmCallSignals = (await ctx.db.query("dmCallSignals").collect()).filter(
+    (s) => !conversationIds.has(s.conversationId as string) || emptyConversationIds.has(s.conversationId as string),
+  );
+  const orphanDmMembers = dmMembers.filter(
+    (m) => !conversationIds.has(m.conversationId as string) || !userIds.has(m.userId as string),
+  );
+
+  // "Delete for me" markers whose message no longer exists (or is about to go).
+  const goingMessageIds = new Set<string>([...orphanMessageIds, ...orphanDmMessageIds]);
+  const orphanVisibility = (await ctx.db.query("messageVisibility").collect()).filter(
+    (row) =>
+      goingMessageIds.has(row.messageId) ||
+      (!messageIds.has(row.messageId) && !dmMessageIds.has(row.messageId)),
+  );
+
+  return {
+    orphanCategories,
+    orphanChannels,
+    orphanMessages,
+    orphanDmMessages,
+    orphanAttachments,
+    orphanReactions,
+    orphanDmReactions,
+    orphanDmCallSignals,
+    orphanDmMembers,
+    orphanVisibility,
+    emptyConversations,
+  };
+}
+
+type Orphans = Awaited<ReturnType<typeof collectOrphans>>;
+
+function countOrphans(o: Orphans) {
+  return (
+    o.orphanCategories.length +
+    o.orphanChannels.length +
+    o.orphanMessages.length +
+    o.orphanDmMessages.length +
+    o.orphanAttachments.length +
+    o.orphanReactions.length +
+    o.orphanDmReactions.length +
+    o.orphanDmCallSignals.length +
+    o.orphanDmMembers.length +
+    o.orphanVisibility.length +
+    o.emptyConversations.length
+  );
+}
+
+/**
+ * Removes ONLY rows whose parent no longer exists (see `collectOrphans`). This
+ * never targets a row that still resolves to a live user, community, channel or
+ * conversation, so legitimate data is never affected. `dryRun` reports what
+ * would be removed without removing it.
+ */
+export const purgeOrphanedData = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, { dryRun }) => {
+    const o = await collectOrphans(ctx);
+    const summary = {
+      categories: o.orphanCategories.length,
+      channels: o.orphanChannels.length,
+      messages: o.orphanMessages.length,
+      emptyConversations: o.emptyConversations.length,
+      dmMessages: o.orphanDmMessages.length,
+      dmMembers: o.orphanDmMembers.length,
+      dmCallSignals: o.orphanDmCallSignals.length,
+      attachments: o.orphanAttachments.length,
+      reactions: o.orphanReactions.length,
+      dmReactions: o.orphanDmReactions.length,
+      visibility: o.orphanVisibility.length,
+    };
+
+    if (dryRun) return { dryRun: true, ...summary, remaining: countOrphans(o) };
+
+    // Children before parents, so nothing is left transiently orphaned.
+    for (const row of o.orphanAttachments) {
+      await deleteStoredFile(ctx, row.storageId);
+      await ctx.db.delete(row._id);
+    }
+    for (const row of o.orphanReactions) await ctx.db.delete(row._id);
+    for (const row of o.orphanDmReactions) await ctx.db.delete(row._id);
+    for (const row of o.orphanVisibility) await ctx.db.delete(row._id);
+    for (const row of o.orphanMessages) await ctx.db.delete(row._id);
+    for (const row of o.orphanDmMessages) await ctx.db.delete(row._id);
+    for (const row of o.orphanDmCallSignals) await ctx.db.delete(row._id);
+    for (const row of o.orphanDmMembers) await ctx.db.delete(row._id);
+    for (const row of o.orphanChannels) await ctx.db.delete(row._id);
+    for (const row of o.orphanCategories) await ctx.db.delete(row._id);
+    for (const row of o.emptyConversations) await ctx.db.delete(row._id);
+
+    const after = await collectOrphans(ctx);
+    return { dryRun: false, ...summary, remaining: countOrphans(after) };
   },
 });

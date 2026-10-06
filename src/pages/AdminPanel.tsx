@@ -115,6 +115,7 @@ export default function AdminPanel() {
   // decide whether to run the verified cleanup operation.
   const syntheticAudit = useQuery(api.maintenance.syntheticAudit, {});
   const syntheticCount = syntheticAudit?.syntheticCount ?? 0;
+  const orphanCount = syntheticAudit?.orphanCount ?? 0;
   // TOTAL USERS must reflect legitimate production accounts only, so detected
   // synthetic records are excluded from the displayed count.
   const legitimateUsers = stats?.users === undefined ? undefined : Math.max(0, stats.users - syntheticCount);
@@ -266,7 +267,7 @@ export default function AdminPanel() {
         </div>
 
         {/* Synthetic/test-data diagnostic (read-only) */}
-        {syntheticCount > 0 && (
+        {(syntheticCount > 0 || orphanCount > 0) && (
           <Card className="mt-4 border-amber-400/30 bg-amber-400/[0.06]">
             <CardContent className="flex items-start gap-3 py-4">
               <ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-300" />
@@ -288,6 +289,12 @@ export default function AdminPanel() {
                       </Badge>
                     ))}
                   </div>
+                )}
+                {orphanCount > 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {orphanCount} orphaned record{orphanCount === 1 ? "" : "s"} reference content that no
+                    longer exists (leftover from deleted test data) and are unreachable by real members.
+                  </p>
                 )}
               </div>
             </CardContent>
