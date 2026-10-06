@@ -633,9 +633,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-callwin-video.off, .fc-callwin-selfvideo.off { opacity: 0; }
 .fc-callwin-selfvideo { position: absolute; right: 8px; bottom: 8px; width: 88px; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px; border: 1px solid rgba(255,255,255,.25); background: #000; }
 .fc-callwin-selfav { position: absolute; right: 8px; bottom: 8px; width: 88px; aspect-ratio: 4 / 3; display: grid; place-items: center; border-radius: 8px; border: 1px solid rgba(255,255,255,.25); background: rgba(0,0,0,.45); }
-.fc-callwin-avbig { display: grid; place-items: center; }
-.fc-callwin-tag { position: absolute; left: 8px; bottom: 8px; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(0,0,0,.55); color: #e8e6f2; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fc-callwin-timer { position: absolute; right: 8px; top: 8px; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(0,0,0,.55); color: #c9c5da; }
+/* The labels sit OVER the video. They must never swallow the pointer, or the
+   video underneath can't be right-clicked into Picture-in-Picture. */
+.fc-callwin-avbig { display: grid; place-items: center; pointer-events: none; }
+.fc-callwin-tag { position: absolute; left: 8px; bottom: 8px; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(0,0,0,.55); color: #e8e6f2; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.fc-callwin-timer { position: absolute; right: 8px; top: 8px; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(0,0,0,.55); color: #c9c5da; pointer-events: none; }
 .fc-callwin-local { position: absolute; inset: 0; pointer-events: none; }
 .fc-callwin-compact-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
 .fc-callwin-time { margin-left: auto; font-size: 11px; color: #8b87a0; }

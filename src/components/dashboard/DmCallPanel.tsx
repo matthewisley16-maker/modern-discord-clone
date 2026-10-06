@@ -12,6 +12,11 @@ import "@/components/voice/screenShare.css";
 
 const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
+/** Dev-only diagnostics for the DM video path; never runs in production. */
+const VIDEO_DEBUG = (() => {
+  try { return Boolean(import.meta.env?.DEV); } catch { return false; }
+})();
+
 // Remembered across the session so the window reappears where the user put it.
 let savedPos: { x: number; y: number } | null = null;
 
@@ -86,6 +91,8 @@ export default function DmCallPanel({
   const [screenEnlarged, setScreenEnlarged] = useState(false);
   const [connection, setConnection] = useState<"connecting" | "connected" | "lost">("connecting");
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
+  // Mirrors `remoteHasVideo` for the dev diagnostics without re-creating timers.
+  const remoteHasVideoRef = useRef(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [view, setView] = useState<View>(minimized ? "compact" : "float");
@@ -127,6 +134,8 @@ export default function DmCallPanel({
   const remoteScreenIds = useRef<Set<string>>(new Set());
   const remoteScreenActive = useRef(false);
   const trackStreamIds = useRef<Map<string, string>>(new Map());
+  // Remote tracks already wired to media-state listeners (exactly once each).
+  const wiredRemoteTracks = useRef<WeakSet<MediaStreamTrack>>(new WeakSet());
   const screenStageRef = useRef<HTMLDivElement | null>(null);
 
   // Latest props/values in refs so the init effect never needs to rerun.
@@ -151,25 +160,41 @@ export default function DmCallPanel({
     return sendSignalRef.current({ conversationId, toUserId: to, kind, payload }).catch(() => {});
   }, [conversationId]);
 
+  /**
+   * Is the remote actually delivering a decodable video frame right now?
+   *
+   * A freshly received track reports `muted: true` until the first RTP packets
+   * arrive. Checking only `!t.muted` LATCHED this to "no video": the tile stayed
+   * behind the avatar placeholder forever even though the stream was attached
+   * and playing (which is exactly why Picture-in-Picture still worked). We now
+   * also accept real decoded frames reported by the element itself.
+   */
+  const remoteVideoIsLive = useCallback(() => {
+    const rs = remoteStreamRef.current;
+    if (!rs) return false;
+    if (rs.getVideoTracks().some((t) => t.readyState === "live" && !t.muted)) return true;
+    const el = remoteVideoRef.current;
+    return Boolean(el && el.videoWidth > 0 && el.videoHeight > 0 && rs.getVideoTracks().some((t) => t.readyState === "live"));
+  }, []);
+
   // ---- Recompute whether the remote is actually sending live video ----
   // Showing video is immediate; hiding it is debounced so a momentary mute
   // cannot make the remote tile flash between the camera and the avatar.
   const refreshRemoteVideo = useCallback(() => {
-    const rs = remoteStreamRef.current;
-    const live = Boolean(rs && rs.getVideoTracks().some((t) => t.readyState === "live" && !t.muted));
-    if (live) {
+    if (remoteVideoIsLive()) {
       if (hideRemoteTimer.current !== null) { clearTimeout(hideRemoteTimer.current); hideRemoteTimer.current = null; }
+      // The tile may have been hidden while frames were already flowing; make
+      // sure the element is actually playing before revealing it.
+      safePlay(remoteVideoRef.current);
       setRemoteHasVideo((prev) => (prev ? prev : true));
       return;
     }
     if (hideRemoteTimer.current !== null) return;
     hideRemoteTimer.current = window.setTimeout(() => {
       hideRemoteTimer.current = null;
-      const rs2 = remoteStreamRef.current;
-      const stillLive = Boolean(rs2 && rs2.getVideoTracks().some((t) => t.readyState === "live" && !t.muted));
-      if (!stillLive) setRemoteHasVideo(false);
+      if (!remoteVideoIsLive()) setRemoteHasVideo(false);
     }, 500);
-  }, []);
+  }, [remoteVideoIsLive]);
 
   /**
    * Route incoming tracks to either the participant's camera/audio stream or
@@ -185,6 +210,15 @@ export default function DmCallPanel({
     for (const r of pc.getReceivers()) {
       const t = r.track;
       if (!t) continue;
+      // React to the track actually starting/stopping media. `ontrack` fires
+      // while the track is still `muted`, so without these listeners a late
+      // remote camera never becomes visible.
+      if (!wiredRemoteTracks.current.has(t)) {
+        wiredRemoteTracks.current.add(t);
+        t.addEventListener("unmute", refreshRemoteVideo);
+        t.addEventListener("mute", refreshRemoteVideo);
+        t.addEventListener("ended", refreshRemoteVideo);
+      }
       const sid = trackStreamIds.current.get(t.id);
       const isScreen = Boolean(sid && remoteScreenIds.current.has(sid));
       const target = isScreen && scr ? scr : main;
@@ -206,6 +240,15 @@ export default function DmCallPanel({
     return () => clearInterval(t);
   }, [connection]);
 
+  // ---- Watchdog: keep re-checking for a late remote camera ----
+  // Bounded and self-cancelling: it stops the moment a live remote frame shows,
+  // so it cannot mask a genuine "camera off" state or run for the whole call.
+  useEffect(() => {
+    if (connection !== "connected" || remoteHasVideo) return;
+    const t = window.setInterval(refreshRemoteVideo, 1000);
+    return () => window.clearInterval(t);
+  }, [connection, remoteHasVideo, refreshRemoteVideo]);
+
   // ---- Speaker mute on the always-mounted remote audio sink ----
   useEffect(() => {
     if (audioEl.current) audioEl.current.muted = speakerMuted;
@@ -216,14 +259,51 @@ export default function DmCallPanel({
   // ---- Attach streams to the (permanent) media elements ----
   useEffect(() => {
     const el = localVideoRef.current;
-    if (el && el.srcObject !== localStream) { el.srcObject = localStream; safePlay(el); }
+    if (el && el.srcObject !== localStream) {
+      el.srcObject = localStream;
+      safePlay(el);
+      if (VIDEO_DEBUG) console.log("[DM VIDEO] local srcObject attached", { tracks: localStream?.getVideoTracks().length ?? 0 });
+    }
   }, [localStream]);
   useEffect(() => {
     const el = remoteVideoRef.current;
-    if (el && el.srcObject !== remoteStream) { el.srcObject = remoteStream; safePlay(el); }
+    if (el && el.srcObject !== remoteStream) {
+      el.srcObject = remoteStream;
+      safePlay(el);
+      if (VIDEO_DEBUG) console.log("[DM VIDEO] remote srcObject attached");
+    }
     const a = audioEl.current;
     if (a && a.srcObject !== remoteStream) { a.srcObject = remoteStream; safePlay(a); }
   }, [remoteStream]);
+  // Keep the dev-diagnostic mirror in sync (no work outside development).
+  useEffect(() => { if (VIDEO_DEBUG) remoteHasVideoRef.current = remoteHasVideo; }, [remoteHasVideo]);
+
+  // Dev-only: log the component lifecycle once per call. This is what proves
+  // the panel is NOT being remounted by DM message/navigation updates.
+  useEffect(() => {
+    if (!VIDEO_DEBUG) return;
+    console.log("[DM VIDEO] component mounted", { conversationId, media });
+    return () => console.log("[DM VIDEO] component unmounted", { conversationId });
+  }, [conversationId, media]);
+  // Dev-only: dump the live media state of both tiles so a black tile can be
+  // pinned to either a missing stream or a layout problem.
+  useEffect(() => {
+    if (!VIDEO_DEBUG) return;
+    const dump = () => {
+      const l = localVideoRef.current;
+      const r = remoteVideoRef.current;
+      const track = localStreamRef.current?.getVideoTracks()[0];
+      console.log("[DM VIDEO]", {
+        local: l && { readyState: l.readyState, videoW: l.videoWidth, videoH: l.videoHeight, clientW: l.clientWidth, clientH: l.clientHeight, paused: l.paused, hasStream: Boolean(l.srcObject) },
+        remote: r && { readyState: r.readyState, videoW: r.videoWidth, videoH: r.videoHeight, clientW: r.clientWidth, clientH: r.clientHeight, paused: r.paused, hasStream: Boolean(r.srcObject) },
+        localTrack: track && { state: track.readyState, muted: track.muted },
+        remoteHasVideo: remoteHasVideoRef.current,
+      });
+    };
+    dump();
+    const t = window.setInterval(dump, 2000);
+    return () => window.clearInterval(t);
+  }, []);
   // Local screen preview (muted) — the sharer's single preview, no duplicates.
   useEffect(() => {
     const el = localScreenRef.current;
@@ -314,7 +394,13 @@ export default function DmCallPanel({
       };
       pc.onconnectionstatechange = () => {
         const st = pc.connectionState;
-        if (st === "connected") { restartCount.current = 0; setConnection("connected"); }
+        if (st === "connected") {
+          restartCount.current = 0;
+          setConnection("connected");
+          // Tracks may have arrived before the connection finished forming.
+          classifyRemote();
+          refreshRemoteVideo();
+        }
         else if (st === "failed") {
           setConnection("lost");
           if (restartCount.current < 3) {
@@ -668,6 +754,9 @@ export default function DmCallPanel({
                 playsInline
                 muted
                 ref={remoteVideoRef}
+                onLoadedMetadata={refreshRemoteVideo}
+                onPlaying={refreshRemoteVideo}
+                onResize={refreshRemoteVideo}
               />
               {!remoteHasVideo && (
                 <span className="fc-callwin-avbig"><ProfileAvatar name={peerName} url={peerAvatarUrl} size={view === "full" ? 96 : 60} showPresence={false} /></span>
@@ -676,20 +765,34 @@ export default function DmCallPanel({
               <span className="fc-callwin-timer">{connection === "connected" ? fmtDuration(seconds) : label}</span>
             </div>
             <div className="fc-callwin-local">
-              {/* While sharing, this tile becomes the local screen preview (the
-                  camera keeps transmitting regardless). One preview, no dupes. */}
-              {screenOn ? (
+              {/* BOTH local previews stay mounted for the whole call and are only
+                  toggled with opacity. Swapping them in and out of the tree (as
+                  this used to do) remounted the <video> and dropped its
+                  `srcObject`, leaving the camera preview black until the call
+                  was rebuilt. The camera keeps transmitting while sharing. */}
+              <video
+                className={`fc-callwin-selfvideo ${cameraOn && !screenOn ? "" : "off"}`}
+                autoPlay
+                playsInline
+                muted
+                ref={localVideoRef}
+                onLoadedMetadata={() => safePlay(localVideoRef.current)}
+              />
+              <video
+                className={`fc-callwin-selfvideo fc-callwin-selfscreen ${screenOn ? "" : "off"}`}
+                autoPlay
+                playsInline
+                muted
+                ref={localScreenRef}
+              />
+              {cameraOn && !screenOn && <span className="fc-callwin-tag">You</span>}
+              {!cameraOn && !screenOn && (
+                <span className="fc-callwin-selfav"><ProfileAvatar name="You" size={28} showPresence={false} /></span>
+              )}
+              {screenOn && (
                 <>
-                  <video className="fc-callwin-selfvideo fc-callwin-selfscreen" autoPlay playsInline muted ref={localScreenRef} />
                   <span className="fc-callwin-selfshare"><MonitorUp size={12} /> Your screen</span>
                   <button className="fc-callwin-stopshare" onClick={() => void toggleScreen()}>Stop sharing</button>
-                </>
-              ) : (
-                <>
-                  <video className={`fc-callwin-selfvideo ${cameraOn ? "" : "off"}`} autoPlay playsInline muted ref={localVideoRef} />
-                  {cameraOn
-                    ? <span className="fc-callwin-tag">You</span>
-                    : <span className="fc-callwin-selfav"><ProfileAvatar name="You" size={28} showPresence={false} /></span>}
                 </>
               )}
             </div>
