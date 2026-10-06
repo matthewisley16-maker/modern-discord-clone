@@ -1130,7 +1130,7 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
    switcher. Purely additive — it does not change any existing rail styling.
 --------------------------------------------------------------------------- */
 .fc-rail-servers { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
-.fc-rail-item { position: relative; display: grid; place-items: center; }
+.fc-rail-item { position: relative; display: grid; place-items: center; touch-action: none; -webkit-user-select: none; user-select: none; }
 .fc-rail-item.drag-over::before { content: ""; position: absolute; left: -7px; right: -7px; top: -7px; bottom: -7px; border: 2px dashed #a78bfa; border-radius: 16px; pointer-events: none; }
 .fc-rail-item-menu { position: absolute; top: -6px; right: -8px; width: 18px; height: 18px; border-radius: 9px; background: #2a2836; color: #cfc7e6; font-size: 12px; line-height: 1; display: grid; place-items: center; opacity: 0; transition: opacity .12s; border: 1px solid rgba(255,255,255,.12); z-index: 6; }
 .fc-rail-item:hover .fc-rail-item-menu, .fc-rail-item:focus-within .fc-rail-item-menu { opacity: 1; }
@@ -1184,6 +1184,82 @@ html.fc-light .fc-servers-overflow-row:hover { background: rgba(0,0,0,.05); colo
 @media (hover: none) {
   .fc-rail-item-menu { opacity: 1; }
 }
+
+/* ---------- Server rail drag & drop (pointer/touch, not HTML5 DnD) ---------- */
+/* The item being dragged fades so the highlighted drop target reads clearly. */
+.fc-rail-item.is-dragged { opacity: .35; }
+.fc-rail-servers.is-dragging { cursor: grabbing; }
+/* "Drop onto a server to group them" affordance. */
+.fc-rail-item.drag-create-folder::before {
+  content: "";
+  position: absolute;
+  left: -8px; right: -8px; top: -8px; bottom: -8px;
+  border: 2px solid #a78bfa;
+  border-radius: 16px;
+  background: rgba(139,92,246,.16);
+  pointer-events: none;
+  z-index: 1;
+}
+.fc-rail-drop-hint {
+  position: absolute;
+  left: 56px;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: #8b5cf6;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  z-index: 8;
+  box-shadow: 0 8px 20px rgba(0,0,0,.45);
+  pointer-events: none;
+}
+/* Floating icon that follows the pointer while dragging. */
+.fc-rail-drag-ghost {
+  position: fixed;
+  z-index: 60;
+  width: 44px;
+  height: 44px;
+  margin-left: -22px;
+  margin-top: -22px;
+  border-radius: 14px;
+  background: #262335;
+  color: #e5e0ff;
+  font-size: 13px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 14px 34px rgba(0,0,0,.6);
+  outline: 2px solid rgba(167,139,250,.7);
+  pointer-events: none;
+  opacity: .95;
+}
+.fc-rail-drag-ghost img { width: 100%; height: 100%; object-fit: cover; border-radius: 14px; }
+/* Recognisable folder glyph + member count, distinct from a server icon. */
+.fc-rail-folder-glyph { color: #c4b5fd; }
+.fc-rail-folder-count {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #2a2836;
+  border: 1px solid rgba(255,255,255,.16);
+  color: #e5e0ff;
+  font-size: 10px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+/* A taller, tappable "move to the end / out of a folder" zone while dragging. */
+.fc-rail-drop-end.active { height: 22px; border: 1px dashed rgba(167,139,250,.55); border-radius: 10px; }
+.fc-rail-drop-end.drag-over { background: rgba(167,139,250,.4); }
+html.fc-light .fc-rail-drag-ghost { background: #e4e3ee; color: #2a2836; }
+html.fc-light .fc-rail-folder-count { background: #e4e3ee; color: #2a2836; }
 
 /* ---------------------------------------------------------------------------
    Server-level administration (Roles & permissions). Scoped to a single server

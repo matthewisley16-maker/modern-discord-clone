@@ -7,120 +7,30 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
-  Check, ChevronDown, FolderPlus, Hash, Plus, Search, X,
+  Check, ChevronDown, Folder, FolderOpen, FolderPlus, Hash, Plus, Search, X,
 } from "lucide-react";
+import {
+  cloneItems,
+  deleteFolderFromList,
+  groupServersIntoFolder,
+  insertFolderAtServer,
+  insertFolderRelative,
+  insertServerRelative,
+  moveBy,
+  moveByToggle,
+  moveIntoFolder,
+  newFolderId,
+  reorderWithinFolder,
+  withoutServer,
+  type RailFolder,
+  type RailItem,
+} from "@/lib/server-rail";
 
 export type RailCommunity = { _id: string; name: string; iconUrl?: string | null };
-
-type RailFolder = { id: string; name: string; color: string | null; collapsed: boolean; serverIds: string[] };
-type RailItem = { type: "folder"; folder: RailFolder } | { type: "server"; id: string };
 
 /** Above this many servers the rail also offers a searchable overflow switcher. */
 const OVERFLOW_THRESHOLD = 10;
 const FOLDER_COLORS = ["#8b5cf6", "#f0616d", "#3ba55d", "#faa61a", "#00a8fc", "#eb459e", "#5865f2", "#9b59b6"];
-
-// ---------------------------------------------------------------------------
-// Pure list helpers (operate on a clone so React state always changes).
-// ---------------------------------------------------------------------------
-
-function cloneItems(list: RailItem[]): RailItem[] {
-  return list.map((it) =>
-    it.type === "folder"
-      ? { type: "folder" as const, folder: { ...it.folder, serverIds: [...it.folder.serverIds] } }
-      : { type: "server" as const, id: it.id },
-  );
-}
-
-function withoutServer(list: RailItem[], serverId: string): RailItem[] {
-  const out: RailItem[] = [];
-  for (const it of list) {
-    if (it.type === "server") {
-      if (it.id !== serverId) out.push({ type: "server", id: it.id });
-    } else {
-      out.push({ type: "folder", folder: { ...it.folder, serverIds: it.folder.serverIds.filter((s) => s !== serverId) } });
-    }
-  }
-  return out;
-}
-
-function insertServerRelative(list: RailItem[], targetId: string, serverId: string, after: boolean): RailItem[] {
-  const idx = list.findIndex((it) => it.type === "server" && it.id === targetId);
-  const node: RailItem = { type: "server", id: serverId };
-  if (idx === -1) return [...list, node];
-  const at = after ? idx + 1 : idx;
-  return [...list.slice(0, at), node, ...list.slice(at)];
-}
-
-function insertFolderRelative(list: RailItem[], targetFolderId: string, moving: RailFolder, after: boolean): RailItem[] {
-  const stripped = list.filter((it) => !(it.type === "folder" && it.folder.id === moving.id));
-  const idx = stripped.findIndex((it) => it.type === "folder" && it.folder.id === targetFolderId);
-  const node: RailItem = { type: "folder", folder: { ...moving, serverIds: [...moving.serverIds] } };
-  if (idx === -1) return [...stripped, node];
-  const at = after ? idx + 1 : idx;
-  return [...stripped.slice(0, at), node, ...stripped.slice(at)];
-}
-
-function insertFolderAtServer(list: RailItem[], targetServerId: string, moving: RailFolder, after: boolean): RailItem[] {
-  const stripped = list.filter((it) => !(it.type === "folder" && it.folder.id === moving.id));
-  const idx = stripped.findIndex((it) => it.type === "server" && it.id === targetServerId);
-  const node: RailItem = { type: "folder", folder: { ...moving, serverIds: [...moving.serverIds] } };
-  if (idx === -1) return [...stripped, node];
-  const at = after ? idx + 1 : idx;
-  return [...stripped.slice(0, at), node, ...stripped.slice(at)];
-}
-
-function moveIntoFolder(list: RailItem[], folderId: string, serverId: string): RailItem[] {
-  return withoutServer(list, serverId).map((it) =>
-    it.type === "folder" && it.folder.id === folderId
-      ? { type: "folder", folder: { ...it.folder, collapsed: false, serverIds: [...it.folder.serverIds, serverId] } }
-      : it,
-  );
-}
-
-function reorderWithinFolder(list: RailItem[], folderId: string, serverId: string, targetServerId: string, after: boolean): RailItem[] {
-  return list.map((it) => {
-    if (it.type !== "folder" || it.folder.id !== folderId) return it;
-    const ids = it.folder.serverIds.filter((s) => s !== serverId);
-    const idx = ids.indexOf(targetServerId);
-    const at = idx === -1 ? ids.length : after ? idx + 1 : idx;
-    return { type: "folder", folder: { ...it.folder, serverIds: [...ids.slice(0, at), serverId, ...ids.slice(at)] } };
-  });
-}
-
-function moveBy(list: RailItem[], key: string, delta: number, inFolderId?: string): RailItem[] {
-  // Reorder inside a folder.
-  if (inFolderId) {
-    return list.map((it) => {
-      if (it.type !== "folder" || it.folder.id !== inFolderId) return it;
-      const ids = [...it.folder.serverIds];
-      const i = ids.indexOf(key);
-      const j = i + delta;
-      if (i < 0 || j < 0 || j >= ids.length) return it;
-      [ids[i], ids[j]] = [ids[j], ids[i]];
-      return { type: "folder", folder: { ...it.folder, serverIds: ids } };
-    });
-  }
-  // Reorder a top-level folder or server among the rail column.
-  const isFolder = key.startsWith("folder:");
-  const id = isFolder ? key.slice(7) : key;
-  const idx = list.findIndex((it) => (isFolder ? it.type === "folder" && it.folder.id === id : it.type === "server" && it.id === id));
-  const j = idx + delta;
-  if (idx < 0 || j < 0 || j >= list.length) return list;
-  const next = [...list];
-  [next[idx], next[j]] = [next[j], next[idx]];
-  return next;
-}
-
-function deleteFolderFromList(list: RailItem[], folderId: string): RailItem[] {
-  const released: string[] = [];
-  const out: RailItem[] = [];
-  for (const it of list) {
-    if (it.type === "folder" && it.folder.id === folderId) released.push(...it.folder.serverIds);
-    else out.push(it);
-  }
-  // Servers from the deleted folder are released back into the rail at the end.
-  return [...out, ...released.map((id): RailItem => ({ type: "server", id }))];
-}
 
 export default function ServerRail({
   communities,
@@ -139,8 +49,30 @@ export default function ServerRail({
   const saveOrg = useMutation(api.serverOrg.save);
   const touchRecent = useMutation(api.serverOrg.touchRecent);
 
-  const [dragging, setDragging] = useState<{ kind: "server" | "folder"; id: string; fromFolder?: string } | null>(null);
-  const [dragOver, setDragOver] = useState<string | null>(null);
+  /**
+   * Pointer-based drag state. `started` flips true only after the pointer has
+   * moved past a small threshold, so a plain tap still selects/opens the item.
+   * The ref is the live source of truth (handlers stay stable); the state copy
+   * exists purely so the UI can render ghost/highlight feedback.
+   */
+  type DragInfo = {
+    kind: "server" | "folder";
+    id: string;
+    fromFolder?: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    x: number;
+    y: number;
+    started: boolean;
+  };
+  type DropTarget = { key: string; position: "before" | "after" | "center" };
+
+  const dragRef = useRef<DragInfo | null>(null);
+  const targetRef = useRef<DropTarget | null>(null);
+  const justDraggedRef = useRef(false);
+  const [drag, setDrag] = useState<DragInfo | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [menu, setMenu] = useState<{ key: string; top: number; left: number } | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [overflowQuery, setOverflowQuery] = useState("");
@@ -273,67 +205,157 @@ export default function ServerRail({
     return folderList.find((f) => f.serverIds.includes(serverId));
   }
 
-  // ----- drag & drop -----
+  // ----- pointer drag & drop (works with mouse, touch and pen) -----
 
-  function dropOnServer(targetId: string, e: React.DragEvent, targetFolderId?: string) {
-    if (!dragging) return;
-    const after = e.clientY > (e.currentTarget as HTMLElement).getBoundingClientRect().top + (e.currentTarget as HTMLElement).getBoundingClientRect().height / 2;
-    if (dragging.kind === "folder") {
-      if (targetFolderId) return;
-      const folder = folderList.find((f) => f.id === dragging.id);
-      if (folder) apply(insertFolderAtServer(cloneItems(items), targetId, folder, after));
+  /**
+   * Begin a possible drag. Nothing moves until the pointer travels past the
+   * threshold, so ordinary taps/clicks are untouched. Pointer capture keeps the
+   * gesture alive even when the finger/cursor leaves the original element.
+   */
+  function startDrag(e: React.PointerEvent, kind: "server" | "folder", id: string, fromFolder?: string) {
+    if ((e.target as HTMLElement).closest(".fc-rail-item-menu")) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    // A fresh gesture always clears the post-drag click guard, so a tap that
+    // follows an aborted drag still opens the item.
+    justDraggedRef.current = false;
+    dragRef.current = {
+      kind, id, fromFolder,
+      pointerId: e.pointerId,
+      startX: e.clientX, startY: e.clientY,
+      x: e.clientX, y: e.clientY,
+      started: false,
+    };
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
+  }
+
+  /**
+   * Track the pointer. Once dragging, the element under the pointer decides the
+   * drop target: the middle of a server means "group into a folder", the top or
+   * bottom edge means "insert before/after".
+   */
+  function moveDrag(e: React.PointerEvent) {
+    const s = dragRef.current;
+    if (!s || e.pointerId !== s.pointerId) return;
+    s.x = e.clientX;
+    s.y = e.clientY;
+    if (!s.started) {
+      if (Math.hypot(s.x - s.startX, s.y - s.startY) < 5) return;
+      s.started = true;
+      justDraggedRef.current = true;
+      setMenu(null);
+      setDrag({ ...s });
+    }
+    e.preventDefault();
+
+    const under = document.elementFromPoint(s.x, s.y) as HTMLElement | null;
+    const el = under?.closest?.("[data-rail-key]") as HTMLElement | null;
+    const key = el?.dataset.railKey ?? null;
+    let next: DropTarget | null = null;
+    if (el && key) {
+      const rect = el.getBoundingClientRect();
+      const rel = rect.height > 0 ? (s.y - rect.top) / rect.height : 0.5;
+      let position: "before" | "after" | "center";
+      if (key.startsWith("server:") && s.kind === "server") {
+        position = rel < 0.3 ? "before" : rel > 0.7 ? "after" : "center";
+      } else {
+        position = rel > 0.5 ? "after" : "before";
+      }
+      next = { key, position };
+    }
+    const prev = targetRef.current;
+    targetRef.current = next;
+    if (prev?.key !== next?.key || prev?.position !== next?.position) setDropTarget(next);
+  }
+
+  /** Finish the gesture: apply the move if the pointer actually dragged. */
+  function endDrag(e: React.PointerEvent) {
+    const s = dragRef.current;
+    if (!s || e.pointerId !== s.pointerId) return;
+    dragRef.current = null;
+    const target = targetRef.current;
+    targetRef.current = null;
+    const started = s.started;
+    setDrag(null);
+    setDropTarget(null);
+    if (!started) return;
+    // Suppress the click that follows a real drag so opening a server or
+    // toggling a folder only happens on a deliberate tap. Each click guard
+    // clears the flag again, and the next pointerdown clears it too, so it can
+    // never swallow a genuine tap.
+    justDraggedRef.current = true;
+    if (target) performDrop(s, target);
+  }
+
+  function cancelDrag(e: React.PointerEvent) {
+    const s = dragRef.current;
+    if (!s || e.pointerId !== s.pointerId) return;
+    dragRef.current = null;
+    targetRef.current = null;
+    setDrag(null);
+    setDropTarget(null);
+  }
+
+  function performDrop(s: DragInfo, target: DropTarget) {
+    const list = cloneItems(items);
+    const { key, position } = target;
+    const after = position === "after";
+
+    if (s.kind === "folder") {
+      const moving = folderList.find((f) => f.id === s.id);
+      if (!moving) return;
+      if (key.startsWith("folder:") && key.slice(7) !== s.id) {
+        apply(insertFolderRelative(list, key.slice(7), moving, after));
+      } else if (key.startsWith("server:")) {
+        apply(insertFolderAtServer(list, key.slice(7), moving, after));
+      } else if (key === "end") {
+        apply([
+          ...list.filter((it) => !(it.type === "folder" && it.folder.id === s.id)),
+          { type: "folder", folder: moving },
+        ]);
+      }
       return;
     }
-    // server being dragged
-    if (dragging.id === targetId) return;
-    if (targetFolderId) {
-      apply(reorderWithinFolder(cloneItems(items), targetFolderId, dragging.id, targetId, after));
-    } else {
-      apply(insertServerRelative(withoutServer(cloneItems(items), dragging.id), targetId, dragging.id, after));
-    }
-  }
 
-  function dropOnFolder(folderId: string, e: React.DragEvent) {
-    if (!dragging) return;
-    if (dragging.kind === "server") {
-      if (findFolder(dragging.id)?.id === folderId) return;
-      apply(moveIntoFolder(cloneItems(items), folderId, dragging.id));
+    // Dragging a server.
+    if (key.startsWith("folder:")) {
+      const folderId = key.slice(7);
+      if (findFolder(s.id)?.id === folderId) return;
+      apply(moveIntoFolder(list, folderId, s.id));
       return;
     }
-    if (dragging.id === folderId) return;
-    const moving = folderList.find((f) => f.id === dragging.id);
-    if (!moving) return;
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const after = e.clientY > rect.top + rect.height / 2;
-    apply(insertFolderRelative(cloneItems(items), folderId, moving, after));
-  }
-
-  function dropOnEnd(e: React.DragEvent) {
-    e.preventDefault();
-    if (!dragging) return;
-    if (dragging.kind === "folder") {
-      const moving = folderList.find((f) => f.id === dragging.id);
-      if (moving) apply([...cloneItems(items).filter((it) => !(it.type === "folder" && it.folder.id === moving.id)), { type: "folder", folder: moving }]);
-    } else if (findFolder(dragging.id)) {
-      apply([...withoutServer(cloneItems(items), dragging.id), { type: "server", id: dragging.id }]);
+    if (key.startsWith("child:")) {
+      const targetServerId = key.slice(6);
+      if (targetServerId === s.id) return;
+      const folderId = findFolder(targetServerId)?.id;
+      if (!folderId) return;
+      if (findFolder(s.id)?.id === folderId) {
+        apply(reorderWithinFolder(list, folderId, s.id, targetServerId, after));
+      } else {
+        apply(reorderWithinFolder(moveIntoFolder(list, folderId, s.id), folderId, s.id, targetServerId, after));
+      }
+      return;
     }
-    setDragging(null);
-    setDragOver(null);
-  }
-
-  function dropOnRailBackground(e: React.DragEvent) {
-    if (!dragging || dragging.kind !== "server") return;
-    if (e.target !== e.currentTarget) return;
-    e.preventDefault();
-    if (findFolder(dragging.id)) apply([...withoutServer(cloneItems(items), dragging.id), { type: "server", id: dragging.id }]);
-    setDragging(null);
-    setDragOver(null);
+    if (key.startsWith("server:")) {
+      const targetServerId = key.slice(7);
+      if (targetServerId === s.id) return;
+      if (position === "center") {
+        // Drag a server directly onto another server → auto-create a folder
+        // holding both, using a sensible default name the user can rename.
+        apply(groupServersIntoFolder(list, s.id, targetServerId, "New Folder", FOLDER_COLORS[Math.floor(Math.random() * FOLDER_COLORS.length)]));
+      } else {
+        apply(insertServerRelative(withoutServer(list, s.id), targetServerId, s.id, after));
+      }
+      return;
+    }
+    if (key === "end") {
+      apply([...withoutServer(list, s.id), { type: "server", id: s.id }]);
+    }
   }
 
   // ----- folders -----
 
   function createFolder(name: string, color: string) {
-    const id = `f${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
+    const id = newFolderId();
     const folders = [...org?.folders?.map((f) => ({ ...f, color: f.color ?? null })) ?? [], { id, name, color, collapsed: false, serverIds: [] }];
     saveOrg({
       layout: [...(org?.layout ?? []), `folder:${id}`],
@@ -393,7 +415,7 @@ export default function ServerRail({
   }
 
   return (
-    <div className="fc-rail-servers" ref={railRef} onDragOver={(e) => dragging && e.preventDefault()} onDrop={dropOnRailBackground}>
+    <div className={`fc-rail-servers ${drag?.started ? "is-dragging" : ""}`} ref={railRef}>
       {items.map((it) => {
         if (it.type === "folder") {
           const folder = it.folder;
@@ -401,35 +423,28 @@ export default function ServerRail({
           return (
             <Fragment key={menuKey}>
               <div
-                className={`fc-rail-item ${dragOver === menuKey ? "drag-over" : ""}`}
-                draggable
-                onDragStart={() => setDragging({ kind: "folder", id: folder.id })}
-                onDragEnd={() => { setDragging(null); setDragOver(null); }}
-                onDragOver={(e) => { e.preventDefault(); setDragOver(menuKey); }}
-                onDragLeave={() => setDragOver((v) => (v === menuKey ? null : v))}
-                onDrop={(e) => { e.preventDefault(); dropOnFolder(folder.id, e); setDragging(null); setDragOver(null); }}
+                data-rail-key={menuKey}
+                className={`fc-rail-item ${dropTarget?.key === menuKey ? "drag-over" : ""} ${drag?.started && drag.kind === "folder" && drag.id === folder.id ? "is-dragged" : ""}`}
+                onPointerDown={(e) => startDrag(e, "folder", folder.id)}
+                onPointerMove={moveDrag}
+                onPointerUp={endDrag}
+                onPointerCancel={cancelDrag}
               >
                 <div
                   className={`fc-rail-folder ${folder.collapsed ? "" : "open"} ${communityId && folder.serverIds.includes(communityId) ? "contains-active" : ""}`}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${folder.name} folder, ${folder.collapsed ? "collapsed" : "expanded"}`}
+                  aria-label={`${folder.name} folder, ${folder.collapsed ? "collapsed" : "expanded"}, ${folder.serverIds.length} servers`}
                   aria-expanded={!folder.collapsed}
+                  title={folder.name}
                   style={{ borderColor: folder.color ?? undefined }}
-                  onClick={() => apply(moveByToggle(items, folder.id))}
+                  onClick={() => { if (justDraggedRef.current) { justDraggedRef.current = false; return; } apply(moveByToggle(items, folder.id)); }}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); apply(moveByToggle(items, folder.id)); } }}
                 >
-                  <span className="fc-rail-folder-grid">
-                    {folder.serverIds.slice(0, 4).map((sid) => {
-                      const s = byId.get(sid);
-                      return s ? (
-                        <span key={sid} className="fc-rail-folder-mini" style={{ background: folder.color ?? undefined }}>
-                          <ServerIcon server={s} />
-                        </span>
-                      ) : null;
-                    })}
-                    {folder.serverIds.length === 0 && <span className="fc-rail-folder-empty">＋</span>}
-                  </span>
+                  {folder.collapsed
+                    ? <Folder size={20} className="fc-rail-folder-glyph" style={{ color: folder.color ?? undefined }} />
+                    : <FolderOpen size={20} className="fc-rail-folder-glyph" style={{ color: folder.color ?? undefined }} />}
+                  {folder.serverIds.length > 0 && <span className="fc-rail-folder-count">{folder.serverIds.length}</span>}
                 </div>
                 <button
                   type="button"
@@ -446,13 +461,12 @@ export default function ServerRail({
                 return (
                   <div
                     key={key}
-                    className={`fc-rail-item fc-rail-item-nested ${dragOver === key ? "drag-over" : ""}`}
-                    draggable
-                    onDragStart={() => setDragging({ kind: "server", id: sid, fromFolder: folder.id })}
-                    onDragEnd={() => { setDragging(null); setDragOver(null); }}
-                    onDragOver={(e) => { e.preventDefault(); setDragOver(key); }}
-                    onDragLeave={() => setDragOver((v) => (v === key ? null : v))}
-                    onDrop={(e) => { e.preventDefault(); dropOnServer(sid, e, folder.id); setDragging(null); setDragOver(null); }}
+                    data-rail-key={key}
+                    className={`fc-rail-item fc-rail-item-nested ${dropTarget?.key === key ? "drag-over" : ""} ${drag?.started && drag.kind === "server" && drag.id === sid ? "is-dragged" : ""}`}
+                    onPointerDown={(e) => startDrag(e, "server", sid, folder.id)}
+                    onPointerMove={moveDrag}
+                    onPointerUp={endDrag}
+                    onPointerCancel={cancelDrag}
                   >
                     <div
                       className={`fc-rail-server ${communityId === sid ? "selected" : ""}`}
@@ -461,7 +475,7 @@ export default function ServerRail({
                       title={server.name}
                       aria-label={server.name}
                       aria-current={communityId === sid}
-                      onClick={() => handleOpen(sid)}
+                      onClick={() => { if (justDraggedRef.current) { justDraggedRef.current = false; return; } handleOpen(sid); }}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleOpen(sid); } }}
                     >
                       <ServerIcon server={server} />
@@ -483,16 +497,19 @@ export default function ServerRail({
         const server = byId.get(it.id);
         if (!server) return null;
         const menuKey = `server:${it.id}`;
+        const createFolderTarget = Boolean(
+          drag?.started && drag.kind === "server" &&
+          dropTarget?.key === menuKey && dropTarget.position === "center",
+        );
         return (
           <div
             key={menuKey}
-            className={`fc-rail-item ${dragOver === menuKey ? "drag-over" : ""}`}
-            draggable
-            onDragStart={() => setDragging({ kind: "server", id: it.id })}
-            onDragEnd={() => { setDragging(null); setDragOver(null); }}
-            onDragOver={(e) => { e.preventDefault(); setDragOver(menuKey); }}
-            onDragLeave={() => setDragOver((v) => (v === menuKey ? null : v))}
-            onDrop={(e) => { e.preventDefault(); dropOnServer(it.id, e); setDragging(null); setDragOver(null); }}
+            data-rail-key={menuKey}
+            className={`fc-rail-item ${dropTarget?.key === menuKey ? "drag-over" : ""} ${createFolderTarget ? "drag-create-folder" : ""} ${drag?.started && drag.kind === "server" && drag.id === it.id ? "is-dragged" : ""}`}
+            onPointerDown={(e) => startDrag(e, "server", it.id)}
+            onPointerMove={moveDrag}
+            onPointerUp={endDrag}
+            onPointerCancel={cancelDrag}
           >
             <div
               className={`fc-rail-server ${communityId === it.id ? "selected" : ""}`}
@@ -501,11 +518,12 @@ export default function ServerRail({
               title={server.name}
               aria-label={server.name}
               aria-current={communityId === it.id}
-              onClick={() => handleOpen(it.id)}
+              onClick={() => { if (justDraggedRef.current) { justDraggedRef.current = false; return; } handleOpen(it.id); }}
               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleOpen(it.id); } }}
             >
               <ServerIcon server={server} />
             </div>
+            {createFolderTarget && <span className="fc-rail-drop-hint" aria-hidden="true">Create Folder</span>}
             <button
               type="button"
               className="fc-rail-item-menu"
@@ -518,10 +536,8 @@ export default function ServerRail({
 
       {/* Drop here to take a server out of a folder / move to the end. */}
       <div
-        className={`fc-rail-drop-end ${dragging ? "active" : ""}`}
-        onDragOver={(e) => { if (dragging) { e.preventDefault(); setDragOver("end"); } }}
-        onDragLeave={() => setDragOver((v) => (v === "end" ? null : v))}
-        onDrop={dropOnEnd}
+        data-rail-key="end"
+        className={`fc-rail-drop-end ${drag?.started ? "active" : ""} ${dropTarget?.key === "end" ? "drag-over" : ""}`}
         aria-hidden="true"
       />
 
@@ -624,6 +640,20 @@ export default function ServerRail({
         </>
       )}
 
+      {/* Floating drag preview that follows the pointer. */}
+      {drag?.started && (() => {
+        const s = drag.kind === "server" ? byId.get(drag.id) : undefined;
+        return (
+          <div className="fc-rail-drag-ghost" style={{ left: drag.x, top: drag.y }} aria-hidden="true">
+            {drag.kind === "folder"
+              ? <Folder size={20} />
+              : s?.iconUrl
+                ? <img src={s.iconUrl} alt="" />
+                : <span>{initialsOf(s?.name ?? "")}</span>}
+          </div>
+        );
+      })()}
+
       {/* Shared context menu (fixed so the scrolling rail can't clip it). */}
       {menu && (
         <div className="fc-menu fc-rail-menu" role="menu" style={{ position: "fixed", top: menu.top, left: menu.left, right: "auto" }}>
@@ -691,13 +721,4 @@ function commitFolderDialog(
   if (!name) return;
   if (dialog.mode === "rename" && dialog.id) rename(dialog.id, name, dialog.color);
   else create(name, dialog.color);
-}
-
-/** Toggle a folder's collapsed flag inside the current item list. */
-function moveByToggle(items: RailItem[], folderId: string): RailItem[] {
-  return items.map((it) =>
-    it.type === "folder" && it.folder.id === folderId
-      ? { type: "folder" as const, folder: { ...it.folder, collapsed: !it.folder.collapsed } }
-      : it,
-  );
 }

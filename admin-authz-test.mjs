@@ -55,6 +55,19 @@ async function roleOf(client) {
   return me.role;
 }
 
+/** Fresh session for an existing account (same username + password). */
+async function signInPassword(username) {
+  const client = new ConvexHttpClient(URL);
+  const res = await client.action(api.auth.signIn, {
+    provider: "password",
+    params: { flow: "signIn", username, password: "Passw0rd123" },
+  });
+  const token = res?.tokens?.token;
+  if (!token) throw new Error("no token");
+  client.setAuth(token);
+  return client;
+}
+
 const OWNER_EMAIL = "matthewisley16@gmail.com"; // free at time of writing
 const CLAIMED_EMAIL = "matthew@icscomp.com";    // already owned by the real account
 
@@ -86,16 +99,37 @@ await expectError("normal user cannot change platform settings", () => A.client.
 // Phase 2 — the protected owner email auto-receives Owner Admin.
 // ---------------------------------------------------------------------------
 const O = await newUser("authz_owner", { email: OWNER_EMAIL, displayName: "Owner Test" });
-await expectTrue("protected owner email auto-becomes Owner Admin", async () => (await roleOf(O.client)) === "owner");
+await expectTrue("protected owner email auto-becomes Owner Admin (owner_admin)", async () => (await roleOf(O.client)) === "owner_admin");
+await expectTrue("owner account reports isOwner=true and isProtectedOwner=true", async () => {
+  const me = await O.client.query(api.users.me, {});
+  return me.role === "owner_admin" && me.isOwner === true && me.isAdmin === true && me.isProtectedOwner === true;
+});
 await expectTrue("owner can access the panel", async () => {
   const a = await O.client.query(api.admin.panelAccess, {});
-  return a.canAccess === true && a.isOwner === true && a.isProtectedOwner === true;
+  return a.canAccess === true && a.isOwner === true && a.isProtectedOwner === true && a.role === "owner_admin";
 });
 await expectTrue("owner sees real stats", async () => (await O.client.query(api.admin.stats, {})) !== null);
 await expectTrue("owner listUsers marks the owner account protected", async () => {
   const users = await O.client.query(api.admin.listUsers, { q: O.username });
   const row = users.find((u) => u.userId === O.userId);
-  return Boolean(row && row.role === "owner" && row.isProtectedOwner === true);
+  return Boolean(row && row.role === "owner_admin" && row.isProtectedOwner === true);
+});
+await expectTrue("owner-role filter matches owner_admin accounts", async () => {
+  const users = await O.client.query(api.admin.listUsers, { role: "owner" });
+  return users.some((u) => u.userId === O.userId);
+});
+await expectError("Owner Admin is not assignable through setUserRole", () => O.client.mutation(api.admin.setUserRole, { userId: A.userId, role: "owner_admin" }));
+
+// Signing in again (a fresh session) must keep the Owner Admin role: the
+// backend re-checks the authenticated email on the identity sync the app runs
+// on load, and no duplicate account is created.
+await expectTrue("signing in again keeps Owner Admin and creates no duplicate", async () => {
+  const again = await signInPassword(O.username);
+  await again.mutation(api.users.ensureIdentity, {});
+  const me = await again.query(api.users.me, {});
+  if (me.role !== "owner_admin" || me.isOwner !== true) return false;
+  const matches = await again.query(api.admin.listUsers, { q: OWNER_EMAIL });
+  return matches.filter((u) => u.email === OWNER_EMAIL).length === 1;
 });
 
 // Owner promotes A to admin, E to moderator.
@@ -113,12 +147,12 @@ await expectError("an Admin cannot demote a protected Owner Admin", () => A.clie
 await expectError("an Admin cannot ban a protected Owner Admin", () => A.client.mutation(api.admin.banUser, { userId: O.userId }));
 await expectError("an Admin cannot suspend a protected Owner Admin", () => A.client.mutation(api.admin.suspendUser, { userId: O.userId, durationMs: 60000 }));
 await expectError("an Admin cannot delete a protected Owner Admin", () => A.client.mutation(api.admin.deleteUser, { userId: O.userId }));
-await expectTrue("Owner Admin still holds the owner role after those attempts", async () => (await roleOf(O.client)) === "owner");
+await expectTrue("Owner Admin still holds the owner role after those attempts", async () => (await roleOf(O.client)) === "owner_admin");
 
 // ---------------------------------------------------------------------------
 // Phase 4 — hierarchy rules for normal admins.
 // ---------------------------------------------------------------------------
-await expectError("an Admin cannot change their own role", () => A.client.mutation(api.admin.setUserRole, { userId: A.userId, role: "owner" }));
+await expectError("an Admin cannot change their own role", () => A.client.mutation(api.admin.setUserRole, { userId: A.userId, role: "owner_admin" }));
 await expectError("an Admin cannot promote anyone else to Admin", () => A.client.mutation(api.admin.setUserRole, { userId: E.userId, role: "admin" }));
 
 // Owner promotes B to Admin: now A must not be able to manage a peer admin.
@@ -188,7 +222,7 @@ await expectTrue("discovery works again after restore", async () => (await A.cli
 // Phase 8 — a duplicate account with a protected email cannot hijack ownership.
 // ---------------------------------------------------------------------------
 const DUP = await newUser("authz_dup", { email: CLAIMED_EMAIL });
-await expectTrue("a duplicate account with a taken protected email does NOT become owner", async () => (await roleOf(DUP.client)) !== "owner");
+await expectTrue("a duplicate account with a taken protected email does NOT become owner", async () => (await roleOf(DUP.client)) !== "owner_admin" && (await roleOf(DUP.client)) !== "owner");
 await expectTrue("duplicate account cannot access the panel", async () => (await DUP.client.query(api.admin.panelAccess, {})).canAccess === false);
 await expectTrue("duplicate account cannot demote the real owner", async () => {
   // Even if it somehow had the email, it must not be able to touch the owner.

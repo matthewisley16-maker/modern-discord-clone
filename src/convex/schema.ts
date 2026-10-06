@@ -4,14 +4,16 @@ import { Infer, v } from "convex/values";
 import { gifValidator } from "./gif";
 
 // Account-level roles, ordered from highest to lowest:
-//   owner      -> "Owner Admin". Reserved ONLY for the protected owner accounts.
-//   admin      -> platform administrator (can manage users + moderators).
-//   moderator  -> can moderate, cannot manage administrators.
-//   user       -> normal account.
-//   member     -> legacy alias kept for backwards compatibility (= user level).
-// Only the three protected owner emails may ever hold the `owner` role; the
+//   owner_admin -> "Owner Admin". Reserved ONLY for the protected owner accounts.
+//   owner       -> legacy alias of owner_admin (pre-rename rows), same rank.
+//   admin       -> platform administrator (can manage users + moderators).
+//   moderator   -> can moderate, cannot manage administrators.
+//   user        -> normal account.
+//   member      -> legacy alias kept for backwards compatibility (= user level).
+// Only the three protected owner emails may ever hold an owner role; the
 // server enforces this (see lib.syncOwnerRole / admin.setUserRole).
 export const ROLES = {
+  OWNER_ADMIN: "owner_admin",
   OWNER: "owner",
   ADMIN: "admin",
   MODERATOR: "moderator",
@@ -20,6 +22,7 @@ export const ROLES = {
 } as const;
 
 export const roleValidator = v.union(
+  v.literal(ROLES.OWNER_ADMIN),
   v.literal(ROLES.OWNER),
   v.literal(ROLES.ADMIN),
   v.literal(ROLES.MODERATOR),

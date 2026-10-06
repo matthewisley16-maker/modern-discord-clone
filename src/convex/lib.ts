@@ -364,10 +364,21 @@ export const ROLE_RANK: Record<string, number> = {
   moderator: 1,
   admin: 2,
   owner: 3,
+  // Canonical Owner Admin value; `owner` is the legacy pre-rename alias kept so
+  // existing rows keep their authority. Both rank the same.
+  owner_admin: 3,
 };
+
+/** The canonical role assigned to the protected owner accounts. */
+export const OWNER_ADMIN_ROLE = "owner_admin";
 
 export function rankOf(role?: string | null): number {
   return ROLE_RANK[role ?? "user"] ?? 0;
+}
+
+/** True for any role that carries Owner Admin authority (owner_admin or legacy owner). */
+export function isOwnerRole(role?: string | null): boolean {
+  return rankOf(role) >= ROLE_RANK.owner;
 }
 
 /** The account role stored on the users table (defaults to "user"). */
@@ -395,16 +406,16 @@ export async function syncOwnerRole(ctx: MutationCtx, userId: Id<"users">) {
   const user = await ctx.db.get(userId);
   if (!user) return;
   const shouldBeOwner = isProtectedOwnerEmail(user.email);
-  if (shouldBeOwner && user.role !== "owner") {
+  if (shouldBeOwner && user.role !== OWNER_ADMIN_ROLE) {
     // Exactly one account per protected email may hold Owner Admin: if another
     // account already claimed this email, this duplicate is not promoted.
     const sameEmail = await ctx.db
       .query("users")
       .withIndex("email", (q) => q.eq("email", user.email))
       .collect();
-    const alreadyOwned = sameEmail.some((u) => u.role === "owner" && u._id !== userId);
-    if (!alreadyOwned) await ctx.db.patch(userId, { role: "owner" });
-  } else if (!shouldBeOwner && user.role === "owner") {
+    const alreadyOwned = sameEmail.some((u) => isOwnerRole(u.role) && u._id !== userId);
+    if (!alreadyOwned) await ctx.db.patch(userId, { role: OWNER_ADMIN_ROLE });
+  } else if (!shouldBeOwner && isOwnerRole(user.role)) {
     // Only the protected emails may hold Owner Admin; anything else is corrected.
     await ctx.db.patch(userId, { role: "user" });
   }

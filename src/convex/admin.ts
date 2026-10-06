@@ -8,8 +8,10 @@ import {
   auditAdmin,
   currentUserId,
   displayNameOf,
+  isOwnerRole,
   isProtectedOwnerEmail,
   platformSettingsOf,
+  PROTECTED_OWNER_EMAILS,
   rankOf,
   requirePanelAccess,
   ROLE_RANK,
@@ -24,12 +26,13 @@ import {
  * it never decides them. All failures throw `ConvexError` so the message
  * reaches the client instead of being redacted.
  *
- * Role hierarchy (rank):  owner (3) > admin (2) > moderator (1) > user/member (0)
- *   - `owner` is reserved for the three PROTECTED_OWNER_EMAILS accounts.
+ * Role hierarchy (rank):  owner_admin (3) > admin (2) > moderator (1) > user/member (0)
+ *   - Owner Admin is reserved for the three PROTECTED_OWNER_EMAILS accounts.
  *   - Admin can manage users + moderators; only Owner Admins manage admins.
  */
 
 const roleArg = v.union(
+  v.literal("owner_admin"),
   v.literal("owner"),
   v.literal("admin"),
   v.literal("moderator"),
@@ -74,7 +77,7 @@ async function assertCanManage(
   if (actorRank <= targetRank) {
     throw new ConvexError("You cannot act on an account with an equal or higher role.");
   }
-  if (actorRole !== "owner" && targetRank >= ROLE_RANK.admin) {
+  if (!isOwnerRole(actorRole) && targetRank >= ROLE_RANK.admin) {
     throw new ConvexError("Only Owner Admins can manage administrators.");
   }
   return { actor, actorRole, target, targetRole };
@@ -152,7 +155,7 @@ export const stats = query({
     const now = Date.now();
     return {
       users: users.length,
-      owners: users.filter((u) => u.role === "owner").length,
+      owners: users.filter((u) => isOwnerRole(u.role)).length,
       admins: users.filter((u) => u.role === "admin").length,
       moderators: users.filter((u) => u.role === "moderator").length,
       banned: users.filter((u) => u.banned).length,
@@ -209,7 +212,7 @@ export const listUsers = query({
 
     let filtered = rows;
     if (term) filtered = filtered.filter((r) => r.searchText.includes(term));
-    if (role) filtered = filtered.filter((r) => r.role === role);
+    if (role) filtered = filtered.filter((r) => (role === "owner" ? isOwnerRole(r.role) : r.role === role));
     return filtered
       .sort((a, b) => rankOf(b.role) - rankOf(a.role) || a.name.localeCompare(b.name))
       .slice(0, 200)
@@ -260,10 +263,10 @@ export const setUserRole = mutation({
     await requirePanelAccess(ctx, me);
     const { actorRole, target, targetRole } = await assertCanManage(ctx, me, userId);
 
-    if (role === "owner") {
+    if (isOwnerRole(role)) {
       throw new ConvexError("Owner Admin is reserved for the protected owner accounts.");
     }
-    if (actorRole !== "owner" && rankOf(role) >= ROLE_RANK.admin) {
+    if (!isOwnerRole(actorRole) && rankOf(role) >= ROLE_RANK.admin) {
       throw new ConvexError("Only Owner Admins can grant administrator access.");
     }
     if (targetRole === role) {
@@ -651,7 +654,7 @@ export const deleteCommunity = mutation({
   handler: async (ctx, { serverId }) => {
     const userId = await currentUserId(ctx);
     const role = await requirePanelAccess(ctx, userId);
-    if (role !== "owner") throw new ConvexError("Only Owner Admins can delete communities.");
+    if (!isOwnerRole(role)) throw new ConvexError("Only Owner Admins can delete communities.");
     const server = await ctx.db.get(serverId);
     if (!server) throw new ConvexError("Community not found.");
 
@@ -769,7 +772,7 @@ export const updatePlatformSettings = mutation({
   handler: async (ctx, args) => {
     const userId = await currentUserId(ctx);
     const role = await requirePanelAccess(ctx, userId);
-    if (role !== "owner") throw new ConvexError("Only Owner Admins can change platform-wide settings.");
+    if (!isOwnerRole(role)) throw new ConvexError("Only Owner Admins can change platform-wide settings.");
     const row = await platformSettingsOf(ctx);
     const patch: Record<string, unknown> = { updatedAt: Date.now(), updatedBy: userId };
     if (args.announcement !== undefined) patch.announcement = args.announcement.trim().slice(0, 280);
@@ -846,26 +849,57 @@ export const purgeTestCommunities = internalMutation({
 });
 
 /**
- * One-shot reconciliation: give the three protected owner emails their Owner
- * Admin role and clear the role from any account that should not hold it.
+ * One-shot reconciliation for the protected Owner Admin accounts.
+ *
+ * 1. Every protected email is looked up DIRECTLY through the email index, so an
+ *    existing account is UPDATED in place (never duplicated) no matter where it
+ *    sits in the users table. Exactly one account per email becomes Owner Admin.
+ * 2. Any account still holding an owner role without a protected email is
+ *    demoted back to `user`, so ownership can never be held by accident.
+ *
  * Run with:  npx convex run admin:syncOwners
  */
 export const syncOwners = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const users = await ctx.db.query("users").take(2000);
+    const results: Array<{ email: string; userId: string | null; action: string }> = [];
     let promoted = 0;
     let corrected = 0;
-    for (const u of users) {
-      const shouldBeOwner = isProtectedOwnerEmail(u.email);
-      if (shouldBeOwner && u.role !== "owner") {
-        await ctx.db.patch(u._id, { role: "owner" });
+
+    for (const email of PROTECTED_OWNER_EMAILS) {
+      const matches = await ctx.db
+        .query("users")
+        .withIndex("email", (q) => q.eq("email", email.trim().toLowerCase()))
+        .collect();
+      if (matches.length === 0) {
+        results.push({ email, userId: null, action: "no_account" });
+        continue;
+      }
+      // Deterministic choice: the oldest account for this email is the owner.
+      const ordered = [...matches].sort((a, b) => a._creationTime - b._creationTime);
+      const owner = ordered[0];
+      if (owner.role !== "owner_admin") {
+        await ctx.db.patch(owner._id, { role: "owner_admin" });
         promoted++;
-      } else if (!shouldBeOwner && u.role === "owner") {
+      }
+      for (const dup of ordered.slice(1)) {
+        if (isOwnerRole(dup.role)) {
+          await ctx.db.patch(dup._id, { role: "user" });
+          corrected++;
+        }
+      }
+      results.push({ email, userId: owner._id, action: owner.role === "owner_admin" ? "already_owner" : "promoted" });
+    }
+
+    // Nobody may hold an owner role without a protected email.
+    const users = await ctx.db.query("users").collect();
+    for (const u of users) {
+      if (!isProtectedOwnerEmail(u.email) && isOwnerRole(u.role)) {
         await ctx.db.patch(u._id, { role: "user" });
         corrected++;
       }
     }
-    return { promoted, corrected };
+
+    return { promoted, corrected, results };
   },
 });

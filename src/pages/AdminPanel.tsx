@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -18,9 +18,10 @@ import {
 } from "lucide-react";
 
 /** Mirrors the backend ROLE_RANK so the UI reflects — never decides — authority. */
-const RANK: Record<string, number> = { member: 0, user: 0, moderator: 1, admin: 2, owner: 3 };
+const RANK: Record<string, number> = { member: 0, user: 0, moderator: 1, admin: 2, owner: 3, owner_admin: 3 };
 
 const ROLE_LABEL: Record<string, string> = {
+  owner_admin: "Owner Admin",
   owner: "Owner Admin",
   admin: "Admin",
   moderator: "Moderator",
@@ -29,12 +30,16 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 const ROLE_BADGE: Record<string, string> = {
+  owner_admin: "border-amber-400/30 bg-amber-400/15 text-amber-300",
   owner: "border-amber-400/30 bg-amber-400/15 text-amber-300",
   admin: "border-violet-400/30 bg-violet-400/15 text-violet-200",
   moderator: "border-sky-400/30 bg-sky-400/15 text-sky-200",
   user: "border-white/10 bg-white/5 text-muted-foreground",
   member: "border-white/10 bg-white/5 text-muted-foreground",
 };
+
+/** Any role carrying Owner Admin authority (canonical value or legacy alias). */
+const isOwnerRole = (role?: string | null) => (RANK[role ?? "user"] ?? 0) >= 3;
 
 /** Reads a ConvexError's user-safe message (Batch 1 pattern). */
 function friendly(err: unknown, fallback: string): string {
@@ -52,7 +57,7 @@ function friendly(err: unknown, fallback: string): string {
 function RoleBadge({ role }: { role: string }) {
   return (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${ROLE_BADGE[role] ?? ROLE_BADGE.user}`}>
-      {role === "owner" && <Crown className="size-3" />}
+      {isOwnerRole(role) && <Crown className="size-3" />}
       {ROLE_LABEL[role] ?? role}
     </span>
   );
@@ -87,6 +92,14 @@ export default function AdminPanel() {
   const navigate = useNavigate();
   const access = useQuery(api.admin.panelAccess, {});
   const stats = useQuery(api.admin.stats, {});
+  // Re-run the server-side identity sync on entry so a protected Owner Admin
+  // who deep-links straight to /admin is recognised without a detour through
+  // the Dashboard first. The role itself is still decided entirely server-side.
+  const ensureIdentity = useMutation(api.users.ensureIdentity);
+  const [identityChecked, setIdentityChecked] = useState(false);
+  useEffect(() => {
+    ensureIdentity({}).catch(() => {}).finally(() => setIdentityChecked(true));
+  }, [ensureIdentity]);
   const [userQuery, setUserQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const users = useQuery(api.admin.listUsers, {
@@ -116,21 +129,22 @@ export default function AdminPanel() {
 
   const actorRole = access?.role ?? "user";
   const actorRank = RANK[actorRole] ?? 0;
+  const actorIsOwner = isOwnerRole(actorRole);
 
   /** Client mirror of the server authorization rules, used only to hide buttons. */
   const canManage = (u: AdminUser) =>
     !u.isProtectedOwner &&
     !u.isSelf &&
     actorRank > (RANK[u.role] ?? 0) &&
-    (actorRole === "owner" || (RANK[u.role] ?? 0) < RANK.admin);
+    (actorIsOwner || (RANK[u.role] ?? 0) < RANK.admin);
 
   const assignableRoles = useMemo(() => {
     const base = ["user", "moderator"];
-    if (actorRole === "owner") base.push("admin");
+    if (actorIsOwner) base.push("admin");
     return base;
-  }, [actorRole]);
+  }, [actorIsOwner]);
 
-  if (access === undefined) return null;
+  if (access === undefined || !identityChecked) return null;
 
   if (!access.canAccess) {
     return (
@@ -390,7 +404,7 @@ export default function AdminPanel() {
                               >
                                 Edit
                               </Button>
-                              {actorRole === "owner" ? (
+                              {actorIsOwner ? (
                                 <Button
                                   size="sm" variant="outline" className="text-destructive"
                                   disabled={busy}
@@ -470,7 +484,7 @@ export default function AdminPanel() {
               <CardHeader>
                 <CardTitle className="text-base">Platform settings</CardTitle>
                 <CardDescription>
-                  {actorRole === "owner"
+                  {actorIsOwner
                     ? "These switches affect everyone on FreeBuff and are enforced on the server."
                     : "Only Owner Admins can change platform-wide settings."}
                 </CardDescription>
@@ -480,7 +494,7 @@ export default function AdminPanel() {
                   <label className="text-sm font-medium">Announcement banner</label>
                   <textarea
                     value={draft.announcement}
-                    disabled={actorRole !== "owner"}
+                    disabled={!actorIsOwner}
                     onChange={(e) => setSettingsDraft({ ...draft, announcement: e.target.value })}
                     rows={3}
                     maxLength={280}
@@ -495,7 +509,7 @@ export default function AdminPanel() {
                   </div>
                   <Switch
                     checked={draft.newCommunitiesEnabled}
-                    disabled={actorRole !== "owner"}
+                    disabled={!actorIsOwner}
                     onCheckedChange={(v) => setSettingsDraft({ ...draft, newCommunitiesEnabled: v })}
                   />
                 </div>
@@ -506,11 +520,11 @@ export default function AdminPanel() {
                   </div>
                   <Switch
                     checked={draft.discoveryEnabled}
-                    disabled={actorRole !== "owner"}
+                    disabled={!actorIsOwner}
                     onCheckedChange={(v) => setSettingsDraft({ ...draft, discoveryEnabled: v })}
                   />
                 </div>
-                {actorRole === "owner" && (
+                {actorIsOwner && (
                   <Button
                     disabled={busy}
                     onClick={() => run(
