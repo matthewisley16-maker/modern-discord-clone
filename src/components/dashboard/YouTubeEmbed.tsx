@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { youtubeEmbedUrl, youtubeLinksIn, youtubeThumbnail, youtubeWatchUrl, type YouTubeRef } from "@/lib/youtube";
 
 /**
@@ -68,12 +69,24 @@ function YouTubeCard({ video }: { video: YouTubeRef }) {
 }
 
 /** Renders an embed for every YouTube link found in a message body. */
-export default function YouTubeEmbeds({ body }: { body: string }) {
+function YouTubeEmbedsInner({ body }: { body: string }) {
   const links = useMemo(() => youtubeLinksIn(body), [body]);
   if (links.length === 0) return null;
   return (
     <div className="fc-yt-list">
       {links.map((l) => <YouTubeCard key={l.ref.id} video={l.ref} />)}
     </div>
+  );
+}
+
+/**
+ * Isolated so a YouTube preview problem can never break the message list: the
+ * link itself still shows as text, and the chat keeps working.
+ */
+export default function YouTubeEmbeds({ body }: { body: string }) {
+  return (
+    <FeatureBoundary fallback={null}>
+      <YouTubeEmbedsInner body={body} />
+    </FeatureBoundary>
   );
 }

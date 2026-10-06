@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import { normalizeGiphy, type GifValue } from "@/convex/gif";
 import { ImageUp, Loader2, Search, X } from "lucide-react";
 import { toast } from "sonner";
+import { FeatureBoundary } from "@/components/ui/feature-boundary";
 
 const DEBOUNCE_MS = 350;
 const PAGE_SIZE = 12;
@@ -22,7 +23,7 @@ const PAGE_SIZE = 12;
  *   upload a `.gif` instead.
  * - Selecting a GIF only STAGES it; the composer sends on the next Send press.
  */
-export default function GifPicker({
+function GifPickerInner({
   onSelect,
   onClose,
   onUploadGif,
@@ -194,5 +195,38 @@ export default function GifPicker({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * The GIF picker is wrapped in its own error boundary. If GIPHY — or the query
+ * that supplies its API key — is unavailable or rate-limited, ONLY the picker
+ * shows a notice: the composer and the rest of Freecord keep working.
+ */
+export default function GifPicker(props: {
+  onSelect: (gif: GifValue) => void;
+  onClose: () => void;
+  onUploadGif?: (file: File) => void;
+}) {
+  return (
+    <FeatureBoundary
+      label="The GIF picker"
+      fallback={
+        <div className="fc-gif-picker" role="dialog" aria-label="GIF picker">
+          <div className="fc-gif-head">
+            <span className="fc-gif-title">GIFs</span>
+            <button type="button" className="fc-gif-close" aria-label="Close GIF picker" onClick={props.onClose}>
+              <X size={16} />
+            </button>
+          </div>
+          <div className="fc-gif-status fc-gif-unconfigured">
+            <p>GIFs aren&apos;t available right now.</p>
+            <p className="fc-gif-hint">You can still upload a .gif file instead.</p>
+          </div>
+        </div>
+      }
+    >
+      <GifPickerInner {...props} />
+    </FeatureBoundary>
   );
 }

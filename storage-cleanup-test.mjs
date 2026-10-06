@@ -362,7 +362,7 @@ await expectTrue("new channel message, reply, GIF and file work after cleanup", 
 await expectTrue("direct messages still work after cleanup", async () => {
   const convo = await A.client.mutation(api.dms.startDirect, { userId: B.userId });
   const id = await A.client.mutation(api.dms.sendMessage, { conversationId: convo, body: "dm after cleanup" });
-  const msgs = await A.client.query(api.dms.messages, { conversationId: convo });
+  const msgs = (await A.client.query(api.dms.messages, { conversationId: convo })).messages;
   if (!msgs.some((m) => m._id === id)) throw new Error("DM message missing");
   return true;
 });

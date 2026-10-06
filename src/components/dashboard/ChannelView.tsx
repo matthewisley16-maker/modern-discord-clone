@@ -162,8 +162,8 @@ export default function ChannelView({
       stopTyping();
       setDraft("");
     } catch (err) {
-      // A storage/usage-limit error is recoverable: cleanup runs in the
-      // background and the user just sees a short housekeeping notice.
+      // A storage/usage-limit error is recoverable: detached cleanup runs in
+      // the background and the composer shows a short, per-send retry notice.
       if (!handleStorageError(err, requestCleanup, (m) => toast.error(m))) {
         toast.error(err instanceof Error ? err.message : "Message failed to send.");
       }

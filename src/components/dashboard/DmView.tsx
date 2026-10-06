@@ -227,7 +227,8 @@ export default function DmView({
       stopTyping();
       setDraft("");
     } catch (err) {
-      // Recoverable storage/usage-limit failure: cleanup runs in the background.
+      // Recoverable storage/usage-limit failure: detached cleanup runs in the
+      // background; only this send shows a short retry notice.
       if (!handleStorageError(err, requestCleanup, (m) => toast.error(m))) {
         toast.error(err instanceof Error ? err.message : "Message failed to send.");
       }

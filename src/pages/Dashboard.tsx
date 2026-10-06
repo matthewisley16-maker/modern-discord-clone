@@ -24,11 +24,36 @@ import ServerRail from "@/components/dashboard/ServerRail";
 import NewMessageDialog from "@/components/dashboard/NewMessageDialog";
 import SecretChatsDialog, { ProtectConversationDialog } from "@/components/dashboard/SecretChats";
 import { Avatar, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
+import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
 import {
   AtSign, Bell, Compass, Hash, Home, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, Users, Volume2, X,
 } from "lucide-react";
+
+/**
+ * Admin Panel entry. Kept as its own component so the (optional) access query
+ * can never affect the dashboard: if it fails, the button simply isn't shown.
+ */
+function AdminPanelEntry({ onOpen }: { onOpen: () => void }) {
+  const access = useQuery(api.admin.panelAccess, {});
+  if (!access?.canAccess) return null;
+  return (
+    <button aria-label="Open Admin Panel" title="Admin Panel" onClick={onOpen}><ShieldCheck size={18} /></button>
+  );
+}
+
+/** Optional operator announcement — fails closed, never blocks the app. */
+function AnnouncementBanner() {
+  const announcement = useQuery(api.admin.platformBanner, {});
+  if (!announcement?.announcement) return null;
+  return (
+    <div role="status" className="mx-3 mt-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 sm:mx-4">
+      <strong className="mr-1 font-semibold">Announcement:</strong>
+      {announcement.announcement}
+    </div>
+  );
+}
 
 type Section = "home" | "dms" | "discover" | "search" | "community";
 type Modal = "create" | "join" | "channel" | "category" | "invite" | "createCommunity" | null;
@@ -49,9 +74,8 @@ export default function Dashboard() {
   const heartbeat = useMutation(api.profiles.heartbeat);
   // Guarantees every account has a unique username AND a display name (email-only, legacy, etc.).
   const ensureIdentity = useMutation(api.users.ensureIdentity);
-  const panelAccess = useQuery(api.admin.panelAccess, {});
-  // Operator announcement set from the Admin Panel's platform settings.
-  const announcement = useQuery(api.admin.platformBanner, {});
+  // Admin access + the operator announcement are loaded in their own
+  // boundary-wrapped components below, so a failure there can't blank the app.
   const disconnect = useMutation(api.profiles.disconnect);
   const appearance = useQuery(api.profiles.getAppearance, {});
   const createChannelFull = useMutation(api.voice.createChannelFull);
@@ -608,13 +632,15 @@ export default function Dashboard() {
 
         <div className="fc-rail-rule" />
         {/* Server rail: drag-and-drop ordering, folders, and the overflow switcher. */}
-        <ServerRail
-          communities={(communities ?? []) as { _id: string; name: string; iconUrl?: string | null }[]}
-          communityId={section === "community" ? communityId : null}
-          onOpen={(id) => openCommunity(id)}
-          onCreate={() => openModal("createCommunity")}
-          onJoin={() => openModal("join")}
-        />
+        <FeatureBoundary label="Communities" fallback={null}>
+          <ServerRail
+            communities={(communities ?? []) as { _id: string; name: string; iconUrl?: string | null }[]}
+            communityId={section === "community" ? communityId : null}
+            onOpen={(id) => openCommunity(id)}
+            onCreate={() => openModal("createCommunity")}
+            onJoin={() => openModal("join")}
+          />
+        </FeatureBoundary>
 
         <button className="fc-rail-btn bottom" title="Sign out" aria-label="Sign out" onClick={async () => { await signOut(); navigate("/"); }}>
           <LogOut size={19} />
@@ -839,9 +865,9 @@ export default function Dashboard() {
             <option value="dnd">Do Not Disturb</option>
             <option value="invisible">Invisible</option>
           </select>
-          {panelAccess?.canAccess && (
-            <button aria-label="Open Admin Panel" title="Admin Panel" onClick={() => navigate("/admin")}><ShieldCheck size={18} /></button>
-          )}
+          <FeatureBoundary fallback={null}>
+            <AdminPanelEntry onOpen={() => navigate("/admin")} />
+          </FeatureBoundary>
           <button aria-label="Open settings" onClick={() => setSettingsOpen(true)}><Settings size={18} /></button>
         </div>
       </aside>
@@ -868,12 +894,9 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {announcement?.announcement && (
-          <div role="status" className="mx-3 mt-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 sm:mx-4">
-            <strong className="mr-1 font-semibold">Announcement:</strong>
-            {announcement.announcement}
-          </div>
-        )}
+        <FeatureBoundary fallback={null}>
+          <AnnouncementBanner />
+        </FeatureBoundary>
 
         {notifOpen && (
           <div className="fc-notif-panel">
@@ -914,6 +937,8 @@ export default function Dashboard() {
 
         <div className="fc-main-body">
           <div className="fc-main-content">
+            {/* One failing view shows its own error; the sidebar and shell stay usable. */}
+            <FeatureBoundary key={navKey} label="This view" block>
             {section === "home" && <HomeView onOpenProfile={setProfileUserId} onMessage={openConversation} onDiscover={() => setSection("discover")} onCall={callUser} />}
             {section === "discover" && <DiscoverView onOpenCommunity={openCommunity} onCreate={() => openModal("createCommunity")} onJoinByCode={() => openModal("join")} />}
             {section === "search" && <SearchView query={searchQuery} onOpenProfile={setProfileUserId} onOpenCommunity={openCommunity} />}
@@ -950,6 +975,7 @@ export default function Dashboard() {
             {section === "community" && details && !channel && (
               <div className="fc-scroll-view"><div className="fc-empty"><h3>No text channels yet.</h3><p>Create one to start talking.</p></div></div>
             )}
+            </FeatureBoundary>
           </div>            {section === "community" && details && (
             <aside className="fc-members" aria-label="Community members">
               <div className="fc-members-head">MEMBERS — {details.members.length}</div>
@@ -969,81 +995,101 @@ export default function Dashboard() {
 
       {/* ---------- Overlays ---------- */}
       {profileUserId && !fullProfileUserId && (
-        <ProfilePopup
-          userId={profileUserId}
-          serverId={section === "community" ? communityId ?? undefined : undefined}
-          onClose={() => setProfileUserId(null)}
-          onMessage={(id) => { openConversation(id as Id<"dmConversations">); setProfileUserId(null); }}
-          onViewFull={(id) => { setFullProfileUserId(id); setProfileUserId(null); }}
-          onCall={callUser}
-        />
+        <FeatureBoundary fallback={null}>
+          <ProfilePopup
+            userId={profileUserId}
+            serverId={section === "community" ? communityId ?? undefined : undefined}
+            onClose={() => setProfileUserId(null)}
+            onMessage={(id) => { openConversation(id as Id<"dmConversations">); setProfileUserId(null); }}
+            onViewFull={(id) => { setFullProfileUserId(id); setProfileUserId(null); }}
+            onCall={callUser}
+          />
+        </FeatureBoundary>
       )}
       {fullProfileUserId && (
         <div className="fc-profile-page-overlay">
-          <FullProfile
-            userId={fullProfileUserId}
-            onBack={() => setFullProfileUserId(null)}
-            onMessage={(id) => { openConversation(id as Id<"dmConversations">); setFullProfileUserId(null); }}
-            onOpenProfile={(id) => setFullProfileUserId(id)}
-            onCall={callUser}
-          />
+          <FeatureBoundary fallback={null}>
+            <FullProfile
+              userId={fullProfileUserId}
+              onBack={() => setFullProfileUserId(null)}
+              onMessage={(id) => { openConversation(id as Id<"dmConversations">); setFullProfileUserId(null); }}
+              onOpenProfile={(id) => setFullProfileUserId(id)}
+              onCall={callUser}
+            />
+          </FeatureBoundary>
         </div>
       )}
       {settingsOpen && (
-        <SettingsPanel
-          onClose={() => setSettingsOpen(false)}
-          onEditProfile={() => { setSettingsOpen(false); setProfileEditorOpen(true); }}
-        />
+        <FeatureBoundary label="Settings" fallback={null}>
+          <SettingsPanel
+            onClose={() => setSettingsOpen(false)}
+            onEditProfile={() => { setSettingsOpen(false); setProfileEditorOpen(true); }}
+          />
+        </FeatureBoundary>
       )}
-      {profileEditorOpen && <ProfileEditor onClose={() => setProfileEditorOpen(false)} />}
-      <NewMessageDialog open={newMessageOpen} onClose={() => setNewMessageOpen(false)} onOpenConversation={(id) => { setNewMessageOpen(false); openConversation(id); }} />
+      {profileEditorOpen && (
+        <FeatureBoundary label="The profile editor" fallback={null}>
+          <ProfileEditor onClose={() => setProfileEditorOpen(false)} />
+        </FeatureBoundary>
+      )}
+      <FeatureBoundary label="New message" fallback={null}>
+        <NewMessageDialog open={newMessageOpen} onClose={() => setNewMessageOpen(false)} onOpenConversation={(id) => { setNewMessageOpen(false); openConversation(id); }} />
+      </FeatureBoundary>
 
       {/* Locked & Hidden Conversations */}
-      <ProtectConversationDialog
-        open={protectTarget !== null}
-        conversationId={protectTarget?.id ?? null}
-        conversationName={protectTarget?.name ?? ""}
-        onClose={() => setProtectTarget(null)}
-      />
-      <SecretChatsDialog
-        open={secretOpen}
-        onClose={() => setSecretOpen(false)}
-        onOpenConversation={(id) => { setSecretOpen(false); openConversation(id); }}
-      />
-      {communitySettingsOpen && communityId && (
-        <CommunitySettings
-          serverId={communityId}
-          onClose={() => setCommunitySettingsOpen(false)}
-          onLeft={() => { setCommunitySettingsOpen(false); setCommunityId(null); setSection("home"); }}
+      <FeatureBoundary label="Locked chats" fallback={null}>
+        <ProtectConversationDialog
+          open={protectTarget !== null}
+          conversationId={protectTarget?.id ?? null}
+          conversationName={protectTarget?.name ?? ""}
+          onClose={() => setProtectTarget(null)}
         />
+        <SecretChatsDialog
+          open={secretOpen}
+          onClose={() => setSecretOpen(false)}
+          onOpenConversation={(id) => { setSecretOpen(false); openConversation(id); }}
+        />
+      </FeatureBoundary>
+      {communitySettingsOpen && communityId && (
+        <FeatureBoundary label="Community settings" fallback={null}>
+          <CommunitySettings
+            serverId={communityId}
+            onClose={() => setCommunitySettingsOpen(false)}
+            onLeft={() => { setCommunitySettingsOpen(false); setCommunityId(null); setSection("home"); }}
+          />
+        </FeatureBoundary>
       )}
 
       {dmCall && me?.userId && (
-        <DmCallPanel
-          conversationId={dmCall.conversationId}
-          peerId={dmCall.peerId}
-          peerName={dmCall.name}
-          peerUsername={dmCall.username}
-          myUserId={me.userId}
-          media={dmCall.media}
-          minimized={callMinimized}
-          onMinimize={() => setCallMinimized(true)}
-          onExpand={() => setCallMinimized(false)}
-          onLeave={endDmCall}
-        />
+        <FeatureBoundary label="The call" fallback={null}>
+          <DmCallPanel
+            conversationId={dmCall.conversationId}
+            peerId={dmCall.peerId}
+            peerName={dmCall.name}
+            peerUsername={dmCall.username}
+            myUserId={me.userId}
+            media={dmCall.media}
+            minimized={callMinimized}
+            onMinimize={() => setCallMinimized(true)}
+            onExpand={() => setCallMinimized(false)}
+            onLeave={endDmCall}
+          />
+        </FeatureBoundary>
       )}
 
       {inCall && (
-        <VoicePanel
-          channelId={inCall.channelId}
-          channelName={inCall.name}
-          myUserId={me?.userId ?? ""}
-          onOpenProfile={setProfileUserId}
-          minimized={callMinimized}
-          onMinimize={() => setCallMinimized(true)}
-          onExpand={() => setCallMinimized(false)}
-          onLeave={async () => { try { await leaveVoiceSession({}); } catch { /* already left */ } setInCall(null); setCallMinimized(false); }}
-        />
+        <FeatureBoundary label="The call" fallback={null}>
+          <VoicePanel
+            channelId={inCall.channelId}
+            channelName={inCall.name}
+            myUserId={me?.userId ?? ""}
+            onOpenProfile={setProfileUserId}
+            minimized={callMinimized}
+            onMinimize={() => setCallMinimized(true)}
+            onExpand={() => setCallMinimized(false)}
+            onLeave={async () => { try { await leaveVoiceSession({}); } catch { /* already left */ } setInCall(null); setCallMinimized(false); }}
+          />
+        </FeatureBoundary>
       )}
 
       {/* ---------- Incoming / outgoing call ---------- */}

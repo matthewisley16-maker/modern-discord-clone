@@ -133,14 +133,14 @@ await expectOk("GIF-only DM message is created", async () => {
   dmGifId = await A.client.mutation(api.dms.sendMessage, { conversationId: dmId, body: "", gif: GIF });
 });
 await expectOk("B receives the GIF DM (realtime read path)", async () => {
-  const msgs = await B.client.query(api.dms.messages, { conversationId: dmId });
+  const msgs = (await B.client.query(api.dms.messages, { conversationId: dmId })).messages;
   const m = msgs.find((x) => x._id === dmGifId);
   if (!m?.gif || m.gif.url !== GIF.url) throw new Error("gif dm missing");
 });
 await expectOk("GIF DM supports reactions + replies", async () => {
   await B.client.mutation(api.dms.toggleReaction, { messageId: dmGifId, emoji: "❤️" });
   await B.client.mutation(api.dms.sendMessage, { conversationId: dmId, body: "nice", replyToId: dmGifId });
-  const msgs = await A.client.query(api.dms.messages, { conversationId: dmId });
+  const msgs = (await A.client.query(api.dms.messages, { conversationId: dmId })).messages;
   const m = msgs.find((x) => x._id === dmGifId);
   if (!m.reactions.some((r) => r.emoji === "❤️")) throw new Error("dm reaction missing");
   if (!msgs.some((x) => x.reply && x.reply._id === dmGifId)) throw new Error("dm reply missing");

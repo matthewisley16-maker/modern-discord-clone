@@ -28,6 +28,20 @@ import type { MutationCtx } from "./_generated/server";
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 
+/**
+ * Bounds for the AUTOMATIC retention sweep.
+ *
+ * Each scheduled run does a small, bounded amount of work (a few tiny batches)
+ * so it can never approach Convex's per-transaction read/write limits, then —
+ * only if it filled a batch — schedules the next run. The chain length is
+ * capped so a single sweep can never recurse without bound; when the cap is
+ * reached the periodic cron tick simply continues later.
+ */
+const SWEEP_MAX_BATCHES = 5; // batches deleted per scheduled run
+const SWEEP_MAX_CHAIN = 50; // consecutive scheduled runs in one sweep
+const SWEEP_CHAIN_DELAY_MS = 800; // gap between chained runs
+const DISPOSABLE_SCAN_LIMIT = 500; // rows examined per disposable table
+
 export const STORAGE_DEFAULTS = {
   /** Recent messages are protected from auto-cleanup for this long. */
   retentionMs: 30 * DAY,
@@ -354,21 +368,23 @@ async function pruneDisposable(ctx: MutationCtx, cfg: StorageConfig): Promise<nu
   const now = Date.now();
   let removed = 0;
 
-  const typing = await ctx.db.query("typing").take(cfg.usageScanCap);
+  // Bounded per table: never a full-table scan and never an unbounded delete
+  // loop inside one transaction. Leftovers are picked up by the next run.
+  const typing = await ctx.db.query("typing").take(DISPOSABLE_SCAN_LIMIT);
   for (const t of typing) {
     if (now - t.at > cfg.staleTypingMs) {
       await ctx.db.delete(t._id);
       removed++;
     }
   }
-  const voiceSignals = await ctx.db.query("voiceSignals").take(cfg.usageScanCap);
+  const voiceSignals = await ctx.db.query("voiceSignals").take(DISPOSABLE_SCAN_LIMIT);
   for (const s of voiceSignals) {
     if (now - s._creationTime > cfg.staleSignalMs) {
       await ctx.db.delete(s._id);
       removed++;
     }
   }
-  const dmSignals = await ctx.db.query("dmCallSignals").take(cfg.usageScanCap);
+  const dmSignals = await ctx.db.query("dmCallSignals").take(DISPOSABLE_SCAN_LIMIT);
   for (const s of dmSignals) {
     if (now - s._creationTime > cfg.staleSignalMs) {
       await ctx.db.delete(s._id);
@@ -388,7 +404,15 @@ async function getState(ctx: MutationCtx, key: string) {
   return ctx.db.query("storageState").withIndex("by_key", (q) => q.eq("key", key)).unique();
 }
 
-/** Try to take the single cleanup lock. Returns false when another run holds it. */
+/**
+ * Take the single cleanup lock. Returns false when ANOTHER job holds it.
+ *
+ * Stale locks recover automatically: a lock whose `lockedUntil` has passed is
+ * simply taken over, so a crashed/timed-out cleanup can never permanently lock
+ * the app. Re-entrant for the same `jobId` so one sweep can continue across its
+ * own chained runs without releasing the lock (and without a duplicate sweep
+ * sneaking in between runs).
+ */
 async function acquireLock(ctx: MutationCtx, cfg: StorageConfig, jobId: string): Promise<boolean> {
   const key = stateKey(cfg);
   const now = Date.now();
@@ -397,7 +421,14 @@ async function acquireLock(ctx: MutationCtx, cfg: StorageConfig, jobId: string):
     await ctx.db.insert("storageState", { key, lockedUntil: now + cfg.lockMs, lockedBy: jobId, consecutiveErrors: 0 });
     return true;
   }
+  // Our own sweep continuing — refresh the lock and carry on.
+  if (state.lockedBy === jobId) {
+    await ctx.db.patch(state._id, { lockedUntil: now + cfg.lockMs });
+    return true;
+  }
+  // Someone else is mid-run and their lock has not expired.
   if (state.lockedUntil && state.lockedUntil > now) return false;
+  // No active lock (never set, released, or stale) → take it over.
   await ctx.db.patch(state._id, { lockedUntil: now + cfg.lockMs, lockedBy: jobId });
   return true;
 }
@@ -411,8 +442,8 @@ async function releaseLock(ctx: MutationCtx, cfg: StorageConfig, jobId: string):
 }
 
 export type CleanupSummary = {
-  statusBefore: CleanupStatus;
-  statusAfter: CleanupStatus;
+  statusBefore?: CleanupStatus;
+  statusAfter?: CleanupStatus;
   batches: number;
   deleted: number;
   examined: number;
@@ -519,7 +550,7 @@ async function recordRun(ctx: MutationCtx, cfg: StorageConfig, summary: CleanupS
   const state = await getState(ctx, key);
   const patch = {
     lastRunAt: Date.now(),
-    lastStatus: summary.statusAfter,
+    lastStatus: summary.statusAfter ?? state?.lastStatus ?? "normal",
     lastDeleted: summary.deleted,
     totalDeleted: (state?.totalDeleted ?? 0) + summary.deleted,
     batchesRun: summary.batches,
@@ -542,6 +573,85 @@ async function recordError(ctx: MutationCtx, cfg: StorageConfig, error: unknown)
   else await ctx.db.insert("storageState", { key, ...patch });
 }
 
+// ---------------- Retention sweep (automatic, safe) ----------------
+
+/**
+ * Delete up to `size` of the OLDEST eligible messages, oldest-first.
+ *
+ * Uses the built-in `_creationTime` ordering (an indexed, bounded scan) and
+ * stops the moment it reaches the retention cutoff, so it never reads the whole
+ * table: at most `size * 2 + 8` rows per table are ever examined, and fewer
+ * once the retention window is reached. No usage estimate and no full scan.
+ */
+async function deleteOldestEligible(
+  ctx: MutationCtx,
+  cfg: StorageConfig,
+  size: number,
+  cutoff: number,
+): Promise<{ deleted: number; examined: number }> {
+  const scan = size * 2 + 8;
+  const candidates: Candidate[] = [];
+
+  const channelRows = await ctx.db.query("messages").order("asc").take(scan);
+  for (const m of channelRows) {
+    if (candidates.length >= size) break;
+    if (m._creationTime >= cutoff) break; // everything after this is newer
+    if (isEligible(m, cutoff, cfg)) candidates.push({ kind: "channel", message: m });
+  }
+
+  if (candidates.length < size) {
+    const dmRows = await ctx.db.query("dmMessages").order("asc").take(scan);
+    for (const m of dmRows) {
+      if (candidates.length >= size) break;
+      if (m._creationTime >= cutoff) break;
+      if (isEligible(m, cutoff, cfg)) candidates.push({ kind: "dm", message: m });
+    }
+  }
+
+  let deleted = 0;
+  for (const candidate of candidates) {
+    const fresh = await ctx.db.get(candidate.message._id);
+    if (!fresh) continue;
+    if (!isEligible(fresh, cutoff, cfg)) continue;
+    if (candidate.kind === "channel") await deleteChannelMessage(ctx, fresh as Doc<"messages">);
+    else await deleteDmMessage(ctx, fresh as Doc<"dmMessages">);
+    deleted++;
+  }
+  return { deleted, examined: candidates.length };
+}
+
+/**
+ * One bounded pass of the automatic retention sweep: deletes only messages that
+ * are past the retention window (plus stale disposable rows), in small batches.
+ * `drained` is true when a batch came back short, meaning there is nothing left
+ * to delete and the sweep can stop.
+ */
+async function performRetentionSweep(ctx: MutationCtx, cfg: StorageConfig): Promise<CleanupSummary> {
+  const cutoff = Date.now() - cfg.retentionMs;
+  const size = Math.max(1, Math.min(cfg.batchSize, 200));
+  const maxBatches = Math.max(1, Math.min(cfg.maxBatchesPerRun, SWEEP_MAX_BATCHES));
+
+  let batches = 0;
+  let deleted = 0;
+  let examined = 0;
+  let drained = true;
+
+  while (batches < maxBatches) {
+    const result = await deleteOldestEligible(ctx, cfg, size, cutoff);
+    batches++;
+    deleted += result.deleted;
+    examined += result.examined;
+    if (result.deleted < size) {
+      drained = true; // fewer than a full batch → nothing older left
+      break;
+    }
+    drained = false; // full batch → likely more still eligible
+  }
+
+  const disposableRemoved = await pruneDisposable(ctx, cfg);
+  return { batches, deleted, examined, disposableRemoved, truncated: false, drained };
+}
+
 // ---------------- Entry points ----------------
 
 /**
@@ -549,21 +659,48 @@ async function recordError(ctx: MutationCtx, cfg: StorageConfig, error: unknown)
  * also scheduled on demand by `requestCleanup`. Locked so only one job runs.
  */
 export const runCleanup = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const cfg = await loadConfig(ctx);
-    const jobId = crypto.randomUUID();
-    if (!(await acquireLock(ctx, cfg, jobId))) return { skipped: "locked" as const };
+  args: {
+    /** Chain bookkeeping (internal): how many runs deep this sweep is. */
+    chainDepth: v.optional(v.number()),
+    /** Identifies one sweep so its own chained runs keep the lock. */
+    jobId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // This job is fully detached from app traffic: it must NEVER throw, no
+    // matter what goes wrong, so a background failure can't affect Freecord.
     try {
-      const summary = await performCleanup(ctx, cfg);
-      await recordRun(ctx, cfg, summary);
-      return summary;
+      const cfg = await loadConfig(ctx);
+      const jobId = args.jobId ?? crypto.randomUUID();
+      const chainDepth = args.chainDepth ?? 0;
+
+      if (!(await acquireLock(ctx, cfg, jobId))) return { skipped: "locked" as const };
+
+      let release = true;
+      try {
+        const summary = await performRetentionSweep(ctx, cfg);
+        await recordRun(ctx, cfg, summary);
+
+        // Continue only when a full batch was deleted (more likely remains) and
+        // the chain is still within budget — never an unbounded recursion.
+        if (!summary.drained && chainDepth + 1 < SWEEP_MAX_CHAIN) {
+          release = false; // keep the lock for the next chained run
+          await ctx.scheduler.runAfter(SWEEP_CHAIN_DELAY_MS, internal.storage.runCleanup, {
+            chainDepth: chainDepth + 1,
+            jobId,
+          });
+        }
+        return summary;
+      } catch (error) {
+        // Record it, release the lock, and carry on. Nothing is thrown upward.
+        await recordError(ctx, cfg, error);
+        return { error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        if (release) await releaseLock(ctx, cfg, jobId);
+      }
     } catch (error) {
-      // Never let a cleanup failure bubble up and break anything.
-      await recordError(ctx, cfg, error);
+      // Even config/lock failures are swallowed — cleanup is never fatal.
+      console.error("[storage] cleanup run failed", error);
       return { error: error instanceof Error ? error.message : String(error) };
-    } finally {
-      await releaseLock(ctx, cfg, jobId);
     }
   },
 });

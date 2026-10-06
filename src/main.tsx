@@ -1,6 +1,6 @@
 import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
-import { isStorageLimitError } from "@/lib/maintenance";
+import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient, useConvexAuth } from "convex/react";
@@ -30,7 +30,11 @@ function RouteLoading() {
 function RootGate() {
   const { isLoading, isAuthenticated } = useConvexAuth();
   if (isLoading) return null;
-  return isAuthenticated ? <Dashboard /> : <Landing />;
+  return (
+    <FeatureBoundary label="Freecord" block>
+      {isAuthenticated ? <Dashboard /> : <Landing />}
+    </FeatureBoundary>
+  );
 }
 
 /** `/auth` sends an already signed-in visitor straight to the Dashboard. */
@@ -77,36 +81,22 @@ class RootErrorBoundary extends React.Component<
   }
   render() {
     if (this.state.hasError) {
-      // A Convex storage/usage-limit error must never destroy the session or
-      // leave a blank page. Show a calm housekeeping notice with a retry path;
-      // the background retention job reclaims space so a reload recovers.
-      const storageish = isStorageLimitError(this.state.message);
-      if (storageish) {
-        return (
-          <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
-            <div className="max-w-md text-center">
-              <p className="text-sm font-semibold">Freecord is doing a little housekeeping</p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                We&apos;re tidying up old messages to keep everything running. Your account and
-                communities are safe — try again in a moment.
-              </p>
-              <button
-                className="mt-4 rounded-md border border-border px-3 py-1.5 text-xs font-medium"
-                onClick={() => window.location.reload()}
-              >
-                Try again
-              </button>
-            </div>
-          </div>
-        );
-      }
+      // A runtime error must never leave a blank/black page, and background
+      // storage maintenance must NEVER be dressed up as the reason the app is
+      // unavailable. This is an honest, retryable message and nothing more.
       return (
         <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
           <div className="max-w-lg text-center">
-            <p className="text-sm font-semibold">Preview runtime error</p>
+            <p className="text-sm font-semibold">Freecord couldn&apos;t finish loading</p>
             <p className="mt-2 text-xs text-muted-foreground break-words">
-              {this.state.message}
+              {this.state.message || "Something went wrong while starting the app."}
             </p>
+            <button
+              className="mt-4 rounded-md border border-border px-3 py-1.5 text-xs font-medium"
+              onClick={() => window.location.reload()}
+            >
+              Reload Freecord
+            </button>
             {this.state.stack && (
               <pre className="mt-3 text-left text-[10px] leading-4 text-muted-foreground/80 max-h-40 overflow-auto rounded border border-border/60 p-2">
                 {this.state.stack}
@@ -184,7 +174,9 @@ createRoot(document.getElementById("root")!).render(
                 path="/dashboard"
                 element={
                   <RequireAuth redirectImmediately>
-                    <Dashboard />
+                    <FeatureBoundary label="The dashboard" block>
+                      <Dashboard />
+                    </FeatureBoundary>
                   </RequireAuth>
                 }
               />
@@ -193,7 +185,9 @@ createRoot(document.getElementById("root")!).render(
                 path="/admin"
                 element={
                   <RequireAuth redirectImmediately>
-                    <AdminPanel />
+                    <FeatureBoundary label="The Admin Panel" block>
+                      <AdminPanel />
+                    </FeatureBoundary>
                   </RequireAuth>
                 }
               />

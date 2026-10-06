@@ -1,10 +1,12 @@
 /**
- * Helpers for gracefully handling Convex storage / usage-limit errors.
+ * Helpers for gracefully handling Convex storage / usage-limit errors on a
+ * WRITE the user just attempted (sending a message or uploading a file).
  *
- * The automatic retention system should keep Freecord far below any hard limit,
- * but if a write still trips a limit we recover instead of crashing: the
- * composer shows a short housekeeping notice (never a storage amount) and asks
- * the backend to run cleanup. No account, session or page state is destroyed.
+ * This is strictly a per-composer notice: it never gates rendering, never
+ * becomes a page-wide state, and is never used for background maintenance.
+ * If a write trips a limit we recover instead of crashing: the user sees a
+ * short "try again" toast (never a storage amount) and asks the backend to run
+ * its (detached) cleanup. No account, session or page state is destroyed.
  */
 
 /** Does an error look like a Convex storage / usage / document-limit error? */
@@ -18,9 +20,9 @@ export function isStorageLimitError(err: unknown): boolean {
   );
 }
 
-/** Calm, amount-free maintenance notice shown only when it is actually needed. */
+/** Short, amount-free notice shown only next to a write that actually failed. */
 export const MAINTENANCE_MESSAGE =
-  "Freecord is doing a little housekeeping — please try that again in a moment.";
+  "That couldn't be sent just now — please try again in a moment.";
 
 /**
  * If a write failed with a storage/usage-limit error, surface the maintenance
