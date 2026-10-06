@@ -8,8 +8,9 @@ import ProfileEffect from "./ProfileEffect";
 import FollowListModal from "./FollowListModal";
 import { BADGES, nameStyle, plateStyle } from "@/lib/cosmetics";
 import { formatLastSeen } from "@/components/dashboard/ui";
+import FloatingMenu from "@/components/ui/floating-menu";
 import { toast } from "sonner";
-import { BellOff, Copy, Flag, MessageCircle, MoreHorizontal, Phone, ShieldOff, UserCheck, UserPlus, Video, X } from "lucide-react";
+import { BellOff, Copy, Eye, Flag, MessageCircle, MoreHorizontal, Phone, ShieldOff, UserCheck, UserMinus, UserPlus, Video, X } from "lucide-react";
 
 export default function ProfilePopup({
   userId,
@@ -38,11 +39,15 @@ export default function ProfilePopup({
   const [menuOpen, setMenuOpen] = useState(false);
   const [followList, setFollowList] = useState<"followers" | "following" | "mutuals" | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
 
-  // Close on Escape and on outside click.
+  // Close on Escape and on outside click. The ⋯ menu renders through a portal
+  // outside this card, so presses inside it must not dismiss the profile.
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
     function onClick(e: MouseEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.("[data-floating-menu]")) return;
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     }
     window.addEventListener("keydown", onKey);
@@ -195,26 +200,63 @@ export default function ProfilePopup({
               </>
             )}
             <div className="pf-more">
-              <Button size="sm" variant="ghost" aria-label="More options" onClick={() => setMenuOpen((v) => !v)}><MoreHorizontal className="h-4 w-4" /></Button>
+              <Button
+                ref={moreRef}
+                size="sm"
+                variant="ghost"
+                aria-label="More options"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen((v) => !v)}
+              ><MoreHorizontal className="h-4 w-4" /></Button>
               {menuOpen && (
-                <div className="pf-more-menu">
-                  <button onClick={() => { onViewFull(profile.userId); setMenuOpen(false); }}>View full profile</button>
-                  <button onClick={async () => { try { await navigator.clipboard.writeText(profile.username); toast.success("Username copied."); } catch { toast.error("Couldn't copy."); } setMenuOpen(false); }}>
-                    <Copy size={13} /> Copy username
+                <FloatingMenu
+                  anchor={moreRef.current}
+                  onClose={() => setMenuOpen(false)}
+                  ariaLabel={`Options for ${profile.displayName}`}
+                  align="end"
+                >
+                  <button onClick={() => { setMenuOpen(false); onViewFull(profile.userId); }}>
+                    <Eye size={14} /> View full profile
                   </button>
-                  <button onClick={async () => { try { await navigator.clipboard.writeText(profile.userId); toast.success("User ID copied."); } catch { toast.error("Couldn't copy."); } setMenuOpen(false); }}>
-                    <Copy size={13} /> Copy user ID
+                  {!profile.isBlocked && (
+                    <button onClick={async () => {
+                      setMenuOpen(false);
+                      try { const id = await startDirect({ userId: profile.userId as Id<"users"> }); onMessage(id); }
+                      catch (e) { toast.error(e instanceof Error ? e.message : "Action failed."); }
+                    }}>
+                      <MessageCircle size={14} /> Message
+                    </button>
+                  )}
+                  {!profile.isBlocked && (profile.isFriend ? (
+                    <button onClick={() => { setMenuOpen(false); run("Friend removed", () => removeFriend({ userId: profile.userId as Id<"users"> })); }}>
+                      <UserMinus size={14} /> Remove Friend
+                    </button>
+                  ) : (
+                    <button onClick={() => { setMenuOpen(false); run("Friend request sent", () => sendRequest({ toId: profile.userId as Id<"users"> })); }}>
+                      <UserPlus size={14} /> Add Friend
+                    </button>
+                  ))}
+                  <div className="fc-floating-sep" role="separator" />
+                  <button onClick={async () => { setMenuOpen(false); try { await navigator.clipboard.writeText(profile.username); toast.success("Username copied."); } catch { toast.error("Couldn't copy."); } }}>
+                    <Copy size={14} /> Copy username
                   </button>
-                  <button onClick={() => run("Report sent to moderators", () => report({ targetType: "user", targetId: profile.userId, category: "other" }))}>
-                    <Flag size={13} /> Report
+                  <button onClick={async () => { setMenuOpen(false); try { await navigator.clipboard.writeText(profile.userId); toast.success("User ID copied."); } catch { toast.error("Couldn't copy."); } }}>
+                    <Copy size={14} /> Copy user ID
                   </button>
-                  <button className="danger" onClick={() => run("User blocked", () => block({ userId: profile.userId as Id<"users"> }))}>
-                    <ShieldOff size={13} /> Block
+                  <button onClick={() => { setMenuOpen(false); toast.success("Notifications muted for this user."); }}>
+                    <BellOff size={14} /> Mute
                   </button>
-                  <button onClick={() => { toast.success("Notifications muted for this user."); setMenuOpen(false); }}>
-                    <BellOff size={13} /> Ignore / mute
+                  <div className="fc-floating-sep" role="separator" />
+                  <button onClick={() => { setMenuOpen(false); run("Report sent to moderators", () => report({ targetType: "user", targetId: profile.userId, category: "other" })); }}>
+                    <Flag size={14} /> Report
                   </button>
-                </div>
+                  {!profile.isBlocked && (
+                    <button className="danger" onClick={() => { setMenuOpen(false); run("User blocked", () => block({ userId: profile.userId as Id<"users"> })); }}>
+                      <ShieldOff size={14} /> Block
+                    </button>
+                  )}
+                </FloatingMenu>
               )}
             </div>
           </div>

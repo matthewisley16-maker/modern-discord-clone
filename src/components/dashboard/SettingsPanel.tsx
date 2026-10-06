@@ -23,6 +23,7 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
   const deleteAccount = useMutation(api.users.deleteAccount);
   const setUsername = useMutation(api.users.setUsername);
   const setDisplayNameOnly = useMutation(api.users.setDisplayName);
+  const setEmail = useMutation(api.users.setEmail);
 
   // ---- Password (Set for accounts without one, Change for accounts with one) ----
   const passwordState = useQuery(api.passwords.passwordState, {});
@@ -87,6 +88,14 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
     api.users.usernameAvailable,
     usernameDraft.trim() ? { username: usernameDraft.trim() } : "skip",
   );
+  // Email is optional but editable: empty is valid (it removes the email).
+  const [emailDraft, setEmailDraft] = useState("");
+  const [emailTouched, setEmailTouched] = useState(false);
+  useEffect(() => {
+    if (!emailTouched && me) setEmailDraft(me.email ?? "");
+  }, [me?.email, emailTouched]);
+  const emailValue = emailDraft.trim().toLowerCase();
+  const emailValid = emailValue.length === 0 || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue);
 
   const s = me?.settings;
 
@@ -127,6 +136,17 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
       toast.success("Username updated.");
       setUsernameTouched(false);
     } catch (e) { toast.error(e instanceof Error ? e.message : "Could not update username."); }
+    finally { setBusy(false); }
+  }
+
+  async function saveEmail() {
+    if (!emailValid) { toast.error("Please enter a valid email address."); return; }
+    setBusy(true);
+    try {
+      await setEmail({ email: emailValue });
+      toast.success(emailValue ? "Email updated." : "Email removed.");
+      setEmailTouched(false);
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Could not update your email."); }
     finally { setBusy(false); }
   }
 
@@ -324,9 +344,30 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
                 disabled={busy || !displayName.trim() || displayName.trim() === (me?.profile?.displayName ?? "")}
               >{busy ? "Saving…" : "Change display name"}</Button>
               <p className="fc-muted">Display names don't need to be unique. Your email is never shown as your name.</p>
+              <span className="fc-field-label">Email — optional</span>
+              <Input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                value={emailDraft}
+                maxLength={254}
+                disabled={busy}
+                aria-label="Email"
+                aria-invalid={emailTouched && !emailValid}
+                placeholder="you@example.com"
+                onChange={(e) => { setEmailTouched(true); setEmailDraft(e.target.value); }}
+              />
+              {emailTouched && !emailValid && (
+                <p className="text-xs text-destructive">Please enter a valid email address.</p>
+              )}
+              <Button
+                variant="outline"
+                onClick={saveEmail}
+                disabled={busy || !emailValid || emailValue === (me?.email ?? "")}
+              >{busy ? "Saving…" : "Save email"}</Button>
               <div className="fc-note">
-                <p><strong>Email is optional.</strong> Adding one lets you recover your account and sign in with an email code. You never need one to use Freecord.</p>
-                <p className="fc-muted">Your current email: {me?.email ? me.email : "none"}</p>
+                <p><strong>Email is optional.</strong> Adding one lets you recover your account and sign in with an email code. You never need one to use Freecord — clear the field to remove your email.</p>
+                <p className="fc-muted">Current email: {me?.email ? me.email : "none"}</p>
               </div>
               <h3><KeyRound size={16} /> Password</h3>
               {passwordState === undefined && <p className="fc-muted">Checking your password…</p>}

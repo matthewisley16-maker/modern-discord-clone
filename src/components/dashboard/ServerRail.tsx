@@ -543,12 +543,6 @@ export default function ServerRail({
 
       <button className="fc-rail-server add" title="Create a community" aria-label="Create a community" onClick={onCreate}><Plus size={20} /></button>
       <button className="fc-rail-server add" title="Join with invite" aria-label="Join with invite" onClick={onJoin}><Hash size={18} /></button>
-      <button
-        className="fc-rail-server add"
-        title="New folder"
-        aria-label="Create a server folder"
-        onClick={() => setFolderDialog({ mode: "create", name: "", color: FOLDER_COLORS[Math.floor(Math.random() * FOLDER_COLORS.length)] })}
-      ><FolderPlus size={19} /></button>
 
       {overflowVisible && (
         <div className="fc-rail-overflow">

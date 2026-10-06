@@ -152,6 +152,68 @@ export const setDisplayName = mutation({
   },
 });
 
+/** Loose but sensible email shape check — matches the client-side validation. */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Set, replace, or clear the account's OPTIONAL email.
+ *
+ * An empty value is valid and removes the email entirely — an email is never
+ * required to save a profile. A non-empty value must look like an email and
+ * must not already belong to another account. Changing the address always
+ * clears its verification flag (the new address must be proven again) and, if
+ * the account has an email sign-in link, re-points it to the new address so
+ * email-code sign-in keeps resolving to this same account. No other profile
+ * field, username, password, or account data is touched.
+ */
+export const setEmail = mutation({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    const me = await currentUserId(ctx);
+    await enforceRateLimit(ctx, `email:${me}`, 10, 60_000);
+    const normalized = email.trim().toLowerCase();
+
+    if (normalized.length > 254 || (normalized.length > 0 && !EMAIL_PATTERN.test(normalized))) {
+      throw new Error("Please enter a valid email address.");
+    }
+
+    if (normalized.length === 0) {
+      await ctx.db.patch(me, { email: undefined, emailVerificationTime: undefined });
+      await audit(ctx, "user.email", me, "Removed their email", "user", me);
+      return { email: null };
+    }
+
+    // Validate everything BEFORE writing anything, so a rejected change can
+    // never leave the account in a half-updated state.
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", normalized))
+      .unique();
+    if (existing && existing._id !== me) {
+      throw new Error("That email is already linked to another account.");
+    }
+
+    const emailAccount = await ctx.db
+      .query("authAccounts")
+      .withIndex("userIdAndProvider", (q) => q.eq("userId", me).eq("provider", "email-otp"))
+      .unique();
+    if (emailAccount) {
+      const clash = await ctx.db
+        .query("authAccounts")
+        .withIndex("providerAndAccountId", (q) => q.eq("provider", "email-otp").eq("providerAccountId", normalized))
+        .unique();
+      if (clash && clash.userId !== me) {
+        throw new Error("That email is already linked to another account.");
+      }
+      await ctx.db.patch(emailAccount._id, { providerAccountId: normalized });
+    }
+
+    await ctx.db.patch(me, { email: normalized, emailVerificationTime: undefined });
+    await audit(ctx, "user.email", me, "Updated their email", "user", me);
+    return { email: normalized };
+  },
+});
+
 /**
  * Get the current signed in user. Returns null if the user is not signed in.
  * Usage: const signedInUser = await ctx.runQuery(api.authHelpers.currentUser);

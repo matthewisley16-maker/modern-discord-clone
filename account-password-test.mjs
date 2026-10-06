@@ -206,5 +206,90 @@ await expectTrue("giphy config is not exposed to signed-out callers", async () =
   return cfg.configured === false && cfg.apiKey === null;
 });
 
+// ===================== 5. Optional, editable email =====================
+
+const emailUser = await newUser("emailedit");
+await expectTrue("a new account can have no email", async () => {
+  const me = await emailUser.client.query(api.users.me, {});
+  return me.email === null;
+});
+
+await expectOk("saving an email on an account without one works", async () => {
+  await emailUser.client.mutation(api.users.setEmail, { email: `first_${stamp}@example.com` });
+});
+await expectTrue("the saved email is reflected on me", async () => {
+  const me = await emailUser.client.query(api.users.me, {});
+  return me.email === `first_${stamp}@example.com`;
+});
+
+await expectOk("the email can be replaced with a different one", async () => {
+  await emailUser.client.mutation(api.users.setEmail, { email: `second_${stamp}@example.com` });
+});
+await expectTrue("the replacement email is reflected on me", async () => {
+  const me = await emailUser.client.query(api.users.me, {});
+  return me.email === `second_${stamp}@example.com`;
+});
+
+await expectTrue("email+password sign-in follows the REPLACED email", async () => {
+  const c = new ConvexHttpClient(URL);
+  const res = await c.action(api.auth.signIn, {
+    provider: "email-password",
+    params: { email: `second_${stamp}@example.com`, password: "Passw0rd123" },
+  });
+  const authedClient = authed(res);
+  const me = await authedClient.query(api.users.me, {});
+  return me.userId === emailUser.userId;
+});
+await expectError("the OLD email no longer signs in after replacement", async () => {
+  const c = new ConvexHttpClient(URL);
+  await c.action(api.auth.signIn, { provider: "email-password", params: { email: `first_${stamp}@example.com`, password: "Passw0rd123" } });
+});
+
+await expectOk("an empty email is valid and removes the email", async () => {
+  await emailUser.client.mutation(api.users.setEmail, { email: "" });
+});
+await expectTrue("clearing the email leaves me.email null", async () => {
+  const me = await emailUser.client.query(api.users.me, {});
+  return me.email === null;
+});
+await expectOk("whitespace-only email is treated as empty", async () => {
+  await emailUser.client.mutation(api.users.setEmail, { email: "   " });
+});
+
+await expectError("an invalid email is rejected", async () => {
+  await emailUser.client.mutation(api.users.setEmail, { email: "not-an-email" });
+});
+await expectError("an email with no domain is rejected", async () => {
+  await emailUser.client.mutation(api.users.setEmail, { email: "a@b" });
+});
+
+// Uniqueness across accounts.
+const emailOwner = await newUser("emailown");
+const takenEmail = `taken_${stamp}@example.com`;
+await expectOk("account A claims an email", async () => {
+  await emailOwner.client.mutation(api.users.setEmail, { email: takenEmail });
+});
+await expectError("account B cannot claim A's email", async () => {
+  await emailUser.client.mutation(api.users.setEmail, { email: takenEmail });
+});
+await expectTrue("account B's email is unchanged after the rejected claim", async () => {
+  const me = await emailUser.client.query(api.users.me, {});
+  return me.email === null;
+});
+await expectOk("account A can re-save its own unchanged email", async () => {
+  await emailOwner.client.mutation(api.users.setEmail, { email: takenEmail });
+});
+await expectOk("account A can remove its email", async () => {
+  await emailOwner.client.mutation(api.users.setEmail, { email: "" });
+});
+await expectOk("the freed email can then be claimed by another account", async () => {
+  await emailUser.client.mutation(api.users.setEmail, { email: takenEmail });
+});
+
+await expectError("setEmail requires authentication", async () => {
+  const c = new ConvexHttpClient(URL);
+  await c.mutation(api.users.setEmail, { email: "nobody@example.com" });
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
