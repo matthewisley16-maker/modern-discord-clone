@@ -21,6 +21,7 @@ import ProfileEditor from "@/components/profile/ProfileEditor";
 import SettingsPanel from "@/components/dashboard/SettingsPanel";
 import CommunitySettings from "@/components/dashboard/CommunitySettings";
 import ServerRail from "@/components/dashboard/ServerRail";
+import NewMessageDialog from "@/components/dashboard/NewMessageDialog";
 import { Avatar, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
@@ -79,6 +80,7 @@ export default function Dashboard() {
   const startDirect = useMutation(api.dms.startDirect);
   const setMuted = useMutation(api.dms.setMuted);
   const setPinned = useMutation(api.dms.setPinned);
+  const setArchived = useMutation(api.dms.setArchived);
 
   const [section, setSection] = useState<Section>("home");
   const [communityId, setCommunityId] = useState<Id<"servers"> | null>(null);
@@ -103,6 +105,8 @@ export default function Dashboard() {
   const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>([]);
   const [communitySettingsOpen, setCommunitySettingsOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [newMessageOpen, setNewMessageOpen] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   // Message to scroll to and flash after clicking a notification.
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
@@ -754,18 +758,21 @@ export default function Dashboard() {
               </div>
             )}
 
-            <div className="fc-sidebar-section"><span>CONVERSATIONS</span></div>
+            <div className="fc-sidebar-section">
+              <span>CONVERSATIONS</span>
+              <button aria-label="New message" title="New message" onClick={() => setNewMessageOpen(true)}><Plus size={13} /></button>
+            </div>
             {conversations && conversations.length === 0 && (
-              <p className="fc-sidebar-empty">No conversations yet. Start one from your friends list.</p>
+              <p className="fc-sidebar-empty">No conversations yet. Start one with the ＋ button.</p>
             )}
-            {conversations?.map((c) => (
+            {conversations?.filter((c) => !c.archived).map((c) => (
               <div key={c.conversationId} className="fc-dm-row">
                 <button
                   className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                   onClick={() => openConversation(c.conversationId)}
                 >
                   <Avatar name={c.name} size={26} url={c.members?.[0]?.avatarUrl} decorationId={c.members?.[0]?.decorationId} />
-                  <span className="fc-dm-name">{c.name}</span>
+                  <span className="fc-dm-name">{c.type === "group" ? `${c.name} · ${c.memberCount}` : c.name}</span>
                   {c.pinned && <span className="fc-dm-flag">📌</span>}
                   {c.muted && <span className="fc-dm-flag">🔇</span>}
                   {c.unread > 0 && <i className="fc-dm-badge">{c.unread}</i>}
@@ -773,9 +780,32 @@ export default function Dashboard() {
                 <div className="fc-dm-tools">
                   <button title="Pin" aria-label="Pin conversation" onClick={() => setPinned({ conversationId: c.conversationId, pinned: !c.pinned })}>📌</button>
                   <button title="Mute" aria-label="Mute conversation" onClick={() => setMuted({ conversationId: c.conversationId, muted: !c.muted })}>🔇</button>
+                  <button title="Archive" aria-label="Archive conversation" onClick={() => setArchived({ conversationId: c.conversationId, archived: true })}>📥</button>
                 </div>
               </div>
             ))}
+            {(conversations?.filter((c) => c.archived).length ?? 0) > 0 && (
+              <>
+                <button className="fc-sidebar-action" onClick={() => setArchivedOpen((v) => !v)}>
+                  📥 Archived ({conversations!.filter((c) => c.archived).length})
+                </button>
+                {archivedOpen && conversations!.filter((c) => c.archived).map((c) => (
+                  <div key={c.conversationId} className="fc-dm-row">
+                    <button
+                      className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
+                      onClick={() => openConversation(c.conversationId)}
+                    >
+                      <Avatar name={c.name} size={26} url={c.members?.[0]?.avatarUrl} decorationId={c.members?.[0]?.decorationId} />
+                      <span className="fc-dm-name">{c.name}</span>
+                      {c.unread > 0 && <i className="fc-dm-badge">{c.unread}</i>}
+                    </button>
+                    <div className="fc-dm-tools">
+                      <button title="Unarchive" aria-label="Unarchive conversation" onClick={() => setArchived({ conversationId: c.conversationId, archived: false })}>📤</button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
           </>
         )}
 
@@ -954,6 +984,7 @@ export default function Dashboard() {
         />
       )}
       {profileEditorOpen && <ProfileEditor onClose={() => setProfileEditorOpen(false)} />}
+      <NewMessageDialog open={newMessageOpen} onClose={() => setNewMessageOpen(false)} onOpenConversation={(id) => { setNewMessageOpen(false); openConversation(id); }} />
       {communitySettingsOpen && communityId && (
         <CommunitySettings
           serverId={communityId}

@@ -266,6 +266,11 @@ const schema = defineSchema(
       pinned: v.optional(v.boolean()),
       muted: v.optional(v.boolean()),
       lastReadAt: v.optional(v.number()),
+      // Group-chat administrator (scoped to this conversation only — never
+      // related to platform or server administration).
+      isAdmin: v.optional(v.boolean()),
+      // Archived from the owner's own inbox (per member).
+      archived: v.optional(v.boolean()),
     })
       .index("by_conversation", ["conversationId"])
       .index("by_user", ["userId"])

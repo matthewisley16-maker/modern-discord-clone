@@ -1222,6 +1222,14 @@ html.fc-light .fc-servers-overflow-row:hover { background: rgba(0,0,0,.05); colo
 .fc-perm-cell.allow { background: rgba(59,165,93,.25); color: #6ee7a0; }
 .fc-perm-cell.deny { background: rgba(240,97,109,.22); color: #ff9aa3; }
 .fc-perm-cell:hover { filter: brightness(1.25); }
+/* Group-chat management (scoped to one conversation only). */
+.fc-group-title { font-size: 14px; color: #e5e0ff; }
+.fc-group-promote { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: rgba(139,92,246,.18); color: #cfbeff; }
+.fc-group-promote:hover { background: rgba(139,92,246,.3); }
+.fc-group-add { display: flex; flex-direction: column; gap: 6px; }
+.fc-group-add-results { display: flex; flex-direction: column; gap: 2px; max-height: 140px; overflow-y: auto; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; }
+.fc-group-add-results button { text-align: left; padding: 6px 8px; font-size: 12px; color: #c9c5da; }
+.fc-group-add-results button:hover { background: rgba(255,255,255,.06); }
 html.fc-light .fc-role-row, html.fc-light .fc-member-row { background: rgba(0,0,0,.03); border-color: rgba(0,0,0,.08); }
 html.fc-light .fc-role-name { color: #1c1b22; }
 html.fc-light .fc-perms-tab { color: #4b4a58; }

@@ -1,11 +1,12 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { gifValidator, requireGif } from "./gif";
 import { areFriends, authorCardOf, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import { resolveMentions } from "./mentions";
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 
 async function requireMember(ctx: Parameters<typeof displayNameOf>[0], conversationId: Id<"dmConversations">, userId: Id<"users">) {
   const member = await ctx.db
@@ -14,6 +15,55 @@ async function requireMember(ctx: Parameters<typeof displayNameOf>[0], conversat
     .unique();
   if (!member) throw new Error("You're not part of this conversation.");
   return member;
+}
+
+/**
+ * Group-chat management guard. Only the group owner or a group administrator
+ * may manage the group. This is scoped entirely to one conversation and has
+ * nothing to do with platform or server roles.
+ */
+async function requireGroupManager(
+  ctx: Parameters<typeof displayNameOf>[0],
+  conversationId: Id<"dmConversations">,
+  userId: Id<"users">,
+) {
+  const convo = await ctx.db.get(conversationId);
+  if (!convo || convo.type !== "group") throw new ConvexError("Only group chats have administrators.");
+  const member = await ctx.db
+    .query("dmMembers")
+    .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", userId))
+    .unique();
+  if (!member) throw new ConvexError("You're not part of this conversation.");
+  const isOwner = convo.ownerId === userId;
+  if (!isOwner && !member.isAdmin) throw new ConvexError("Only the group owner or an administrator can do that.");
+  return { convo, member, isOwner };
+}
+
+/** Find (or create) the 1:1 conversation for two users, or null if not allowed. */
+async function ensureDirect(
+  ctx: MutationCtx,
+  me: Id<"users">,
+  otherId: Id<"users">,
+): Promise<Id<"dmConversations"> | null> {
+  if (me === otherId) return null;
+  if (await isBlockedEitherWay(ctx, me, otherId)) return null;
+  const settings = await settingsOf(ctx, otherId);
+  if (settings?.dmPrivacy === "none") return null;
+  if (settings?.dmPrivacy === "friends" && !(await areFriends(ctx, me, otherId))) return null;
+
+  const myConvos = await ctx.db.query("dmMembers").withIndex("by_user", (q) => q.eq("userId", me)).collect();
+  for (const m of myConvos) {
+    const convo = await ctx.db.get(m.conversationId);
+    if (!convo || convo.type !== "direct") continue;
+    const members = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", convo._id)).collect();
+    if (members.length === 2 && members.some((x) => x.userId === otherId)) return convo._id;
+  }
+
+  const now = Date.now();
+  const conversationId = await ctx.db.insert("dmConversations", { type: "direct", ownerId: me, lastMessageAt: now });
+  await ctx.db.insert("dmMembers", { conversationId, userId: me, lastReadAt: now });
+  await ctx.db.insert("dmMembers", { conversationId, userId: otherId, lastReadAt: 0 });
+  return conversationId;
 }
 
 async function card(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"users">, viewerId?: Id<"users">) {
@@ -62,6 +112,9 @@ export const listConversations = query({
         memberCount: members.length,
         pinned: membership.pinned ?? false,
         muted: membership.muted ?? false,
+        archived: membership.archived ?? false,
+        isAdmin: Boolean(membership.isAdmin) || convo.ownerId === userId,
+        ownerId: convo.ownerId,
         unread,
         lastMessageAt: convo.lastMessageAt,
         lastMessage: last && !last.deleted ? last.body.slice(0, 90) : "",
@@ -93,30 +146,57 @@ export const startDirect = mutation({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
     const me = await currentUserId(ctx);
-    if (me === userId) throw new Error("You can't DM yourself.");
+    if (me === userId) throw new ConvexError("You can't DM yourself.");
     await enforceRateLimit(ctx, `dm:${me}`, 30, 60_000);
-    if (await isBlockedEitherWay(ctx, me, userId)) throw new Error("You can't message this user.");
+    if (await isBlockedEitherWay(ctx, me, userId)) throw new ConvexError("You can't message this user.");
 
     const settings = await settingsOf(ctx, userId);
-    if (settings?.dmPrivacy === "none") throw new Error("This user isn't accepting direct messages.");
+    if (settings?.dmPrivacy === "none") throw new ConvexError("This user isn't accepting direct messages.");
     if (settings?.dmPrivacy === "friends" && !(await areFriends(ctx, me, userId))) {
-      throw new Error("This user only accepts DMs from friends.");
+      throw new ConvexError("This user only accepts DMs from friends.");
     }
-
-    // Reuse an existing direct conversation.
-    const myConvos = await ctx.db.query("dmMembers").withIndex("by_user", (q) => q.eq("userId", me)).collect();
-    for (const m of myConvos) {
-      const convo = await ctx.db.get(m.conversationId);
-      if (!convo || convo.type !== "direct") continue;
-      const members = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", convo._id)).collect();
-      if (members.length === 2 && members.some((x) => x.userId === userId)) return convo._id;
-    }
-
-    const now = Date.now();
-    const conversationId = await ctx.db.insert("dmConversations", { type: "direct", ownerId: me, lastMessageAt: now });
-    await ctx.db.insert("dmMembers", { conversationId, userId: me, lastReadAt: now });
-    await ctx.db.insert("dmMembers", { conversationId, userId, lastReadAt: 0 });
+    const conversationId = await ensureDirect(ctx, me, userId);
+    if (!conversationId) throw new ConvexError("This user isn't accepting direct messages.");
     return conversationId;
+  },
+});
+
+/**
+ * Batch / multi-recipient messaging: one message sent SEPARATELY to many people
+ * as individual 1:1 conversations. No group is created and no recipient can see
+ * who else received it. Atomic — if it throws, nothing is sent.
+ *
+ * Anti-spam (server-enforced): at most 25 recipients per batch, 5 batches per
+ * minute, and 60 total recipients per rolling 5 minutes.
+ */
+export const sendBatch = mutation({
+  args: { userIds: v.array(v.id("users")), body: v.string(), gif: v.optional(gifValidator) },
+  handler: async (ctx, { userIds, body, gif }) => {
+    const me = await currentUserId(ctx);
+    await enforceRateLimit(ctx, `batch:${me}`, 5, 60_000);
+
+    const safeGif = gif ? requireGif(gif) : undefined;
+    const raw = body.trim();
+    if (raw.length > 4000) throw new ConvexError("Message is too long (4000 characters max).");
+    const text = safeGif ? raw || "Sent a GIF" : raw;
+    if (!text) throw new ConvexError("Message can't be empty.");
+
+    const recipients = [...new Set(userIds.filter((id) => id !== me))].slice(0, 25);
+    if (recipients.length === 0) throw new ConvexError("Choose at least one recipient.");
+
+    let sent = 0;
+    const skipped: string[] = [];
+    for (const id of recipients) {
+      // Rolling cap on how many people one account can batch-message.
+      await enforceRateLimit(ctx, `batchrecips:${me}`, 60, 5 * 60_000);
+      const conversationId = await ensureDirect(ctx, me, id);
+      if (!conversationId) { skipped.push(id); continue; }
+      const messageId = await ctx.db.insert("dmMessages", { conversationId, userId: me, body: text, gif: safeGif });
+      await ctx.db.patch(conversationId, { lastMessageAt: Date.now() });
+      sent++;
+      await notify(ctx, id, "dm", "New direct message", `${await displayNameOf(ctx, me)}: ${text.slice(0, 80)}`, `?dm=${conversationId}&message=${messageId}`, me);
+    }
+    return { sent, skipped };
   },
 });
 
@@ -142,12 +222,9 @@ export const renameGroup = mutation({
   args: { conversationId: v.id("dmConversations"), name: v.string() },
   handler: async (ctx, { conversationId, name }) => {
     const me = await currentUserId(ctx);
-    await requireMember(ctx, conversationId, me);
-    const convo = await ctx.db.get(conversationId);
-    if (!convo) throw new Error("Conversation not found.");
-    if (convo.type !== "group") throw new Error("Only group DMs can be renamed.");
+    await requireGroupManager(ctx, conversationId, me);
     const clean = name.trim().slice(0, 50);
-    if (!clean) throw new Error("Group name can't be empty.");
+    if (!clean) throw new ConvexError("Group name can't be empty.");
     await ctx.db.patch(conversationId, { name: clean });
   },
 });
@@ -156,8 +233,60 @@ export const setGroupIcon = mutation({
   args: { conversationId: v.id("dmConversations"), iconColor: v.string() },
   handler: async (ctx, { conversationId, iconColor }) => {
     const me = await currentUserId(ctx);
-    await requireMember(ctx, conversationId, me);
+    await requireGroupManager(ctx, conversationId, me);
     await ctx.db.patch(conversationId, { iconColor });
+  },
+});
+
+/** Promote/demote a group administrator. Owner-only; scoped to this chat. */
+export const setGroupAdmin = mutation({
+  args: { conversationId: v.id("dmConversations"), userId: v.id("users"), admin: v.boolean() },
+  handler: async (ctx, { conversationId, userId, admin }) => {
+    const me = await currentUserId(ctx);
+    const { convo, isOwner } = await requireGroupManager(ctx, conversationId, me);
+    if (!isOwner) throw new ConvexError("Only the group owner can change administrators.");
+    if (convo.ownerId === userId) throw new ConvexError("The group owner is always an administrator.");
+    const target = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", userId))
+      .unique();
+    if (!target) throw new ConvexError("That person isn't in this group.");
+    await ctx.db.patch(target._id, { isAdmin: admin });
+  },
+});
+
+/** Group members, with administrator flags and the viewer's own permissions. */
+export const groupDetails = query({
+  args: { conversationId: v.id("dmConversations") },
+  handler: async (ctx, { conversationId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const convo = await ctx.db.get(conversationId);
+    if (!convo || convo.type !== "group") return null;
+    const me = await ctx.db
+      .query("dmMembers")
+      .withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", userId))
+      .unique();
+    if (!me) return null;
+    const members = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
+    const cards = await Promise.all(
+      members.map(async (m) => ({
+        ...(await card(ctx, m.userId, userId)),
+        userId: m.userId,
+        isAdmin: Boolean(m.isAdmin) || convo.ownerId === m.userId,
+        isOwner: convo.ownerId === m.userId,
+      })),
+    );
+    cards.sort((a, b) => Number(b.isOwner) - Number(a.isOwner) || Number(b.isAdmin) - Number(a.isAdmin));
+    return {
+      conversationId,
+      name: convo.name ?? "Group",
+      iconColor: convo.iconColor ?? "violet",
+      ownerId: convo.ownerId,
+      isOwner: convo.ownerId === userId,
+      isAdmin: Boolean(me.isAdmin) || convo.ownerId === userId,
+      members: cards,
+    };
   },
 });
 
@@ -183,17 +312,21 @@ export const removeGroupMember = mutation({
   args: { conversationId: v.id("dmConversations"), userId: v.id("users") },
   handler: async (ctx, { conversationId, userId }) => {
     const me = await currentUserId(ctx);
-    await requireMember(ctx, conversationId, me);
     const convo = await ctx.db.get(conversationId);
-    if (!convo || convo.type !== "group") throw new Error("Only group DMs have members.");
-    // Owner or self can remove.
-    if (convo.ownerId !== me && userId !== me) throw new Error("Only the group owner can remove members.");
+    if (!convo || convo.type !== "group") throw new ConvexError("Only group chats have members.");
+    const mine = await requireMember(ctx, conversationId, me);
+    // Members may remove themselves; otherwise the owner/admin may remove others.
+    if (userId !== me && convo.ownerId !== me && !mine.isAdmin) {
+      throw new ConvexError("Only the group owner or an administrator can remove members.");
+    }
+    if (convo.ownerId === userId) throw new ConvexError("The group owner can't be removed. Transfer or leave instead.");
     const member = await ctx.db.query("dmMembers").withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", userId)).unique();
     if (member) await ctx.db.delete(member._id);
   },
 });
 
-export const leaveGroup = mutation({
+/** Remove a conversation from the caller's own inbox (per-user, never for others). */
+export const deleteConversation = mutation({
   args: { conversationId: v.id("dmConversations") },
   handler: async (ctx, { conversationId }) => {
     const me = await currentUserId(ctx);
@@ -205,6 +338,38 @@ export const leaveGroup = mutation({
       for (const m of messages) await ctx.db.delete(m._id);
       await ctx.db.delete(conversationId);
     }
+  },
+});
+
+export const leaveGroup = mutation({
+  args: { conversationId: v.id("dmConversations") },
+  handler: async (ctx, { conversationId }) => {
+    const me = await currentUserId(ctx);
+    const convo = await ctx.db.get(conversationId);
+    const member = await requireMember(ctx, conversationId, me);
+    await ctx.db.delete(member._id);
+    const remaining = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
+    if (remaining.length === 0) {
+      const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
+      for (const m of messages) await ctx.db.delete(m._id);
+      await ctx.db.delete(conversationId);
+      return;
+    }
+    // If the owner leaves, hand ownership to an administrator (or the oldest member).
+    if (convo && convo.ownerId === me) {
+      const successor = remaining.find((m) => m.isAdmin) ?? remaining[0];
+      await ctx.db.patch(conversationId, { ownerId: successor.userId });
+      await ctx.db.patch(successor._id, { isAdmin: true });
+    }
+  },
+});
+
+export const setArchived = mutation({
+  args: { conversationId: v.id("dmConversations"), archived: v.boolean() },
+  handler: async (ctx, { conversationId, archived }) => {
+    const me = await currentUserId(ctx);
+    const member = await requireMember(ctx, conversationId, me);
+    await ctx.db.patch(member._id, { archived });
   },
 });
 

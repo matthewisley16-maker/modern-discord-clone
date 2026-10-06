@@ -69,6 +69,10 @@ export default function DmView({
   const renameGroup = useMutation(api.dms.renameGroup);
   const removeMember = useMutation(api.dms.removeGroupMember);
   const leaveGroup = useMutation(api.dms.leaveGroup);
+  const setGroupAdmin = useMutation(api.dms.setGroupAdmin);
+  const group = useQuery(api.dms.groupDetails, { conversationId });
+  const [memberQuery, setMemberQuery] = useState("");
+  const memberResults = useQuery(api.users.searchUsers, { q: memberQuery });
 
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<{ id: Id<"dmMessages">; author: string; body: string } | null>(null);
@@ -218,30 +222,64 @@ export default function DmView({
         </div>
       </header>
 
-      {showGroupPanel && convo?.type === "group" && (
+      {showGroupPanel && convo?.type === "group" && group && (
         <div className="fc-group-panel">
           <div className="fc-group-row">
-            <Input
-              defaultValue={convo.name}
-              maxLength={50}
-              aria-label="Group name"
-              onBlur={async (e) => {
-                const v = e.target.value.trim();
-                if (v && v !== convo.name) { try { await renameGroup({ conversationId, name: v }); toast.success("Group renamed."); } catch (err) { toast.error(err instanceof Error ? err.message : "Rename failed."); } }
-              }}
-            />
+            {(group.isOwner || group.isAdmin) ? (
+              <Input
+                defaultValue={group.name}
+                maxLength={50}
+                aria-label="Group name"
+                onBlur={async (e) => {
+                  const v = e.target.value.trim();
+                  if (v && v !== group.name) { try { await renameGroup({ conversationId, name: v }); toast.success("Group renamed."); } catch (err) { toast.error(err instanceof Error ? err.message : "Rename failed."); } }
+                }}
+              />
+            ) : (
+              <strong className="fc-group-title">{group.name}</strong>
+            )}
           </div>
           <div className="fc-group-members">
-            {convo.members.map((m) => (
-              <div key={m.userId} className="fc-group-member">
-                <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={28} url={m.avatarUrl} decorationId={m.decorationId} />
-                <span>{m.displayName}</span>
-                <button aria-label={`Remove ${m.displayName}`} onClick={async () => {
-                  try { await removeMember({ conversationId, userId: m.userId as Id<"users"> }); toast.success("Member removed."); }
-                  catch (err) { toast.error(err instanceof Error ? err.message : "Could not remove."); }
-                }}><X size={14} /></button>
+            {group.members.map((m) => {
+              const canRemove = (group.isOwner || group.isAdmin) && !m.isOwner && m.userId !== myUserId;
+              return (
+                <div key={m.userId} className="fc-group-member">
+                  <Avatar name={m.displayName} color={m.avatarColor} presence={m.presence} size={28} url={m.avatarUrl} decorationId={m.decorationId} />
+                  <span>{m.displayName}{m.isOwner ? " · Owner" : m.isAdmin ? " · Admin" : ""}</span>
+                  {group.isOwner && !m.isOwner && (
+                    <button
+                      className="fc-group-promote"
+                      onClick={async () => {
+                        try { await setGroupAdmin({ conversationId, userId: m.userId as Id<"users">, admin: !m.isAdmin }); toast.success(m.isAdmin ? "Admin removed." : "Promoted to admin."); }
+                        catch (err) { toast.error(err instanceof Error ? err.message : "Could not update."); }
+                      }}
+                    >{m.isAdmin ? "Demote" : "Make admin"}</button>
+                  )}
+                  {canRemove && (
+                    <button aria-label={`Remove ${m.displayName}`} onClick={async () => {
+                      try { await removeMember({ conversationId, userId: m.userId as Id<"users"> }); toast.success("Member removed."); }
+                      catch (err) { toast.error(err instanceof Error ? err.message : "Could not remove."); }
+                    }}><X size={14} /></button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="fc-group-add">
+            <Input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="Add people to this group" />
+            {memberQuery.trim() && (
+              <div className="fc-group-add-results">
+                {(memberResults ?? []).filter((r) => !group.members.some((m) => m.userId === r.userId)).slice(0, 6).map((r) => (
+                  <button
+                    key={r.userId}
+                    onClick={async () => {
+                      try { await addMembers({ conversationId, memberIds: [r.userId as Id<"users">] }); toast.success("Member added."); setMemberQuery(""); }
+                      catch (err) { toast.error(err instanceof Error ? err.message : "Could not add."); }
+                    }}
+                  >{r.displayName} <span className="fc-muted">@{r.username}</span></button>
+                ))}
               </div>
-            ))}
+            )}
           </div>
           <Button variant="outline" size="sm" onClick={async () => {
             try { await leaveGroup({ conversationId }); toast.success("You left the group."); }
