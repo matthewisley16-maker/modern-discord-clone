@@ -25,6 +25,7 @@ import NewMessageDialog from "@/components/dashboard/NewMessageDialog";
 import SecretChatsDialog, { ProtectConversationDialog } from "@/components/dashboard/SecretChats";
 import { Avatar, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
+import { trackOp } from "@/lib/usage-monitor";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
 import {
@@ -180,14 +181,28 @@ export default function Dashboard() {
   const canManageChannels = Boolean(details?.permissions.includes("manageChannels"));
 
   // Presence heartbeat so others see us online, and resume any voice session.
+  //
+  // Kept deliberately low-cost: a single 30s timer, and NOTHING is written while
+  // the tab is hidden/backgrounded (the server-side staleness window covers us),
+  // so idle or backgrounded tabs never generate presence traffic. It resumes
+  // immediately when the tab becomes visible again. Never on mouse movement,
+  // keystrokes, renders or navigation.
   useEffect(() => {
     ensureIdentity({}).catch(() => {});
-    heartbeat({}).catch(() => {});
-    const t = setInterval(() => heartbeat({}).catch(() => {}), 30_000);
+    const beat = () => { if (document.visibilityState === "visible") { trackOp("presence.heartbeat"); heartbeat({}).catch(() => {}); } };
+    beat();
+    const t = setInterval(beat, 30_000);
+    // Refresh the moment the user comes back, so online state is instant.
+    const onVisible = () => { if (document.visibilityState === "visible") heartbeat({}).catch(() => {}); };
+    document.addEventListener("visibilitychange", onVisible);
     // Soft-disconnect on unload so presence and typing clear promptly.
     const bye = () => { disconnect({}).catch(() => {}); };
     window.addEventListener("beforeunload", bye);
-    return () => { clearInterval(t); window.removeEventListener("beforeunload", bye); };
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("beforeunload", bye);
+    };
   }, [heartbeat, disconnect]);
 
   // Apply the user's saved appearance (theme, density, font size, accent, motion).

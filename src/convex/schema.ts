@@ -656,6 +656,9 @@ const schema = defineSchema(
       lastErrorAt: v.optional(v.number()),
       consecutiveErrors: v.optional(v.number()),
       truncated: v.optional(v.boolean()),
+      // Circuit breaker: no new sweep starts before this time, and repeated
+      // failures back off exponentially (see storage.runCleanup).
+      cooldownUntil: v.optional(v.number()),
     }).index("by_key", ["key"]),
     auditLogs: defineTable({
       action: v.string(),

@@ -7,6 +7,8 @@ import { normalizeGiphy, type GifValue } from "@/convex/gif";
 import { ImageUp, Loader2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
+import { createCircuitBreaker } from "@/lib/circuit-breaker";
+import { trackOp } from "@/lib/usage-monitor";
 
 const DEBOUNCE_MS = 350;
 const PAGE_SIZE = 12;
@@ -86,11 +88,32 @@ function GifPickerInner({
     return () => ro.disconnect();
   }, [config?.configured]);
 
+  // Circuit breaker: after a few consecutive GIPHY failures (e.g. a 429) we
+  // stop requesting entirely for a cooldown, then allow a single probe. This
+  // prevents a rate-limited GIPHY from generating an endless retry loop.
+  const breakerRef = useRef(createCircuitBreaker({ failureThreshold: 3, cooldownMs: 30_000 }));
+  const [breakerOpen, setBreakerOpen] = useState(false);
+
   const fetchGifs = useCallback(
     (offset: number) => {
       if (!gf) return Promise.reject(new Error("GIPHY isn't configured."));
+      if (!breakerRef.current.canRequest()) {
+        setBreakerOpen(true);
+        return Promise.reject(new Error("GIPHY is temporarily unavailable."));
+      }
       const opts = { offset, limit: PAGE_SIZE };
-      return debounced ? gf.search(debounced, opts) : gf.trending(opts);
+      return (debounced ? gf.search(debounced, opts) : gf.trending(opts))
+        .then((res) => {
+          breakerRef.current.onSuccess();
+          setBreakerOpen(false);
+          return res;
+        })
+        .catch((err) => {
+          trackOp("giphy.failure");
+          breakerRef.current.onFailure();
+          if (breakerRef.current.state === "open") setBreakerOpen(true);
+          throw err;
+        });
     },
     [gf, debounced],
   );
@@ -157,7 +180,26 @@ function GifPickerInner({
           </div>
         )}
 
-        {!loadingConfig && configured && gf && (
+        {!loadingConfig && configured && gf && breakerOpen && (
+          <div className="fc-gif-status fc-gif-unconfigured">
+            <p>GIFs are temporarily unavailable.</p>
+            <button
+              type="button"
+              className="fc-gif-upload"
+              onClick={() => { breakerRef.current.reset(); setBreakerOpen(false); }}
+            >
+              Try GIFs again
+            </button>
+            {onUploadGif && (
+              <button type="button" className="fc-gif-upload" onClick={() => fileRef.current?.click()}>
+                <ImageUp size={15} /> Upload a GIF
+              </button>
+            )}
+            <p className="fc-gif-hint">Uploading a .gif keeps working either way.</p>
+          </div>
+        )}
+
+        {!loadingConfig && configured && gf && !breakerOpen && (
           <Grid
             key={debounced}
             width={width}

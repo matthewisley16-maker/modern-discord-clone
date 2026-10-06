@@ -9,6 +9,14 @@ import { resolveMentions } from "./mentions";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 
+/**
+ * How many of a conversation's NEWEST messages the sidebar preview/unread badge
+ * looks at. Sending the whole history through the wire on every reactive update
+ * was the single largest source of database reads + data egress; the badge and
+ * preview never need more than this.
+ */
+const CONVO_PREVIEW_SCAN = 100;
+
 async function requireMember(ctx: Parameters<typeof displayNameOf>[0], conversationId: Id<"dmConversations">, userId: Id<"users">) {
   const member = await ctx.db
     .query("dmMembers")
@@ -102,11 +110,16 @@ export const listConversations = query({
       const others = members.filter((m) => m.userId !== userId);
       const otherCards = await Promise.all(others.map((m) => card(ctx, m.userId, userId)));
 
-      const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", convo._id)).collect();
+      // Bounded read: newest slice only. Never pull a whole conversation into
+      // an index subscription just to render a preview and a count.
+      const recent = await ctx.db
+        .query("dmMessages")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", convo._id))
+        .order("desc")
+        .take(CONVO_PREVIEW_SCAN);
       const lastRead = membership.lastReadAt ?? 0;
-      const unread = messages.filter((m) => m.userId !== userId && m._creationTime > lastRead && !m.deleted).length;
-      const sorted = messages.sort((a, b) => a._creationTime - b._creationTime);
-      const last = sorted.length > 0 ? sorted[sorted.length - 1] : undefined;
+      const unread = recent.filter((m) => m.userId !== userId && m._creationTime > lastRead && !m.deleted).length;
+      const last = recent.length > 0 ? recent[0] : undefined;
 
       out.push({
         conversationId: convo._id,
@@ -145,9 +158,13 @@ export const unreadTotal = query({
       // Hidden conversations are excluded from the badge total; a locked-but-
       // visible one still contributes its count (which reveals nothing).
       if (membership.hidden) continue;
-      const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", membership.conversationId)).collect();
+      const recent = await ctx.db
+        .query("dmMessages")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", membership.conversationId))
+        .order("desc")
+        .take(CONVO_PREVIEW_SCAN);
       const lastRead = membership.lastReadAt ?? 0;
-      total += messages.filter((m) => m.userId !== userId && m._creationTime > lastRead && !m.deleted).length;
+      total += recent.filter((m) => m.userId !== userId && m._creationTime > lastRead && !m.deleted).length;
     }
     return total;
   },

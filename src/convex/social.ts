@@ -244,8 +244,10 @@ export const followLists = query({
     const visible = await canViewFollowLists(ctx, userId, viewerId);
     if (!visible) return { visible: false, followers: [], following: [], mutuals: [] };
 
-    const followerRows = await ctx.db.query("follows").withIndex("by_following", (q) => q.eq("followingId", userId)).collect();
-    const followingRows = await ctx.db.query("follows").withIndex("by_follower", (q) => q.eq("followerId", userId)).collect();
+    // Bounded: a hugely popular account must not make this query read the whole
+    // follow graph. 500 each is far more than the modal ever renders.
+    const followerRows = await ctx.db.query("follows").withIndex("by_following", (q) => q.eq("followingId", userId)).take(500);
+    const followingRows = await ctx.db.query("follows").withIndex("by_follower", (q) => q.eq("followerId", userId)).take(500);
 
     const rank = (p: string) => (p === "offline" ? 1 : 0);
     const byPresenceThenName = <T extends { presence: string; displayName: string }>(a: T, b: T) =>
@@ -407,7 +409,9 @@ export const clearAllNotifications = mutation({
   args: {},
   handler: async (ctx) => {
     const userId = await currentUserId(ctx);
-    const items = await ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
+    // Bounded so a large backlog can never build an oversized write transaction;
+    // pressing "Clear all" again clears the next slice.
+    const items = await ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", userId)).take(1000);
     for (const n of items) await ctx.db.delete(n._id);
     return items.length;
   },

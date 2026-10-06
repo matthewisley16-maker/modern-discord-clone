@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { trackOp } from "@/lib/usage-monitor";
 
 /**
  * Typing indicator helper.
@@ -28,6 +29,7 @@ export function useTyping(scope: { channelId?: Id<"channels">; conversationId?: 
     if (now - lastSent.current < 2500) return;
     lastSent.current = now;
     active.current = true;
+    trackOp("typing.ping");
     if (scope.channelId) setChannelTyping({ channelId: scope.channelId }).catch(() => {});
     else if (scope.conversationId) setDmTyping({ conversationId: scope.conversationId }).catch(() => {});
   }, [scope, setChannelTyping, setDmTyping]);

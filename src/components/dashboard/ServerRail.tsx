@@ -32,6 +32,21 @@ export type RailCommunity = { _id: string; name: string; iconUrl?: string | null
 const OVERFLOW_THRESHOLD = 10;
 const FOLDER_COLORS = ["#8b5cf6", "#f0616d", "#3ba55d", "#faa61a", "#00a8fc", "#eb459e", "#5865f2", "#9b59b6"];
 
+/**
+ * Canonical signature for a rail layout + folders. Used to skip a Convex write
+ * when a drag/menu action ends with the arrangement it started with, so the
+ * rail only ever persists real changes (never continuously while dragging).
+ */
+function railSignature(
+  layout: string[],
+  folders: { id: string; name: string; color?: string | null; collapsed: boolean; serverIds: string[] }[],
+): string {
+  return JSON.stringify({
+    layout,
+    folders: folders.map((f) => [f.id, f.name, f.color ?? null, f.collapsed, f.serverIds]),
+  });
+}
+
 export default function ServerRail({
   communities,
   communityId,
@@ -129,6 +144,9 @@ export default function ServerRail({
         collapsed: it.folder.collapsed,
         serverIds: it.folder.serverIds,
       }));
+    // No-op guard: the drag handlers only call this when an operation FINISHES,
+    // and if the resulting order equals the saved one we skip the write entirely.
+    if (org && railSignature(org.layout ?? [], org.folders ?? []) === railSignature(layout, folders)) return;
     saveOrg({ layout, folders, recent: org?.recent ?? [] }).catch((e) => {
       toast.error(e instanceof Error ? e.message : "Could not save your server layout.");
     });

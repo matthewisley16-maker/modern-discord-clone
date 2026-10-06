@@ -40,7 +40,19 @@ const DAY = 24 * 60 * MINUTE;
 const SWEEP_MAX_BATCHES = 5; // batches deleted per scheduled run
 const SWEEP_MAX_CHAIN = 50; // consecutive scheduled runs in one sweep
 const SWEEP_CHAIN_DELAY_MS = 800; // gap between chained runs
+const SWEEP_MAX_MS = 20_000; // hard wall-clock budget for one run
 const DISPOSABLE_SCAN_LIMIT = 500; // rows examined per disposable table
+
+/**
+ * Circuit breaker for the background job itself:
+ *  - COOLDOWN: no new sweep starts within this window of the previous one, so a
+ *    burst of cron ticks / user-triggered runs can never stack up.
+ *  - BACKOFF: after consecutive failures the job waits 1m, 2m, 4m … (capped)
+ *    before trying again, instead of hammering a struggling deployment.
+ */
+const SWEEP_COOLDOWN_MS = 5 * MINUTE;
+const SWEEP_BASE_BACKOFF_MS = 60_000;
+const SWEEP_MAX_BACKOFF_MS = 30 * MINUTE;
 
 export const STORAGE_DEFAULTS = {
   /** Recent messages are protected from auto-cleanup for this long. */
@@ -558,6 +570,8 @@ async function recordRun(ctx: MutationCtx, cfg: StorageConfig, summary: CleanupS
     consecutiveErrors: 0,
     lastError: undefined,
     lastErrorAt: undefined,
+    // Successful run → cool down before the next sweep is allowed to start.
+    cooldownUntil: Date.now() + SWEEP_COOLDOWN_MS,
   };
   if (state) await ctx.db.patch(state._id, patch);
   else await ctx.db.insert("storageState", { key, ...patch });
@@ -631,12 +645,15 @@ async function performRetentionSweep(ctx: MutationCtx, cfg: StorageConfig): Prom
   const size = Math.max(1, Math.min(cfg.batchSize, 200));
   const maxBatches = Math.max(1, Math.min(cfg.maxBatchesPerRun, SWEEP_MAX_BATCHES));
 
+  const startedAt = Date.now();
   let batches = 0;
   let deleted = 0;
   let examined = 0;
   let drained = true;
 
-  while (batches < maxBatches) {
+  // Bounded both by batch count AND wall-clock time, so a single run can never
+  // hold a transaction open or scan indefinitely.
+  while (batches < maxBatches && Date.now() - startedAt < SWEEP_MAX_MS) {
     const result = await deleteOldestEligible(ctx, cfg, size, cutoff);
     batches++;
     deleted += result.deleted;
@@ -672,6 +689,18 @@ export const runCleanup = internalMutation({
       const cfg = await loadConfig(ctx);
       const jobId = args.jobId ?? crypto.randomUUID();
       const chainDepth = args.chainDepth ?? 0;
+      const now = Date.now();
+
+      // Circuit breaker — only the START of a sweep observes cooldown/backoff;
+      // a sweep already in flight continues its bounded chain.
+      if (chainDepth === 0) {
+        const state = await getState(ctx, stateKey(cfg));
+        if (state?.cooldownUntil && state.cooldownUntil > now) return { skipped: "cooldown" as const };
+        if (state?.consecutiveErrors && state.lastErrorAt) {
+          const backoff = Math.min(SWEEP_MAX_BACKOFF_MS, SWEEP_BASE_BACKOFF_MS * 2 ** (state.consecutiveErrors - 1));
+          if (now - state.lastErrorAt < backoff) return { skipped: "backoff" as const };
+        }
+      }
 
       if (!(await acquireLock(ctx, cfg, jobId))) return { skipped: "locked" as const };
 
