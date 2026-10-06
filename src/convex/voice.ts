@@ -347,7 +347,55 @@ export const leaveVoiceSession = mutation({
   handler: async (ctx) => {
     const userId = await currentUserId(ctx);
     const sessions = await ctx.db.query("voiceSessions").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
+    const channels = new Set(sessions.map((s) => s.channelId as string));
     for (const s of sessions) await ctx.db.delete(s._id);
+    // Leaving a call invalidates the invitations I sent for it, so nobody is
+    // pulled into a call that is no longer running (no ghost invitations).
+    if (channels.size === 0) return;
+    const sent = await ctx.db.query("callInvites").withIndex("by_from", (q) => q.eq("fromId", userId)).collect();
+    for (const invite of sent) {
+      if (invite.status === "ringing" && invite.channelId && channels.has(invite.channelId as string)) {
+        await ctx.db.patch(invite._id, { status: "cancelled", endedAt: Date.now() });
+      }
+    }
+  },
+});
+
+/**
+ * End the call for everyone in a community voice/video channel.
+ *
+ * Requires the channel-scoped moderation permissions (community owner/admin by
+ * default). It disconnects every participant, invalidates the still-ringing
+ * invitations for that call, and notifies the people it removed. "Leave call"
+ * (leaveVoiceSession) still only removes the current user.
+ */
+export const endCommunityCall = mutation({
+  args: { channelId: v.id("channels") },
+  handler: async (ctx, { channelId }) => {
+    const me = await currentUserId(ctx);
+    const channel = await ctx.db.get(channelId);
+    if (!channel) throw new ConvexError("Channel not found.");
+    if (channel.type === "text") throw new ConvexError("That's a text channel.");
+    const allowed = (await hasPermission(ctx, channel.serverId, me, "manageMembers"))
+      || (await hasPermission(ctx, channel.serverId, me, "manageChannels"));
+    if (!allowed) throw new ConvexError("You don't have permission to end this call.");
+
+    const sessions = await ctx.db.query("voiceSessions").withIndex("by_channel", (q) => q.eq("channelId", channelId)).collect();
+    for (const session of sessions) {
+      if (session.userId !== me) {
+        await notify(ctx, session.userId, "announcement", "Call ended", `The call in #${channel.name} was ended.`, "/dashboard");
+      }
+      await ctx.db.delete(session._id);
+    }
+    // Cancel every pending invitation aimed at this call.
+    const invites = await ctx.db.query("callInvites").collect();
+    for (const invite of invites) {
+      if (invite.status === "ringing" && invite.channelId === channelId) {
+        await ctx.db.patch(invite._id, { status: "cancelled", endedAt: Date.now() });
+      }
+    }
+    await audit(ctx, "voice.endCall", me, `Ended the call in #${channel.name}`, "channel", channelId);
+    return { ended: sessions.length };
   },
 });
 
@@ -453,7 +501,15 @@ export const voiceChannelDetails = query({
           joinedAt: s.joinedAt,
         })),
     );
-    return { channel, participants, userLimit: channel.userLimit ?? 0 };
+    return {
+      channel,
+      participants,
+      userLimit: channel.userLimit ?? 0,
+      // Server-computed: only these users are offered the "End call for all"
+      // control (the mutation re-checks, so the UI is never the authority).
+      canEndCall: (await hasPermission(ctx, channel.serverId, userId, "manageMembers"))
+        || (await hasPermission(ctx, channel.serverId, userId, "manageChannels")),
+    };
   },
 });
 

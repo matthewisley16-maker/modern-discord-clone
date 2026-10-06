@@ -5,7 +5,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type { GifValue } from "@/convex/gif";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, EmptyState } from "./ui";
+import { Avatar, EmptyState, PRESENCE_META, formatLastSeen } from "./ui";
 import MediaAttachment from "./MediaAttachment";
 import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
@@ -21,7 +21,7 @@ import { useTyping, typingLabel } from "@/hooks/use-typing";
 import { normalizeDmMessages } from "@/lib/dm-messages";
 import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
-import { AtSign, Check, CheckCheck, Copy, Download, FileText, Flag, Lock, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
+import { Check, CheckCheck, Copy, FileText, Flag, Lock, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
 
 const EMOJIS = ["😀", "😂", "🙌", "❤️", "🔥", "👍", "🎉", "👋", "✨", "😮", "😢", "🙏"];
 const REACTIONS = ["👍", "❤️", "😂", "🔥", "🎉"];
@@ -233,6 +233,17 @@ export default function DmView({
     [convo],
   );
   const title = convo?.type === "group" ? convo.name : convoMembers[0]?.displayName ?? "Conversation";
+  // The other person's live presence, straight from the same authoritative
+  // presence data the DM list and every other surface use. An invisible user
+  // arrives here as "offline", so nothing is leaked.
+  const other = convoMembers[0];
+  const headerStatus = convo?.type === "group"
+    ? `${convo.memberCount} members`
+    : other
+      ? other.presence && other.presence !== "offline" && other.presence !== "invisible"
+        ? PRESENCE_META[other.presence]?.label ?? "Offline"
+        : formatLastSeen(other.lastSeen)
+      : "";
 
   function clearPending() {
     setPending((prev) => { prev.forEach((p) => p.previewUrl && URL.revokeObjectURL(p.previewUrl)); return []; });
@@ -319,10 +330,23 @@ export default function DmView({
       onDrop={(e) => { e.preventDefault(); setDragging(false); Array.from(e.dataTransfer.files ?? []).forEach(stageFile); }}
     >
       <header className="fc-conversation-head">
-        <span className="fc-head-icon">{convo?.type === "group" ? <Users size={20} /> : <AtSign size={20} />}</span>
+        {/* Direct chats show the person's avatar WITH their live status dot;
+            groups keep the community icon (no single presence to show). */}
+        {convo?.type === "group" ? (
+          <span className="fc-head-icon"><Users size={20} /></span>
+        ) : (
+          <Avatar
+            name={title}
+            size={28}
+            url={other?.avatarUrl}
+            decorationId={other?.decorationId}
+            presence={other?.presence}
+            lastSeen={other?.lastSeen}
+          />
+        )}
         <div className="fc-head-text">
           <strong>{title}</strong>
-          <small>{convo?.type === "group" ? `${convo.memberCount} members` : convoMembers[0]?.username ? `@${convoMembers[0].username}` : ""}</small>
+          <small>{headerStatus || (other?.username ? `@${other.username}` : "")}</small>
         </div>
         <div className="fc-head-actions">
           <button title="Start voice call" aria-label="Start voice call" onClick={() => onStartCall("voice")}><Phone size={18} /></button>

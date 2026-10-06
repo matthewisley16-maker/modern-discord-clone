@@ -667,6 +667,20 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-incoming-name { font-size: 19px; color: #f2f0fa; }
 .fc-incoming-kind { font-size: 12px; color: #9b97ad; letter-spacing: .3px; }
 .fc-incoming-actions { display: flex; gap: 10px; margin-top: 8px; }
+/* ---- Community call invite picker ---- */
+.fc-invite-search { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: #8b87a0; }
+.fc-invite-search input { flex: 1; }
+.fc-invite-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 20rem; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.fc-invite-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 10px; }
+.fc-invite-row:hover { background: rgba(255,255,255,.05); }
+.fc-invite-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.fc-invite-who strong { font-size: 13px; color: #eeecf6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-invite-who small { font-size: 11px; color: #8b87a0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-invite-note { font-size: 11px; color: #8b87a0; white-space: nowrap; }
+.fc-invite-note.sent { color: #3ddc97; }
+.fc-invite-empty { padding: 14px 8px; text-align: center; font-size: 12px; color: #8b87a0; }
+/* The DM status dot sits on the avatar edge: never clip it in a list row. */
+.fc-dm-row, .fc-dm { overflow: visible; }
 /* ---- Voice channel participant count + expand ---- */
 .fc-voice-count { margin-left: 6px; font-size: 10px; min-width: 17px; text-align: center; padding: 1px 5px; border-radius: 999px; background: rgba(61,220,151,.2); color: #7ff0bd; }
 .fc-voice-people.expanded { max-height: 190px; overflow-y: auto; }

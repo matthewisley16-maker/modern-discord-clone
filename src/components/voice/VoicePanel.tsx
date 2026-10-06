@@ -6,7 +6,10 @@ import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/profile/ProfileAvatar";
 import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
-import { Maximize, Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Video, VideoOff, VolumeX, X } from "lucide-react";
+import { Maximize, Maximize2, Mic, MicOff, Minimize2, MonitorUp, PhoneOff, Search, UserPlus, Video, VideoOff, VolumeX, X } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { PRESENCE_META } from "@/components/dashboard/ui";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "./screenShare";
 import { useDraggableWindow } from "@/hooks/use-draggable";
 import "./screenShare.css";
@@ -59,6 +62,57 @@ export default function VoicePanel({
   const clearSignal = useMutation(api.communities.clearSignal);
   const setVoiceFlags = useMutation(api.voice.setVoiceFlags);
   const setSpeaking = useMutation(api.voice.setSpeaking);
+  const endCommunityCall = useMutation(api.voice.endCommunityCall);
+
+  /** Authorized community members can end the call for everyone. */
+  async function endForEveryone() {
+    if (!window.confirm("End the call for everyone?")) return;
+    try {
+      await endCommunityCall({ channelId });
+      toast.success("Call ended for everyone.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not end the call.");
+    }
+  }
+
+  // ---- Community call invitations ----
+  // Inviting someone into THIS call: the invite points at the channel the user
+  // is already connected to, so accepting joins the very same call — no second
+  // call, no duplicate session.
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteSearch, setInviteSearch] = useState("");
+  const [invited, setInvited] = useState<Record<string, boolean>>({});
+  const [inviteBusy, setInviteBusy] = useState<string | null>(null);
+  // Subscribes ONLY while the picker is open, so an idle call creates no extra
+  // presence traffic (Freecord has had Convex usage problems before).
+  const inviteCandidates = useQuery(api.calls.communityInviteCandidates, inviteOpen ? { channelId } : "skip");
+  const candidateList = useMemo(
+    () => toSafeArray<NonNullable<NonNullable<typeof inviteCandidates>>[number]>(inviteCandidates, {
+      label: "Community invite candidates",
+      source: "api.calls.communityInviteCandidates",
+    }),
+    [inviteCandidates],
+  );
+  const filteredCandidates = useMemo(() => {
+    const term = inviteSearch.trim().toLowerCase();
+    if (!term) return candidateList;
+    return candidateList.filter((c) => c.name.toLowerCase().includes(term) || c.username.toLowerCase().includes(term));
+  }, [candidateList, inviteSearch]);
+  const inviteToCall = useMutation(api.calls.inviteToCommunityCall);
+
+  /** Invite a community member into this call (never a new, separate call). */
+  async function inviteMember(userId: string) {
+    setInviteBusy(userId);
+    try {
+      await inviteToCall({ channelId, toUserId: userId as Id<"users">, media: videoOn ? "video" : "voice" });
+      setInvited((prev) => ({ ...prev, [userId]: true }));
+      toast.success("Invitation sent.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not send the invitation.");
+    } finally {
+      setInviteBusy(null);
+    }
+  }
 
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
@@ -617,6 +671,7 @@ export default function VoicePanel({
             <button className={deafened ? "active" : ""} onClick={toggleDeafen} aria-label="Toggle deafen" title="Deafen">
               <VolumeX size={16} />
             </button>
+            <button onClick={() => setInviteOpen(true)} aria-label="Invite people" title="Invite people"><UserPlus size={16} /></button>
             <button onClick={onExpand} aria-label="Open the call" title="Open the call"><Maximize2 size={16} /></button>
             <button className="danger" onClick={onLeave} aria-label="Leave the call" title="Leave the call"><PhoneOff size={16} /></button>
           </div>
@@ -632,6 +687,14 @@ export default function VoicePanel({
                 </p>
               </div>
               <div className="vp-head-actions">
+                <Button size="sm" variant="outline" onClick={() => setInviteOpen(true)} title="Invite people to this call">
+                  <UserPlus className="mr-1 h-4 w-4" /> Invite
+                </Button>
+                {details?.canEndCall && (
+                  <Button size="sm" variant="outline" className="text-destructive" onClick={() => void endForEveryone()} title="End the call for everyone">
+                    End for all
+                  </Button>
+                )}
                 {onMinimize && (
                   <Button size="sm" variant="outline" onClick={onMinimize} title="Minimize — stay connected while you use Freecord">
                     <Minimize2 className="mr-1 h-4 w-4" /> Minimize
@@ -752,9 +815,62 @@ export default function VoicePanel({
               <button className={screenOn ? "active" : ""} onClick={() => void toggleScreen()} aria-label={screenOn ? "Stop sharing screen" : "Share screen"} title={screenOn ? "Stop sharing" : "Share screen"}>
                 <MonitorUp className="h-5 w-5" />
               </button>
+              <button onClick={() => setInviteOpen(true)} aria-label="Invite people to this call" title="Invite people">
+                <UserPlus className="h-5 w-5" />
+              </button>
             </footer>
           </div>
         </div>
+      )}
+
+      {/* Invite picker — community members who can join THIS call. */}
+      {inviteOpen && (
+        <Dialog open onOpenChange={(open) => { if (!open) { setInviteOpen(false); setInviteSearch(""); } }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Invite to {channelName}</DialogTitle>
+              <DialogDescription>
+                Everyone you invite joins this same call — the one you&apos;re already in.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="fc-invite-search">
+              <Search size={14} />
+              <Input
+                value={inviteSearch}
+                onChange={(e) => setInviteSearch(e.target.value)}
+                placeholder="Search name or username"
+                aria-label="Search community members"
+              />
+            </div>
+            <ul className="fc-invite-list">
+              {inviteCandidates === undefined && <li className="fc-invite-empty">Loading people…</li>}
+              {inviteCandidates !== undefined && filteredCandidates.length === 0 && (
+                <li className="fc-invite-empty">No one else can be invited to this call right now.</li>
+              )}
+              {filteredCandidates.map((c) => (
+                <li key={c.userId} className="fc-invite-row">
+                  <ProfileAvatar name={c.name} url={c.avatarUrl} presence={c.presence} size={32} />
+                  <span className="fc-invite-who">
+                    <strong>{c.name}</strong>
+                    <small>
+                      @{c.username}{c.friend ? " · Friend" : ""}
+                      {" · "}{PRESENCE_META[c.presence]?.label ?? "Offline"}
+                    </small>
+                  </span>
+                  {c.inCall ? (
+                    <span className="fc-invite-note">Already in call</span>
+                  ) : invited[c.userId] ? (
+                    <span className="fc-invite-note sent">Invited</span>
+                  ) : (
+                    <Button size="sm" disabled={inviteBusy === c.userId} onClick={() => void inviteMember(c.userId)}>
+                      Invite
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </DialogContent>
+        </Dialog>
       )}
     </>
   );

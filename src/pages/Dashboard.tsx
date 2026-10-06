@@ -379,7 +379,11 @@ export default function Dashboard() {
         openConversation(dm as Id<"dmConversations">);
       } else if (server) {
         openCommunity(server);
-        if (channel) setChannelId(channel as Id<"channels">);
+        if (channel) {
+          setChannelId(channel as Id<"channels">);
+          // A community call invitation deep-links straight into the call.
+          if (p.get("voice") === "1") await joinVoice(channel as Id<"channels">, "Voice");
+        }
       } else if (p.get("view") === "friends") {
         setSection("home");
       } else if (p.get("discover")) {
@@ -878,7 +882,17 @@ export default function Dashboard() {
                   className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                   onClick={() => openConversation(c.conversationId)}
                 >
-                  <Avatar name={c.name} size={26} url={c.members?.[0]?.avatarUrl} decorationId={c.members?.[0]?.decorationId} />
+                  {/* The other person's real, live presence — the same
+                      authoritative value used by profiles, member lists and
+                      popouts (invisible users arrive here as "offline"). */}
+                  <Avatar
+                    name={c.name}
+                    size={26}
+                    url={c.members?.[0]?.avatarUrl}
+                    decorationId={c.members?.[0]?.decorationId}
+                    presence={c.type === "group" ? undefined : c.members?.[0]?.presence}
+                    lastSeen={c.members?.[0]?.lastSeen}
+                  />
                   <span className="fc-dm-name">{c.type === "group" ? `${c.name} · ${c.memberCount}` : c.name}</span>
                   {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
                   {c.pinned && <span className="fc-dm-flag">📌</span>}
@@ -908,7 +922,14 @@ export default function Dashboard() {
                       className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                       onClick={() => openConversation(c.conversationId)}
                     >
-                      <Avatar name={c.name} size={26} url={c.members?.[0]?.avatarUrl} decorationId={c.members?.[0]?.decorationId} />
+                      <Avatar
+                        name={c.name}
+                        size={26}
+                        url={c.members?.[0]?.avatarUrl}
+                        decorationId={c.members?.[0]?.decorationId}
+                        presence={c.type === "group" ? undefined : c.members?.[0]?.presence}
+                        lastSeen={c.members?.[0]?.lastSeen}
+                      />
                       <span className="fc-dm-name">{c.name}</span>
                       {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
                       {c.unread > 0 && <i className="fc-dm-badge">{c.unread}</i>}
@@ -1203,24 +1224,42 @@ export default function Dashboard() {
             <Avatar name={incomingCall.fromName} size={84} url={incomingCall.fromAvatarUrl} />
             <strong className="fc-incoming-name">{incomingCall.fromName}</strong>
             <small className="fc-incoming-kind">
-              {incomingCall.media === "video" ? "Incoming Video Call" : "Incoming Voice Call"}
+              {incomingCall.channelId
+                ? `Invited to the ${incomingCall.media === "video" ? "video" : "voice"} call in ${incomingCall.community?.serverName ?? "a community"} · #${incomingCall.community?.channelName ?? ""}`
+                : incomingCall.media === "video" ? "Incoming Video Call" : "Incoming Voice Call"}
             </small>
             <div className="fc-incoming-actions">
               <Button
                 onClick={async () => {
-                  await respondCall({ inviteId: incomingCall.inviteId, accept: true });
-                  if (incomingCall.conversationId) {
-                    setCallMinimized(false);
-                    setDmCall({
-                      inviteId: incomingCall.inviteId,
-                      conversationId: incomingCall.conversationId as Id<"dmConversations">,
-                      peerId: incomingCall.fromId as Id<"users">,
-                      name: incomingCall.fromName,
-                      username: incomingCall.fromUsername ?? null,
-                      media: incomingCall.media,
-                    });
-                  } else {
-                    toast.error("This call has no conversation to connect to.");
+                  try {
+                    await respondCall({ inviteId: incomingCall.inviteId, accept: true });
+                    if (incomingCall.channelId) {
+                      // Accepting joins the EXISTING community call — the same
+                      // voice channel the inviter is already connected to. No
+                      // separate call is created.
+                      const targetChannel = incomingCall.channelId as Id<"channels">;
+                      setCallMinimized(false);
+                      setMobileNav(false);
+                      if (incomingCall.community?.serverId) setCommunityId(incomingCall.community.serverId);
+                      setSection("community");
+                      setChannelId(targetChannel);
+                      await joinVoice(targetChannel, incomingCall.community?.channelName ?? "Voice");
+                    } else if (incomingCall.conversationId) {
+                      setCallMinimized(false);
+                      setDmCall({
+                        inviteId: incomingCall.inviteId,
+                        conversationId: incomingCall.conversationId as Id<"dmConversations">,
+                        peerId: incomingCall.fromId as Id<"users">,
+                        name: incomingCall.fromName,
+                        username: incomingCall.fromUsername ?? null,
+                        media: incomingCall.media,
+                      });
+                    } else {
+                      toast.error("This call has no conversation to connect to.");
+                    }
+                  } catch (err) {
+                    // Surfaces the server's permission/lock/ban refusal verbatim.
+                    toast.error(err instanceof Error ? err.message : "Could not join the call.");
                   }
                 }}
               >
