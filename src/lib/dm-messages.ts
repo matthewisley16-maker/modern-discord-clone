@@ -1,4 +1,4 @@
-import { sanitizeCollectionFields, toSafeArrayField } from "./collection";
+import { sanitizeCollectionFields, toSafeArrayField, type CollectionContext } from "./collection";
 
 /**
  * The DM messages query returns `{ messages, locked, readByOthers, memberCount }`.
@@ -10,18 +10,20 @@ import { sanitizeCollectionFields, toSafeArrayField } from "./collection";
  * `attachments`, `mentionUsers`) so a single legacy record with a missing or
  * malformed field cannot take down the whole conversation.
  */
-export function normalizeDmMessages<T>(raw: unknown): T[] {
-  const list = toSafeArrayField<T>(raw, "messages", {
-    label: "DM messages",
+export function normalizeDmMessages<T>(raw: unknown, context?: CollectionContext): T[] {
+  const base: CollectionContext = {
+    component: "DmView",
     source: "api.dms.messages",
-  });
-  return list.map((message) => sanitizeDmMessage<T>(message));
+    ...context,
+  };
+  const list = toSafeArrayField<T>(raw, "messages", { ...base, label: "DM messages" });
+  return list.map((message) => sanitizeDmMessage<T>(message, base));
 }
 
 /** Ensure a message's expected array fields really are arrays. */
-function sanitizeDmMessage<T>(message: T): T {
+function sanitizeDmMessage<T>(message: T, context: CollectionContext): T {
   return sanitizeCollectionFields(message, ["reactions", "attachments", "mentionUsers"], {
+    ...context,
     label: "DM message",
-    source: "api.dms.messages",
   });
 }

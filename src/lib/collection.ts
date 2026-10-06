@@ -54,21 +54,34 @@ function diagnosticsEnabled(): boolean {
   }
 }
 
-function reportShape(label: string, source: string | undefined, value: unknown, type: ValueType) {
+function reportShape(context: CollectionContext | undefined, field: string | undefined, value: unknown, type: ValueType) {
   // Diagnostics are development-only: production users never see this.
   if (!diagnosticsEnabled()) return;
-  const key = `${label}:${type}`;
+  const label = context?.label ?? "A collection";
+  const name = field ? `${label}.${field}` : label;
+  const key = `${name}:${type}`;
   if (warned.has(key)) return;
   warned.add(key);
   console.warn(
-    `[FreeCord Data Shape Warning] ${label} expected an array but received ${type}.` +
-      (source ? ` Source: ${source}.` : "") +
-      ` Actual shape: ${sanitizedShape(value, type)}. Normalized to [].`,
+    `[FreeCord Data Shape Warning]${context?.component ? ` [${context.component}]` : ""} ${name} expected an array but received ${type}.` +
+      (context?.source ? ` Source: ${context.source}.` : "") +
+      (context?.conversationId ? ` Conversation: ${context.conversationId}.` : "") +
+      ` Actual shape: ${sanitizedShape(value, type)}.` +
+      ` Auto-repair attempted: yes (normalized to []${field ? ` and unwrapped known field` : ""}); no data changed.`,
   );
 }
 
-/** Optional context for a shape diagnostic. Never include private contents. */
-export type CollectionContext = { label?: string; source?: string };
+/**
+ * Optional context for a shape diagnostic. `conversationId` is a non-secret id
+ * and is only ever emitted in development builds. Never include private
+ * contents, tokens, or message text here.
+ */
+export type CollectionContext = {
+  label?: string;
+  source?: string;
+  component?: string;
+  conversationId?: string;
+};
 
 /**
  * Normalize a value that is logically an array into a real array.
@@ -78,7 +91,7 @@ export type CollectionContext = { label?: string; source?: string };
 export function toSafeArray<T = unknown>(value: unknown, context?: CollectionContext): T[] {
   if (Array.isArray(value)) return value as T[];
   if (value === null || value === undefined) return [];
-  reportShape(context?.label ?? "A collection", context?.source, value, typeOf(value));
+  reportShape(context, undefined, value, typeOf(value));
   return [];
 }
 
@@ -104,10 +117,10 @@ export function toSafeArrayField<T = unknown>(
       // A wrapper that simply has no items is a legitimate empty collection.
       return [];
     }
-    reportShape(`${context?.label ?? "A collection"}.${field}`, context?.source, inner, typeOf(inner));
+    reportShape(context, field, inner, typeOf(inner));
     return [];
   }
-  reportShape(context?.label ?? "A collection", context?.source, value, typeOf(value));
+  reportShape(context, undefined, value, typeOf(value));
   return [];
 }
 

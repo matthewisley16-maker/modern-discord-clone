@@ -72,8 +72,11 @@ export default function DmView({
   // Accept both the current `{ messages, ... }` shape and a legacy bare array
   // so a build/backend mismatch can never crash the list with `x?.map`.
   const messageList = useMemo(
-    () => normalizeDmMessages<NonNullable<typeof messages>["messages"][number]>(messages),
-    [messages],
+    () =>
+      normalizeDmMessages<NonNullable<typeof messages>["messages"][number]>(messages, {
+        conversationId: conversationId as string,
+      }),
+    [messages, conversationId],
   );
   const unlockConversation = useAction(api.conversationPrivacy.unlockConversation);
   const finishPinReset = useAction(api.conversationPrivacy.finishPinReset);

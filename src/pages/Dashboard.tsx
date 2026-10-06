@@ -287,6 +287,14 @@ export default function Dashboard() {
     }
   }, [details, detailsChannels, communityId, channelId]);
 
+  // Clear ONLY a stale/invalid selected conversation (e.g. a deep link to a
+  // deleted or no-longer-shared chat). Never touches local storage, the
+  // session, or any other state — and never clears while still loading.
+  useEffect(() => {
+    if (section !== "dms" || !conversationId || conversations === undefined) return;
+    if (!conversationList.some((c) => c.conversationId === conversationId)) setConversationId(null);
+  }, [section, conversationId, conversations, conversationList]);
+
   function openCommunity(id: string) {
     setCommunityId(id as Id<"servers">);
     setChannelId(null);
@@ -1011,8 +1019,36 @@ export default function Dashboard() {
             {section === "discover" && <DiscoverView onOpenCommunity={openCommunity} onCreate={() => openModal("createCommunity")} onJoinByCode={() => openModal("join")} />}
             {section === "search" && <SearchView query={searchQuery} onOpenProfile={setProfileUserId} onOpenCommunity={openCommunity} />}
             {section === "dms" && (
-              conversationId ? (
-                <DmView conversationId={conversationId} myUserId={me?.userId ?? ""} onOpenProfile={setProfileUserId} onStartCall={startDmCall} highlightMessageId={highlightMessageId} onHighlightHandled={() => setHighlightMessageId(null)} />
+              conversationId && (conversations === undefined || conversationList.some((c) => c.conversationId === conversationId)) ? (
+                // A per-conversation boundary: one malformed conversation shows
+                // its own fallback; the sidebar and every other conversation keep
+                // working. Keyed by id so switching conversations retries cleanly.
+                <FeatureBoundary
+                  key={conversationId}
+                  label="This conversation"
+                  block
+                  fallback={
+                    <div className="fc-scroll-view">
+                      <div className="fc-empty">
+                        <AtSign size={30} />
+                        <h3>Conversation unavailable</h3>
+                        <p>This conversation couldn&apos;t be shown. Your other chats are unaffected.</p>
+                        <Button className="mt-3" onClick={() => setConversationId(null)}>Back to messages</Button>
+                      </div>
+                    </div>
+                  }
+                >
+                  <DmView conversationId={conversationId} myUserId={me?.userId ?? ""} onOpenProfile={setProfileUserId} onStartCall={startDmCall} highlightMessageId={highlightMessageId} onHighlightHandled={() => setHighlightMessageId(null)} />
+                </FeatureBoundary>
+              ) : conversationId ? (
+                <div className="fc-scroll-view">
+                  <div className="fc-empty">
+                    <AtSign size={30} />
+                    <h3>Conversation unavailable</h3>
+                    <p>This conversation no longer exists or isn&apos;t shared with you.</p>
+                    <Button className="mt-3" onClick={() => setConversationId(null)}>Back to messages</Button>
+                  </div>
+                </div>
               ) : (
                 <div className="fc-scroll-view">
                   <div className="fc-view-head"><AtSign size={20} /><h2>Direct Messages</h2></div>
