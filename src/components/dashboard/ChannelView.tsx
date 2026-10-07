@@ -19,7 +19,7 @@ import { sanitizeCollectionFields, toSafeArray } from "@/lib/collection";
 import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
 import { toast } from "sonner";
-import { CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
+import { Bell, BellOff, CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
 
 const EMOJIS = ["😀", "😂", "🙌", "❤️", "🔥", "👍", "🎉", "👋", "✨", "😮", "😢", "🙏"];
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -64,6 +64,9 @@ export default function ChannelView({
   const messages = useQuery(api.chat.messages, { channelId });
   const typing = useQuery(api.communities.typingIn, { channelId });
   const send = useMutation(api.chat.sendMessage);
+  const setChannelMuted = useMutation(api.communities.setChannelMuted);
+  const myChannelMutes = useQuery(api.communities.myChannelMutes, {});
+  const channelMuted = Boolean(myChannelMutes?.some((id) => id === channelId));
   const edit = useMutation(api.chat.editMessage);
   const react = useMutation(api.chat.toggleReaction);
   const pin = useMutation(api.chat.pinMessage);
@@ -262,6 +265,20 @@ export default function ChannelView({
           <small>{channelDescription}</small>
         </div>
         <div className="fc-head-actions">
+          {/* Per-user channel mute: notifications only — the channel and its
+              messages stay fully readable. */}
+          <button
+            className={`fc-head-mute ${channelMuted ? "muted" : ""}`}
+            title={channelMuted ? "Unmute this channel" : "Mute this channel"}
+            aria-label={channelMuted ? "Unmute this channel" : "Mute this channel"}
+            aria-pressed={channelMuted}
+            onClick={async () => {
+              try { await setChannelMuted({ channelId, muted: !channelMuted }); toast.success(channelMuted ? `Unmuted #${channelName}.` : `Muted #${channelName}.`); }
+              catch (e) { toast.error(e instanceof Error ? e.message : "Could not update the channel."); }
+            }}
+          >
+            {channelMuted ? <BellOff size={16} /> : <Bell size={16} />}
+          </button>
           {isVoice && <button className="fc-join-voice" onClick={onJoinVoice}><Smile size={16} /> Join voice</button>}
           <div className="fc-search">
             <input aria-label="Search messages" placeholder="Search messages" value={search} onChange={(e) => setSearch(e.target.value)} />

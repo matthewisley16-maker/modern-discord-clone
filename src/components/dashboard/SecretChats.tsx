@@ -230,6 +230,7 @@ export default function SecretChatsDialog({
   const finishReset = useAction(api.conversationPrivacy.finishPinReset);
   const relock = useMutation(api.conversationPrivacy.relock);
   const updateSettings = useMutation(api.conversationPrivacy.updatePinSettings);
+  const deleteConversation = useMutation(api.dms.deleteConversation);
 
   // `heldPin` is the PIN the user just typed to open this screen; it is only
   // kept in memory for as long as the dialog is open, and is used for the
@@ -392,6 +393,20 @@ export default function SecretChatsDialog({
     if (res) toast.success("Protection removed.");
   }
 
+  /**
+   * Delete a protected conversation outright.
+   *
+   * The chat and ITS lock state go together: the membership row that carries
+   * `locked`/`hidden` is removed, along with this chat's unlock grant, so no
+   * stale lock flag can survive the chat. Your personal PIN is not touched and
+   * keeps working for every other protected conversation.
+   */
+  async function deleteRow(row: SecretRow) {
+    if (!window.confirm(`Delete “${row.name}” and its lock? This removes the chat from your chats.`)) return;
+    const res = await guard(() => deleteConversation({ conversationId: row.conversationId }), "Could not delete that chat.");
+    if (res !== null) toast.success("Chat and its lock removed.");
+  }
+
   async function removePinEntirely() {
     if (!heldPin) { setError("Enter your PIN first."); return; }
     if (!window.confirm("Remove your PIN and release every protected conversation?")) return;
@@ -537,7 +552,8 @@ export default function SecretChatsDialog({
                     <button onClick={() => toggleHidden(row)} disabled={busy} title={row.hidden ? "Show in Chats" : "Hide from Chats"}>
                       {row.hidden ? "Unhide" : "Hide"}
                     </button>
-                    <button onClick={() => releaseRow(row)} disabled={busy} className="danger" title="Remove protection">Remove</button>
+                    <button onClick={() => releaseRow(row)} disabled={busy} title="Remove protection">Remove</button>
+                    <button onClick={() => deleteRow(row)} disabled={busy} className="danger" title="Delete this chat and its lock">Delete</button>
                   </div>
                 </div>
               ))}

@@ -298,6 +298,8 @@ export const details = query({
       myRole: myMembership?.role ?? "member",
       isOwner: server.ownerId === userId,
       timedOut: isTimedOut(myMembership ?? null),
+      // Per-member "mute this community" (notifications only).
+      muted: Boolean(myMembership?.muted),
       inviteCode: server.inviteCode,
     };
   },
@@ -686,6 +688,58 @@ export const joinVoice = mutation({
     const existing = await ctx.db.query("voiceSessions").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
     for (const s of existing) await ctx.db.delete(s._id);
     await ctx.db.insert("voiceSessions", { channelId, userId, joinedAt: Date.now(), muted: false, deafened: false, video: video ?? false, screen: false });
+  },
+});
+
+/**
+ * Mute or unmute a whole community for the signed-in member.
+ *
+ * Muting only ever suppresses NOTIFICATIONS — messages, mentions in the UI,
+ * unread badges and access are untouched. It is per member, so one person
+ * muting a community changes nothing for anyone else.
+ */
+export const setServerMuted = mutation({
+  args: { serverId: v.id("servers"), muted: v.boolean() },
+  handler: async (ctx, { serverId, muted }) => {
+    const userId = await currentUserId(ctx);
+    const membership = await requireMember(ctx, serverId, userId);
+    await ctx.db.patch(membership._id, { muted });
+    return { muted };
+  },
+});
+
+/**
+ * Mute or unmute ONE channel (notifications only). Channel-scoped, so muting
+ * a busy channel never silences the rest of the community.
+ */
+export const setChannelMuted = mutation({
+  args: { channelId: v.id("channels"), muted: v.boolean() },
+  handler: async (ctx, { channelId, muted }) => {
+    const userId = await currentUserId(ctx);
+    const channel = await ctx.db.get(channelId);
+    if (!channel) throw new ConvexError("Channel not found.");
+    await requireMember(ctx, channel.serverId, userId);
+    const existing = await ctx.db
+      .query("channelMutes")
+      .withIndex("by_user_channel", (q) => q.eq("userId", userId).eq("channelId", channelId))
+      .unique();
+    if (muted) {
+      if (!existing) await ctx.db.insert("channelMutes", { userId, channelId });
+    } else if (existing) {
+      await ctx.db.delete(existing._id);
+    }
+    return { muted };
+  },
+});
+
+/** The channel ids the signed-in member has muted (for bell icons). */
+export const myChannelMutes = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const rows = await ctx.db.query("channelMutes").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
+    return rows.map((row) => row.channelId);
   },
 });
 

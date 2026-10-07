@@ -1,7 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { audit, avatarUrlOf, currentUserId, displayNameOf, hasPermission, isTimedOut, membershipOf, notify, profileOf, requireMember, requirePermission } from "./lib";
+import { audit, avatarUrlOf, currentUserId, displayNameOf, hasChannelPermission, hasPermission, isTimedOut, membershipOf, notify, profileOf, requireMember, requirePermission } from "./lib";
 import type { Ctx } from "./lib";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
@@ -384,8 +384,12 @@ export const endCommunityCall = mutation({
     const channel = await ctx.db.get(channelId);
     if (!channel) throw new ConvexError("Channel not found.");
     if (channel.type === "text") throw new ConvexError("That's a text channel.");
-    const allowed = (await hasPermission(ctx, channel.serverId, me, "manageMembers"))
-      || (await hasPermission(ctx, channel.serverId, me, "manageChannels"));
+    // Ending the call FOR EVERYONE is a moderation action, never something an
+    // ordinary participant can do: it requires the channel-scoped management
+    // permission (community owner/admin by default, or a role granted it here).
+    // Leaving a call is `leaveVoiceSession` and only ever removes the caller.
+    const allowed = (await hasChannelPermission(ctx, channelId, me, "manageMembers"))
+      || (await hasChannelPermission(ctx, channelId, me, "manageChannels"));
     if (!allowed) throw new ConvexError("You don't have permission to end this call.");
 
     const sessions = await ctx.db.query("voiceSessions").withIndex("by_channel", (q) => q.eq("channelId", channelId)).collect();
@@ -519,10 +523,12 @@ export const voiceChannelDetails = query({
       channel,
       participants,
       userLimit: channel.userLimit ?? 0,
-      // Server-computed: only these users are offered the "End call for all"
-      // control (the mutation re-checks, so the UI is never the authority).
-      canEndCall: (await hasPermission(ctx, channel.serverId, userId, "manageMembers"))
-        || (await hasPermission(ctx, channel.serverId, userId, "manageChannels")),
+      // Server-computed: only moderators are offered the "End call for all"
+      // control. It uses the same channel-scoped check as the mutation (which
+      // re-checks, so the UI is never the authority), so a participant who
+      // cannot manage this channel never sees — or can use — the control.
+      canEndCall: (await hasChannelPermission(ctx, channelId, userId, "manageMembers"))
+        || (await hasChannelPermission(ctx, channelId, userId, "manageChannels")),
     };
   },
 });

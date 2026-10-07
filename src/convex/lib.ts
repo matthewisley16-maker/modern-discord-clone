@@ -147,6 +147,7 @@ export async function notify(
     friend_request: "notifyFriendRequests",
     friend_accept: "notifyFriendRequests",
     dm: "notifyDMs",
+    message: "notifyServerMessages",
     mention: "notifyMentions",
     invite: "notifyInvites",
     follow: "notifyFollows",

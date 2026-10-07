@@ -17,6 +17,37 @@ import type { MutationCtx } from "./_generated/server";
  */
 const CONVO_PREVIEW_SCAN = 100;
 
+/**
+ * Remove EVERY chat-specific privacy artifact a single member holds for one
+ * conversation — the per-chat unlock grant (both the "just this chat" grant and
+ * any grant aimed at it) and any typing row — so a removed chat can never leave
+ * a stale locked flag or lock data behind.
+ *
+ * The account's PERSONAL PIN (`conversationPins`) is deliberately untouched:
+ * it belongs to the account and every other protected conversation, not to this
+ * chat. Removing one chat must never reset, change or break the PIN.
+ */
+async function clearMemberLockData(ctx: MutationCtx, userId: Id<"users">, conversationId: Id<"dmConversations">) {
+  const unlocks = await ctx.db.query("conversationUnlocks").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
+  for (const unlock of unlocks) {
+    if (unlock.conversationId === conversationId) await ctx.db.delete(unlock._id);
+  }
+  const typing = await ctx.db.query("typing").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
+  for (const row of typing) {
+    if (row.scope === `dm:${conversationId}`) await ctx.db.delete(row._id);
+  }
+}
+
+/**
+ * The conversation itself is gone (last member left), so drop any lock grant
+ * ANY user still holds for it — a dead conversation must not keep unlock rows
+ * (or anything else) pointing at it. Personal PINs are never touched here.
+ */
+async function purgeConversationLockData(ctx: MutationCtx, conversationId: Id<"dmConversations">) {
+  const grants = await ctx.db.query("conversationUnlocks").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
+  for (const grant of grants) await ctx.db.delete(grant._id);
+}
+
 async function requireMember(ctx: Parameters<typeof displayNameOf>[0], conversationId: Id<"dmConversations">, userId: Id<"users">) {
   const member = await ctx.db
     .query("dmMembers")
@@ -353,26 +384,39 @@ export const removeGroupMember = mutation({
     }
     if (convo.ownerId === userId) throw new ConvexError("The group owner can't be removed. Transfer or leave instead.");
     const member = await ctx.db.query("dmMembers").withIndex("by_pair", (q) => q.eq("conversationId", conversationId).eq("userId", userId)).unique();
-    if (member) await ctx.db.delete(member._id);
+    if (member) {
+      // The removed member's per-chat lock lives on this row, which is deleted
+      // with them; their chat-specific lock data goes too.
+      await ctx.db.delete(member._id);
+      await clearMemberLockData(ctx, userId, conversationId);
+    }
   },
 });
 
-/** Remove a conversation from the caller's own inbox (per-user, never for others). */
+/**
+ * Remove a conversation from the caller's own inbox (per-user, never for others).
+ *
+ * Removing the chat removes its lock state with it: the membership row that
+ * carries `locked`/`hidden` is deleted, the per-chat unlock grant is dropped,
+ * and if this was the last member the conversation itself is deleted. The
+ * account's personal PIN is untouched, so every other protected conversation
+ * keeps working with the same PIN.
+ */
 export const deleteConversation = mutation({
   args: { conversationId: v.id("dmConversations") },
   handler: async (ctx, { conversationId }) => {
     const me = await currentUserId(ctx);
     const member = await requireMember(ctx, conversationId, me);
     await ctx.db.delete(member._id);
-    // Drop any unlock grant / PIN reset leftovers tied to this conversation.
-    for (const unlock of await ctx.db.query("conversationUnlocks").withIndex("by_user", (q) => q.eq("userId", me)).collect()) {
-      if (unlock.conversationId === conversationId) await ctx.db.delete(unlock._id);
-    }
+    // Drop every chat-specific lock artifact for this conversation.
+    await clearMemberLockData(ctx, me, conversationId);
     const remaining = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
     if (remaining.length === 0) {
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
       for (const m of messages) await ctx.db.delete(m._id);
       await ctx.db.delete(conversationId);
+      // Nobody can reach it any more: purge any leftover grants for it too.
+      await purgeConversationLockData(ctx, conversationId);
     }
   },
 });
@@ -384,11 +428,15 @@ export const leaveGroup = mutation({
     const convo = await ctx.db.get(conversationId);
     const member = await requireMember(ctx, conversationId, me);
     await ctx.db.delete(member._id);
+    // Leaving releases this member's lock for the chat and drops its per-chat
+    // lock data (the personal PIN is account-wide and stays exactly as it is).
+    await clearMemberLockData(ctx, me, conversationId);
     const remaining = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
     if (remaining.length === 0) {
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
       for (const m of messages) await ctx.db.delete(m._id);
       await ctx.db.delete(conversationId);
+      await purgeConversationLockData(ctx, conversationId);
       return;
     }
     // If the owner leaves, hand ownership to an administrator (or the oldest member).

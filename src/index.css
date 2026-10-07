@@ -1461,3 +1461,51 @@ html.fc-light .fc-pin-field { color: #4b4a58; }
 .fc-lock-gate-form { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 280px; margin-top: 6px; }
 .fc-lock-gate-form input { text-align: center; letter-spacing: .35em; font-size: 16px; }
 .fc-lock-gate-error { font-size: 12px; color: #f0616d; }
+
+/* ============ Freecord: independent list scrolling ============
+   The sidebar is a fixed-height column. Long lists (conversations, your
+   communities, a community's channels) each scroll INSIDE their own box, so
+   a large number of DMs or communities can never push the rest of the UI — or
+   the page itself — off-screen. Heights come from the flex layout itself (no
+   hardcoded pixel height), so they follow the viewport, zoom level, window
+   resizing and the collapsed/expanded sidebar automatically. */
+.fc-sidebar { min-height: 0; overflow: hidden; }
+.fc-sidebar > * { flex-shrink: 0; }
+.fc-sidebar-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Reaching the end of a list never scrolls another section or the page. */
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139,92,246,.55) transparent;
+}
+/* The DM/conversation list takes the space that is left and scrolls there. */
+.fc-dm-list { flex: 1 1 auto; }
+/* Home for long lists that should not dominate the sidebar. */
+.fc-community-scroll { max-height: min(38vh, 320px); }
+/* Narrow, theme-coloured scrollbar (visible when — and only when — needed). */
+.fc-sidebar-scroll::-webkit-scrollbar { width: 8px; }
+.fc-sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+.fc-sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(139,92,246,.45);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.fc-sidebar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(167,139,250,.75); background-clip: content-box; }
+.fc-rail { scrollbar-width: thin; scrollbar-color: rgba(139,92,246,.55) transparent; }
+.fc-rail::-webkit-scrollbar { width: 8px; }
+.fc-rail::-webkit-scrollbar-track { background: transparent; }
+.fc-rail::-webkit-scrollbar-thumb { background: rgba(139,92,246,.45); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+html.fc-light .fc-sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(109,63,245,.4); background-clip: content-box; }
+html.fc-light .fc-rail::-webkit-scrollbar-thumb { background: rgba(109,63,245,.4); background-clip: content-box; }
+
+/* Channel notification bell (mute this channel — notifications only). */
+.fc-head-mute { display: grid; place-items: center; padding: 6px; border-radius: 8px; color: #8b87a0; }
+.fc-head-mute:hover { background: rgba(255,255,255,.06); color: #e5e0ff; }
+.fc-head-mute.muted { color: #f0a33d; }
+html.fc-light .fc-head-mute { color: #6d6b84; }
+html.fc-light .fc-head-mute:hover { background: rgba(0,0,0,.05); color: #1c1b22; }
+html.fc-light .fc-head-mute.muted { color: #b26a00; }

@@ -221,6 +221,10 @@ const schema = defineSchema(
       notifyInvites: v.optional(v.boolean()),
       notifyFollows: v.optional(v.boolean()),
       notifyCalls: v.optional(v.boolean()),
+      // New messages in community channels. Turning this off is exactly the
+      // "mentions only" mode: mentions and replies still notify (they use
+      // notifyMentions), plain channel chatter stops.
+      notifyServerMessages: v.optional(v.boolean()),
       // voice & video
       voiceEchoCancellation: v.optional(v.boolean()),
       voiceNoiseSuppression: v.optional(v.boolean()),
@@ -342,7 +346,9 @@ const schema = defineSchema(
       sessionId: v.optional(v.id("authSessions")),
     })
       .index("by_user", ["userId"])
-      .index("by_user_conversation", ["userId", "conversationId"]),
+      .index("by_user_conversation", ["userId", "conversationId"])
+      // Lets a deleted conversation purge every stale per-chat lock grant.
+      .index("by_conversation", ["conversationId"]),
 
     /** One-time Secret Chats PIN reset codes (hashed, expiring, single use). */
     pinResets: defineTable({
@@ -385,6 +391,8 @@ const schema = defineSchema(
       role: v.optional(communityRoleValidator),
       timeoutUntil: v.optional(v.number()),
       customRoleId: v.optional(v.id("communityRoles")),
+      /** Per-member "mute this community" (notifications only, never messages). */
+      muted: v.optional(v.boolean()),
     })
       .index("by_user", ["userId"])
       .index("by_server", ["serverId"])
@@ -448,6 +456,19 @@ const schema = defineSchema(
     }).index("by_server", ["serverId"]),
 
     /** Channel categories (folders) used to group text and voice channels. */
+    /**
+     * Per-user, per-channel notification mutes. Channel-scoped so muting one
+     * channel never silences the rest of the community; the message fan-out
+     * reads it once per channel (indexed by channelId) instead of per user.
+     */
+    channelMutes: defineTable({
+      userId: v.id("users"),
+      channelId: v.id("channels"),
+    })
+      .index("by_user", ["userId"])
+      .index("by_channel", ["channelId"])
+      .index("by_user_channel", ["userId", "channelId"]),
+
     channelCategories: defineTable({
       serverId: v.id("servers"),
       name: v.string(),

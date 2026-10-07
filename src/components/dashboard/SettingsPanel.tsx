@@ -511,6 +511,7 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
                 { key: "notifyFriendRequests", label: "Friend requests", hint: "Requests and acceptances." },
                 { key: "notifyDMs", label: "Direct messages", hint: "New DMs from friends." },
                 { key: "notifyMentions", label: "Mentions and replies", hint: "When someone mentions or replies to you." },
+                { key: "notifyServerMessages", label: "Community messages", hint: "New messages in community channels. Turn off for mentions-only." },
                 { key: "notifyInvites", label: "Community invites", hint: "Invites and announcements." },
                 { key: "notifyFollows", label: "New followers", hint: "When someone follows you." },
                 { key: "notifyCalls", label: "Call invitations", hint: "Voice and video call invites." },

@@ -425,6 +425,7 @@ export const updateSettings = mutation({
     notifyFriendRequests: v.optional(v.boolean()),
     notifyDMs: v.optional(v.boolean()),
     notifyMentions: v.optional(v.boolean()),
+    notifyServerMessages: v.optional(v.boolean()),
     notifyInvites: v.optional(v.boolean()),
     notifyFollows: v.optional(v.boolean()),
     notifyCalls: v.optional(v.boolean()),

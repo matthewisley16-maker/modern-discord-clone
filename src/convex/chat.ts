@@ -4,8 +4,9 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 
 import type { Id } from "./_generated/dataModel";
 import { gifValidator, requireGif } from "./gif";
-import { authorCardOf, hasChannelPermission, notify } from "./lib";
+import { authorCardOf, hasChannelPermission, isBlockedEitherWay, isTimedOut, notify } from "./lib";
 import { resolveMentions } from "./mentions";
+import { collectChannelNotifyTargets } from "../lib/server-notifications";
 
 async function signedIn(ctx: QueryCtx) {
   const id = await getAuthUserId(ctx);
@@ -142,10 +143,14 @@ export const sendMessage = mutation({ args: { channelId: v.id("channels"), body:
     }
   }
 
+  // The community's members drive every notification below. Loaded once (and
+  // bounded, exactly like the other member scans in this codebase) so one
+  // message never turns into an unbounded read.
+  const memberships = await ctx.db.query("memberships").withIndex("by_server", (q) => q.eq("serverId", channel.serverId)).take(200);
+
   // @username mentions notify the mentioned member (never the author).
   const mentions = [...new Set((text.match(/@[a-z0-9._-]{2,24}/gi) ?? []).map((m) => m.slice(1).toLowerCase()))];
   if (mentions.length > 0) {
-    const memberships = await ctx.db.query("memberships").withIndex("by_server", (q) => q.eq("serverId", channel.serverId)).collect();
     for (const memberRow of memberships) {
       if (already.has(memberRow.userId as string)) continue;
       const u = await ctx.db.get(memberRow.userId);
@@ -153,6 +158,38 @@ export const sendMessage = mutation({ args: { channelId: v.id("channels"), body:
       already.add(memberRow.userId as string);
       await notify(ctx, memberRow.userId, "mention", "You were mentioned", `${await nameOf(ctx, userId)} mentioned you in #${channel.name}`, link, userId);
     }
+  }
+
+  // A plain channel message notifies the rest of the community. This is the
+  // same reasoning as the DM path (dms.sendMessage notifies the conversation's
+  // other members), so the two behave consistently:
+  //   - the sender is never notified (it is in `already`),
+  //   - "Community messages" off is exactly mentions-only mode, and is handled
+  //     by `notify` itself (type "message" → notifyServerMessages),
+  //   - a muted community, a muted channel, a block, a timeout or no access to
+  //     the channel all suppress it.
+  // The channel's mute list is read once for the whole channel and checked per
+  // member, so the fan-out stays linear and indexed.
+  const mutedChannel = new Set<string>(
+    (await ctx.db.query("channelMutes").withIndex("by_channel", (q) => q.eq("channelId", channelId)).collect())
+      .map((mute) => mute.userId as string),
+  );
+  const recipients = await collectChannelNotifyTargets({
+    senderId: userId as string,
+    candidates: memberships.map((memberRow) => ({
+      userId: memberRow.userId as string,
+      mutedCommunity: Boolean(memberRow.muted),
+      timedOut: isTimedOut(memberRow),
+    })),
+    alreadyNotified: already,
+    mutedChannelUserIds: mutedChannel,
+    isBlocked: (id) => isBlockedEitherWay(ctx, userId, id as Id<"users">),
+    canViewChannel: (id) => hasChannelPermission(ctx, channelId, id as Id<"users">, "viewChannels"),
+  });
+  const senderName = await nameOf(ctx, userId);
+  for (const recipientId of recipients) {
+    already.add(recipientId);
+    await notify(ctx, recipientId as Id<"users">, "message", `New message in #${channel.name}`, `${senderName}: ${text.slice(0, 80)}`, link, userId);
   }
   return messageId;
 }});

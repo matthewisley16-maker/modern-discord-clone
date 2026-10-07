@@ -30,7 +30,7 @@ import { trackOp } from "@/lib/usage-monitor";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
 import {
-  AtSign, Bell, Compass, Hash, Home, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, Users, Volume2, X,
+  AtSign, Bell, BellOff, Compass, Hash, Home, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, Users, Volume2, X,
 } from "lucide-react";
 
 /**
@@ -139,6 +139,8 @@ export default function Dashboard() {
   const setMuted = useMutation(api.dms.setMuted);
   const setPinned = useMutation(api.dms.setPinned);
   const setArchived = useMutation(api.dms.setArchived);
+  const deleteConversation = useMutation(api.dms.deleteConversation);
+  const setServerMuted = useMutation(api.communities.setServerMuted);
 
   const [section, setSection] = useState<Section>("home");
   const [communityId, setCommunityId] = useState<Id<"servers"> | null>(null);
@@ -205,6 +207,41 @@ export default function Dashboard() {
   const [callMinimized, setCallMinimized] = useState(false);
   // Live status of the accepted DM call, so we notice a remote hang-up.
   const callStatus = useQuery(api.calls.getCall, dmCall ? { inviteId: dmCall.inviteId } : "skip");
+
+  // ---- Sidebar lists scroll on their own ---------------------------------
+  // The DM list and the community list are separate scroll boxes, so neither a
+  // long list of DMs nor a long list of communities can push the other, the
+  // sidebar footer or the page itself out of view.
+  const dmListRef = useRef<HTMLDivElement | null>(null);
+  const communityListRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Bring a row inside its own scroll box back into view — and only that box.
+   * Deliberately not `scrollIntoView`, which can move ancestor scrollers too.
+   */
+  function keepRowVisible(box: HTMLDivElement | null, selector: string) {
+    if (!box) return;
+    const row = box.querySelector<HTMLElement>(selector);
+    if (!row) return;
+    const r = row.getBoundingClientRect();
+    const v = box.getBoundingClientRect();
+    if (r.top < v.top) box.scrollTop -= v.top - r.top + 6;
+    else if (r.bottom > v.bottom) box.scrollTop += r.bottom - v.bottom + 6;
+  }
+
+  // Opening a conversation (notification, call, deep link) scrolls the active
+  // row into view. Deliberately keyed on the SELECTION only: a new DM arriving
+  // must never yank the list (or the user's scroll position) around.
+  useEffect(() => {
+    if (section !== "dms" || !conversationId) return;
+    keepRowVisible(dmListRef.current, ".fc-dm.active");
+  }, [conversationId, section]);
+
+  // Same for the selected community when navigation opens one.
+  useEffect(() => {
+    if (!communityId) return;
+    keepRowVisible(communityListRef.current, ".fc-sidebar-action.community.active");
+  }, [communityId]);
   // Which voice channels show their full participant list in the sidebar.
   const [expandedVoice, setExpandedVoice] = useState<Record<string, boolean>>({});
   const joinVoiceChecked = useMutation(api.voice.joinVoiceChecked);
@@ -369,6 +406,26 @@ export default function Dashboard() {
     setChannelId(null);
     setSection("community");
     setMobileNav(false);
+  }
+
+  /**
+   * Remove a conversation from my own inbox.
+   *
+   * The chat and its lock go together: nothing about this chat can stay marked
+   * as locked afterwards, and your personal PIN is untouched, so every other
+   * locked chat keeps working with the same PIN.
+   */
+  async function removeConversation(c: { conversationId: Id<"dmConversations">; name: string; locked?: boolean }) {
+    if (!window.confirm(c.locked
+      ? `Delete “${c.name}” and its lock? The lock is removed with the chat.`
+      : `Delete “${c.name}”? This removes the chat from your chats.`)) return;
+    try {
+      await deleteConversation({ conversationId: c.conversationId });
+      if (conversationId === c.conversationId) setConversationId(null);
+      toast.success("Chat removed.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not remove the chat.");
+    }
   }
 
   function openConversation(id: Id<"dmConversations">) {
@@ -817,6 +874,17 @@ export default function Dashboard() {
           <>
             <div className="fc-sidebar-head">
               <span className="fc-sidebar-title">{details.server.name}</span>
+              {/* Per-member community mute — notifications only, never messages. */}
+              <button
+                aria-label={details.muted ? "Unmute community" : "Mute community"}
+                title={details.muted ? "Unmute community (notifications back on)" : "Mute community (notifications off)"}
+                onClick={async () => {
+                  try { await setServerMuted({ serverId: communityId!, muted: !details.muted }); toast.success(details.muted ? "Community unmuted." : "Community muted. Messages still arrive."); }
+                  catch (e) { toast.error(e instanceof Error ? e.message : "Could not update notifications."); }
+                }}
+              >
+                {details.muted ? <BellOff size={16} /> : <Bell size={16} />}
+              </button>
               {detailsPermissions.includes("manageCommunity") && (
                 <button aria-label="Community settings" title="Community settings" onClick={() => setCommunitySettingsOpen(true)}><Settings size={16} /></button>
               )}
@@ -837,6 +905,7 @@ export default function Dashboard() {
                 </>
               )}
             </div>
+            <div className="fc-sidebar-scroll fc-channel-scroll">
             {channelTree && (
               <>
                 {channelCategories.map(({ category, channels }) => (
@@ -882,6 +951,7 @@ export default function Dashboard() {
                 <Hash size={17} /> {c.name}
               </button>
             ))}
+            </div>
             <button className="fc-invite-btn" onClick={() => openModal("invite")}>
               <Users size={16} /> Invite your people
             </button>
@@ -889,16 +959,18 @@ export default function Dashboard() {
             {communityList.length > 0 && (
               <>
                 <div className="fc-sidebar-section"><span>YOUR COMMUNITIES</span></div>
-                {communityList.map((c) => (
-                  <button key={c._id} className={`fc-sidebar-action community ${communityId === c._id ? "active" : ""}`} onClick={() => openCommunity(c._id)}>
-                    <span className="fc-sidebar-community-icon">
-                      {(c as { iconUrl?: string | null }).iconUrl
-                        ? <img src={(c as { iconUrl?: string | null }).iconUrl!} alt="" />
-                        : initialsOf(c.name)}
-                    </span>
-                    {c.name}
-                  </button>
-                ))}
+                <div className="fc-sidebar-scroll fc-community-scroll" ref={communityListRef}>
+                  {communityList.map((c) => (
+                    <button key={c._id} className={`fc-sidebar-action community ${communityId === c._id ? "active" : ""}`} onClick={() => openCommunity(c._id)}>
+                      <span className="fc-sidebar-community-icon">
+                        {(c as { iconUrl?: string | null }).iconUrl
+                          ? <img src={(c as { iconUrl?: string | null }).iconUrl!} alt="" />
+                          : initialsOf(c.name)}
+                      </span>
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
               </>
             )}
             {communities && communityList.length === 0 && (
@@ -933,16 +1005,18 @@ export default function Dashboard() {
             {communityList.length > 0 && (
               <>
                 <div className="fc-sidebar-section"><span>COMMUNITIES</span></div>
-                {communityList.map((c) => (
-                  <button key={c._id} className="fc-sidebar-action community" onClick={() => openCommunity(c._id)}>
-                    <span className="fc-sidebar-community-icon">
-                      {(c as { iconUrl?: string | null }).iconUrl
-                        ? <img src={(c as { iconUrl?: string | null }).iconUrl!} alt="" />
-                        : initialsOf(c.name)}
-                    </span>
-                    {c.name}
-                  </button>
-                ))}
+                <div className="fc-sidebar-scroll fc-community-scroll" ref={communityListRef}>
+                  {communityList.map((c) => (
+                    <button key={c._id} className="fc-sidebar-action community" onClick={() => openCommunity(c._id)}>
+                      <span className="fc-sidebar-community-icon">
+                        {(c as { iconUrl?: string | null }).iconUrl
+                          ? <img src={(c as { iconUrl?: string | null }).iconUrl!} alt="" />
+                          : initialsOf(c.name)}
+                      </span>
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
               </>
             )}
             {communities && communityList.length === 0 && (
@@ -957,6 +1031,7 @@ export default function Dashboard() {
               <span>CONVERSATIONS</span>
               <button aria-label="New message" title="New message" onClick={() => setNewMessageOpen(true)}><Plus size={13} /></button>
             </div>
+            <div className="fc-sidebar-scroll fc-dm-list" ref={dmListRef}>
             {conversations && conversationList.length === 0 && (
               <p className="fc-sidebar-empty">No conversations yet. Start one with the ＋ button.</p>
             )}
@@ -994,6 +1069,7 @@ export default function Dashboard() {
                     onClick={() => c.locked ? setSecretOpen(true) : setProtectTarget({ id: c.conversationId, name: c.name })}
                   >{c.locked ? "🔒" : "🔓"}</button>
                   <button title="Archive" aria-label="Archive conversation" onClick={() => setArchived({ conversationId: c.conversationId, archived: true })}>📥</button>
+                  <button title={c.locked ? "Delete chat and its lock" : "Delete chat"} aria-label="Delete conversation" onClick={() => void removeConversation(c)}>🗑️</button>
                 </div>
               </div>
             ))}
@@ -1024,11 +1100,13 @@ export default function Dashboard() {
                     </button>
                     <div className="fc-dm-tools">
                       <button title="Unarchive" aria-label="Unarchive conversation" onClick={() => setArchived({ conversationId: c.conversationId, archived: false })}>📤</button>
+                      <button title={c.locked ? "Delete chat and its lock" : "Delete chat"} aria-label="Delete conversation" onClick={() => void removeConversation(c)}>🗑️</button>
                     </div>
                   </div>
                 ))}
               </>
             )}
+            </div>
           </>
         )}
 
