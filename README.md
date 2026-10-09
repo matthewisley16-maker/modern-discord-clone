@@ -292,6 +292,40 @@ When using convex, make sure:
 - Remember to import functions like useQuery, useMutation, useAction, etc. from `convex/react`
 - NEVER have return type validators.
 
+## Group chat photos (group DMs)
+
+A group DM can have its own picture, like a Discord group chat, and it is stored as
+**one authoritative field on the conversation**: `dmConversations.iconStorageId`
+(`src/convex/schema.ts` already had the column). Everything that draws a group reads that
+single field through the query it already subscribes to, so there is no per-member copy to
+drift out of sync:
+
+| Surface | Reads it from |
+| --- | --- |
+| Conversations list (active + archived) | `dms.listConversations` → `iconUrl` |
+| Chat header + group details panel | `dms.groupDetails` → `iconUrl` (via the header icon, which opens the panel) |
+| Secret Chats list | `conversationPrivacy.secretChats` → `avatarUrl` |
+
+A group with no photo (or a deleted one) renders the shared default group icon
+(`GroupIcon` in `src/components/dashboard/ui.tsx`) — never a member's face or presence.
+
+- **Writing:** `dms.setGroupPhoto { conversationId, storageId }` (pass `null` to clear). It
+  runs the same `requireGroupManager` guard as `renameGroup`, so only the group owner or a
+  group administrator may change it, and a non-member (or someone who left) is rejected
+  server-side. The uploaded object is re-validated server-side — it must exist and be a
+  PNG/JPEG/WebP/AVIF/GIF image under 5 MB — and the replaced blob is deleted from file
+  storage so old photos don't accumulate.
+- **Uploading:** nothing is uploaded until Save is pressed. The picker only creates a local
+  `blob:` URL for the preview, so Cancel leaves no orphaned file and a temp URL is never
+  stored as the picture. On Save the chosen square is baked into a 512x512 image and POSTed
+  to a `uploads.generateUploadUrl` URL.
+- **Crop/reposition:** `src/lib/group-photo.ts` holds the cover geometry (drag + zoom) and is
+  used by BOTH the preview and the saved image, so what the user positions is what gets
+  uploaded. Its invariants (the crop can never leave the source bitmap; preview scale ===
+  saved scale) are unit tested in `bun group-photo-test.mjs`.
+- **Freshness:** a new photo is a new storage object with a new URL, so browsers cannot show
+  a cached previous image; `null` clears back to the default icon.
+
 ## Deployment safety (read this before deploys and before debugging a black screen)
 
 The app reads and writes ONE pinned Convex deployment (`src/main.tsx` → `CONVEX_URL`).

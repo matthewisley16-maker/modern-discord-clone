@@ -139,6 +139,42 @@ async function ensureDirect(
   return conversationId;
 }
 
+/**
+ * Delete a stored blob, tolerating an object that is already gone.
+ *
+ * `ctx.storage.delete` throws "storage id ... not found" for a missing object,
+ * and a throw here would abort the whole mutation — leaving the conversation or
+ * membership row undeleted over a file that no longer exists. A missing object
+ * is exactly the state we want, so it must not be fatal.
+ */
+async function deleteStoredBlob(ctx: MutationCtx, storageId: Id<"_storage">) {
+  try {
+    await ctx.storage.delete(storageId);
+  } catch {
+    // Already gone — nothing left to clean up.
+  }
+}
+
+/**
+ * The group's photo URL — the ONE authoritative field every surface reads.
+ *
+ * The picture lives on the conversation itself (`dmConversations.iconStorageId`),
+ * not per member, so the conversation list, the chat header, the group panel and
+ * the Secret Chats list all resolve the SAME image from the same row: a change
+ * made by one member is pushed to everyone through the existing subscriptions.
+ *
+ * Returns null whenever there is nothing usable to show — no photo set, or a
+ * storage object that has since been deleted — so callers fall back to the
+ * default group icon instead of rendering a broken image.
+ */
+async function groupPhotoUrl(
+  ctx: Parameters<typeof displayNameOf>[0],
+  convo: { type: "direct" | "group"; iconStorageId?: Id<"_storage"> },
+): Promise<string | null> {
+  if (convo.type !== "group" || !convo.iconStorageId) return null;
+  return await ctx.storage.getUrl(convo.iconStorageId);
+}
+
 async function card(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"users">, viewerId?: Id<"users">) {
   const profile = await profileOf(ctx, userId);
   const user = await ctx.db.get(userId);
@@ -175,11 +211,14 @@ export const listConversations = query({
       const otherCards = await Promise.all(others.map((m) => card(ctx, m.userId, userId)));
 
       // Cheap, bounded reads: the count only touches messages newer than the
-      // member's read marker, and the preview is a single newest row.
+      // member's read marker, and the preview is a single newest row. The group
+      // photo is resolved in the same parallel batch (one storage lookup for
+      // group conversations, nothing for direct ones).
       const lastRead = membership.lastReadAt ?? 0;
-      const [unread, last] = await Promise.all([
+      const [unread, last, iconUrl] = await Promise.all([
         unreadIn(ctx, convo._id, userId, lastRead),
         newestIn(ctx, convo._id),
+        groupPhotoUrl(ctx, convo),
       ]);
 
       out.push({
@@ -187,6 +226,9 @@ export const listConversations = query({
         type: convo.type,
         name: convo.type === "group" ? convo.name ?? "Group" : otherCards[0]?.displayName ?? "Conversation",
         iconColor: convo.iconColor ?? "violet",
+        // The group's own photo (null → the UI draws its default group icon).
+        // Never the first member's avatar: a group is not a person.
+        iconUrl,
         members: otherCards,
         memberCount: members.length,
         pinned: membership.pinned ?? false,
@@ -322,6 +364,54 @@ export const setGroupIcon = mutation({
   },
 });
 
+/** Image types a group photo may be (kept in step with `uploads.ts`). */
+const GROUP_PHOTO_TYPES = ["image/png", "image/jpeg", "image/webp", "image/avif", "image/gif"];
+/** A cropped 512px square is small; this is a generous ceiling, not a target. */
+const GROUP_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Set (or clear) a group chat's photo.
+ *
+ * Permissions are enforced HERE, not by hiding a button: `requireGroupManager`
+ * allows only the group owner or a group administrator, and it is the same
+ * guard `renameGroup` already uses — so both settings follow the app's existing
+ * group-management rules. A non-member, or a member who is neither owner nor
+ * admin, is rejected by the server even if they craft the call by hand; a user
+ * who has left the group has no membership row and is rejected too.
+ *
+ * Passing `null` clears the photo and restores the default group icon.
+ */
+export const setGroupPhoto = mutation({
+  args: {
+    conversationId: v.id("dmConversations"),
+    storageId: v.union(v.id("_storage"), v.null()),
+  },
+  handler: async (ctx, { conversationId, storageId }) => {
+    const me = await currentUserId(ctx);
+    const { convo } = await requireGroupManager(ctx, conversationId, me);
+
+    if (storageId) {
+      // Never trust the client about what it uploaded: the object must exist and
+      // must actually be an image of a sane size before it is referenced.
+      const meta = await ctx.db.system.get("_storage", storageId);
+      if (!meta) throw new ConvexError("That image is no longer available — please choose it again.");
+      if (!GROUP_PHOTO_TYPES.includes(meta.contentType ?? "")) {
+        throw new ConvexError("Group photos must be a PNG, JPG, JPEG or WebP image.");
+      }
+      if (meta.size > GROUP_PHOTO_MAX_BYTES) {
+        throw new ConvexError("Group photos must be 5 MB or smaller.");
+      }
+    }
+
+    const previous = convo.iconStorageId ?? null;
+    // `undefined` removes the field, which is what puts the default icon back.
+    await ctx.db.patch(conversationId, { iconStorageId: storageId ?? undefined });
+    // Drop the blob we just replaced (and the one being cleared) so old photos
+    // never accumulate in file storage. Re-selecting the same image is a no-op.
+    if (previous && previous !== storageId) await deleteStoredBlob(ctx, previous);
+  },
+});
+
 /** Promote/demote a group administrator. Owner-only; scoped to this chat. */
 export const setGroupAdmin = mutation({
   args: { conversationId: v.id("dmConversations"), userId: v.id("users"), admin: v.boolean() },
@@ -369,6 +459,7 @@ export const groupDetails = query({
       conversationId,
       name: convo.name ?? "Group",
       iconColor: convo.iconColor ?? "violet",
+      iconUrl: await groupPhotoUrl(ctx, convo),
       ownerId: convo.ownerId,
       isOwner: convo.ownerId === userId,
       isAdmin: Boolean(me.isAdmin) || convo.ownerId === userId,
@@ -431,6 +522,8 @@ export const deleteConversation = mutation({
   handler: async (ctx, { conversationId }) => {
     const me = await currentUserId(ctx);
     const member = await requireMember(ctx, conversationId, me);
+    // Read the row first: its group photo blob has to be deleted with it below.
+    const convo = await ctx.db.get(conversationId);
     await ctx.db.delete(member._id);
     // Drop every chat-specific lock artifact for this conversation.
     await clearMemberLockData(ctx, me, conversationId);
@@ -438,6 +531,10 @@ export const deleteConversation = mutation({
     if (remaining.length === 0) {
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
       for (const m of messages) await ctx.db.delete(m._id);
+      // The conversation is going away entirely: its photo must not survive as
+      // an unreachable blob (the retention sweep only prunes blobs referenced
+      // by `attachments`, so an orphaned icon would sit in storage forever).
+      if (convo?.iconStorageId) await deleteStoredBlob(ctx, convo.iconStorageId);
       await ctx.db.delete(conversationId);
       // Nobody can reach it any more: purge any leftover grants for it too.
       await purgeConversationLockData(ctx, conversationId);
@@ -459,6 +556,9 @@ export const leaveGroup = mutation({
     if (remaining.length === 0) {
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
       for (const m of messages) await ctx.db.delete(m._id);
+      // Last member out: the group photo goes with the conversation, so no
+      // unreachable blob is left behind in file storage.
+      if (convo?.iconStorageId) await deleteStoredBlob(ctx, convo.iconStorageId);
       await ctx.db.delete(conversationId);
       await purgeConversationLockData(ctx, conversationId);
       return;

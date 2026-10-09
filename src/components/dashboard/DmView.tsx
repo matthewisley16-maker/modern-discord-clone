@@ -5,7 +5,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type { GifValue } from "@/convex/gif";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, EmptyState, PRESENCE_META, formatLastSeen } from "./ui";
+import { Avatar, EmptyState, GroupIcon, PRESENCE_META, formatLastSeen } from "./ui";
+import GroupPhotoEditor from "./GroupPhotoEditor";
 import MediaAttachment from "./MediaAttachment";
 import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
@@ -330,10 +331,26 @@ export default function DmView({
       onDrop={(e) => { e.preventDefault(); setDragging(false); Array.from(e.dataTransfer.files ?? []).forEach(stageFile); }}
     >
       <header className="fc-conversation-head">
-        {/* Direct chats show the person's avatar WITH their live status dot;
-            groups keep the community icon (no single presence to show). */}
+        {/* Direct chats show the person's avatar WITH their live status dot.
+            A group shows its OWN photo (or the default group icon) — never a
+            member's face — and clicking it opens the group details. */}
         {convo?.type === "group" ? (
-          <span className="fc-head-icon"><Users size={20} /></span>
+          <button
+            type="button"
+            className="fc-head-icon-button"
+            title="Group details"
+            aria-label="Open group details"
+            aria-expanded={showGroupPanel}
+            onClick={() => setShowGroupPanel((v) => !v)}
+          >
+            <Avatar
+              name={title}
+              size={28}
+              color="violet"
+              url={convo.iconUrl ?? group?.iconUrl}
+              fallback={<GroupIcon avatarSize={28} />}
+            />
+          </button>
         ) : (
           <Avatar
             name={title}
@@ -361,6 +378,14 @@ export default function DmView({
 
       {showGroupPanel && convo?.type === "group" && group && (
         <div className="fc-group-panel">
+          {/* The group's own photo: shown here, in the header, in the
+              Conversations list and in Secret Chats — one server field. */}
+          <GroupPhotoEditor
+            conversationId={conversationId}
+            name={group.name}
+            iconUrl={group.iconUrl ?? convo.iconUrl}
+            canEdit={group.isOwner || group.isAdmin}
+          />
           <div className="fc-group-row">
             {(group.isOwner || group.isAdmin) ? (
               <Input

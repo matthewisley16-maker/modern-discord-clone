@@ -156,6 +156,10 @@ async function purgeOne(ctx: MutationCtx, userId: Id<"users">) {
       await ctx.db.delete(message._id);
     }
     for (const signal of await ctx.db.query("dmCallSignals").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect()) await ctx.db.delete(signal._id);
+    // A group chat's own photo lives in file storage, so it must be deleted
+    // with the conversation it belongs to — nothing else references it.
+    const convo = await ctx.db.get(conversationId);
+    if (convo?.iconStorageId) await deleteStoredFile(ctx, convo.iconStorageId);
     await ctx.db.delete(conversationId);
   }
 
@@ -404,7 +408,11 @@ export const purgeOrphanedData = internalMutation({
     for (const row of o.orphanDmMembers) await ctx.db.delete(row._id);
     for (const row of o.orphanChannels) await ctx.db.delete(row._id);
     for (const row of o.orphanCategories) await ctx.db.delete(row._id);
-    for (const row of o.emptyConversations) await ctx.db.delete(row._id);
+    for (const row of o.emptyConversations) {
+      // The conversation is unreachable by anyone; its group photo is too.
+      if (row.iconStorageId) await deleteStoredFile(ctx, row.iconStorageId);
+      await ctx.db.delete(row._id);
+    }
 
     const after = await collectOrphans(ctx);
     return { dryRun: false, ...summary, remaining: countOrphans(after) };

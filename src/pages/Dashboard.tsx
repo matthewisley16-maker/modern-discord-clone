@@ -23,7 +23,7 @@ import CommunitySettings from "@/components/dashboard/CommunitySettings";
 import ServerRail from "@/components/dashboard/ServerRail";
 import NewMessageDialog from "@/components/dashboard/NewMessageDialog";
 import SecretChatsDialog, { ProtectConversationDialog } from "@/components/dashboard/SecretChats";
-import { Avatar, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
+import { Avatar, GroupIcon, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { toSafeArray, toSafeArrayField } from "@/lib/collection";
 import { trackOp } from "@/lib/usage-monitor";
@@ -32,6 +32,57 @@ import { toast } from "sonner";
 import {
   AtSign, Bell, BellOff, Compass, Hash, Home, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, Users, Volume2, X,
 } from "lucide-react";
+
+/**
+ * The icon for one Conversations-list row.
+ *
+ * A GROUP shows its OWN photo — or the default group icon when it has none — and
+ * never a member's face or presence, because a group is not a person. A direct
+ * chat keeps exactly what it had: the other person's avatar, decoration and live
+ * presence. Shared by the active and the archived lists, so the two can never
+ * disagree about a group's picture.
+ */
+function ConversationIcon({
+  convo,
+  size = 26,
+}: {
+  convo: {
+    type: string;
+    name: string;
+    iconUrl?: string | null;
+    members?: ReadonlyArray<{
+      avatarUrl?: string | null;
+      decorationId?: string | null;
+      presence?: string;
+      lastSeen?: number | null;
+    }> | null;
+  };
+  size?: number;
+}) {
+  if (convo.type === "group") {
+    return (
+      <Avatar
+        name={convo.name}
+        size={size}
+        color="violet"
+        url={convo.iconUrl}
+        fallback={<GroupIcon avatarSize={size} />}
+      />
+    );
+  }
+  return (
+    <Avatar
+      name={convo.name}
+      size={size}
+      url={convo.members?.[0]?.avatarUrl}
+      decorationId={convo.members?.[0]?.decorationId}
+      presence={convo.members?.[0]?.presence}
+      lastSeen={convo.members?.[0]?.lastSeen}
+      dotSide="left"
+      showAllStates
+    />
+  );
+}
 
 /**
  * Admin Panel entry. Kept as its own component so the (optional) access query
@@ -1053,19 +1104,11 @@ export default function Dashboard() {
                   className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                   onClick={() => openConversation(c.conversationId)}
                 >
-                  {/* The other person's real, live presence — the same
+                  {/* Direct chat: the other person's real, live presence — the same
                       authoritative value used by profiles, member lists and
-                      popouts (invisible users arrive here as "offline"). */}
-                  <Avatar
-                    name={c.name}
-                    size={26}
-                    url={c.members?.[0]?.avatarUrl}
-                    decorationId={c.members?.[0]?.decorationId}
-                    presence={c.type === "group" ? undefined : c.members?.[0]?.presence}
-                    lastSeen={c.members?.[0]?.lastSeen}
-                    dotSide="left"
-                    showAllStates
-                  />
+                      popouts (invisible users arrive here as "offline").
+                      Group: the group's own photo, or the default group icon. */}
+                  <ConversationIcon convo={c} />
                   <span className="fc-dm-name">{c.type === "group" ? `${c.name} · ${c.memberCount}` : c.name}</span>
                   {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
                   {c.pinned && <span className="fc-dm-flag">📌</span>}
@@ -1096,16 +1139,7 @@ export default function Dashboard() {
                       className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                       onClick={() => openConversation(c.conversationId)}
                     >
-                      <Avatar
-                        name={c.name}
-                        size={26}
-                        url={c.members?.[0]?.avatarUrl}
-                        decorationId={c.members?.[0]?.decorationId}
-                        presence={c.type === "group" ? undefined : c.members?.[0]?.presence}
-                        lastSeen={c.members?.[0]?.lastSeen}
-                        dotSide="left"
-                        showAllStates
-                      />
+                      <ConversationIcon convo={c} />
                       <span className="fc-dm-name">{c.name}</span>
                       {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
                       {c.unread > 0 && <i className="fc-dm-badge">{c.unread}</i>}

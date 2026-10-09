@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Users } from "lucide-react";
 import ProfileDecoration from "@/components/profile/ProfileDecoration";
 
 export const AVATAR_BG: Record<string, string> = {
@@ -48,6 +49,15 @@ export function initialsOf(name: string) {
   return name.split(/\s+/).filter(Boolean).map((n) => n[0]).join("").slice(0, 2).toUpperCase() || "F";
 }
 
+/**
+ * The DEFAULT group chat icon — shown in every place a group appears when it has
+ * no photo of its own. One component so the conversation list, the chat header
+ * and the group panel can never drift apart.
+ */
+export function GroupIcon({ avatarSize }: { avatarSize: number }) {
+  return <Users size={Math.max(12, Math.round(avatarSize * 0.55))} aria-hidden="true" />;
+}
+
 export function Avatar({
   name,
   color,
@@ -59,6 +69,7 @@ export function Avatar({
   reducedMotion,
   dotSide = "right",
   showAllStates = false,
+  fallback,
 }: {
   name: string;
   color?: string;
@@ -76,6 +87,12 @@ export function Avatar({
    * keeps the app-wide convention unchanged.
    */
   showAllStates?: boolean;
+  /**
+   * What to draw when there is no image. Defaults to the name's initials (right
+   * for a person); a group chat passes its group icon instead, because a group
+   * is not a person and must never borrow a member's face.
+   */
+  fallback?: ReactNode;
 }) {
   const key = color ?? colorFor(name);
   // By default only Online (green), Idle (amber) and Do Not Disturb (red) get a
@@ -90,7 +107,7 @@ export function Avatar({
   const title = presence === "offline" || presence === "invisible" ? formatLastSeen(lastSeen) : meta?.label;
   return (
     <span className="fc-avatar" style={{ width: size, height: size, background: url ? undefined : AVATAR_BG[key] ?? "#7c5cf6" }} title={title}>
-      {url ? <img src={url} alt="" /> : initialsOf(name)}
+      {url ? <img src={url} alt="" /> : fallback ?? initialsOf(name)}
       <ProfileDecoration decorationId={decorationId} size={size} reducedMotion={reducedMotion} />
       {meta && <i className={dotSide === "left" ? "left" : undefined} style={{ background: meta.color }} title={meta.label} aria-label={meta.label} />}
     </span>

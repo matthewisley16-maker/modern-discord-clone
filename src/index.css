@@ -345,6 +345,25 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-group-member { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 4px 9px; border-radius: 999px; background: rgba(255,255,255,.05); }
 .fc-group-member button { color: #8b87a0; }
 .fc-group-member button:hover { color: #f0616d; }
+/* Group chat photo editor (opened from the group icon in the chat header). */
+.fc-head-icon-button { display: grid; place-items: center; border-radius: 50%; }
+.fc-head-icon-button:hover { box-shadow: 0 0 0 3px rgba(139,92,246,.22); }
+.fc-group-photo { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07); }
+.fc-group-photo-current { display: flex; align-items: center; gap: 14px; }
+.fc-group-photo-meta { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.fc-group-photo-meta strong { font-size: 14px; color: #eeecf6; }
+.fc-group-photo-meta small { font-size: 11px; color: #8b87a0; line-height: 1.6; }
+.fc-group-photo-stage { position: relative; flex-shrink: 0; border-radius: 50%; overflow: hidden; background: #121218; border: 1px solid rgba(139,92,246,.35); cursor: grab; touch-action: none; }
+.fc-group-photo-stage.dragging { cursor: grabbing; }
+/* The image is deliberately larger than the stage (that overflow IS the
+   repositioning room), so Tailwind's preflight `img { max-width: 100% }` must be
+   neutralised here — otherwise the preview could not be dragged the way the
+   saved crop expects. */
+.fc-group-photo-stage img { position: absolute; display: block; max-width: none; max-height: none; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.fc-group-photo-zoom { display: flex; align-items: center; gap: 10px; font-size: 11px; color: #8b87a0; }
+.fc-group-photo-zoom input { flex: 1; accent-color: #8b5cf6; }
+.fc-group-photo-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fc-group-photo-hint { font-size: 10px; color: #6f6b82; }
 .fc-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 22px 8px; scrollbar-width: thin; }
 .fc-channel-welcome { padding: 12px 0 20px; }
 .fc-welcome-hash { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; background: rgba(139,92,246,.14); color: #a78bfa; }

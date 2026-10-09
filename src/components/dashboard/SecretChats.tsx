@@ -4,7 +4,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar } from "./ui";
+import { Avatar, GroupIcon } from "./ui";
 import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { Eye, EyeOff, Lock, LockOpen, KeyRound, ShieldCheck, X } from "lucide-react";
@@ -534,7 +534,16 @@ export default function SecretChatsDialog({
               )}
               {rows.map((row) => (
                 <div key={row.conversationId} className="fc-secret-row">
-                  <Avatar name={row.name} size={30} url={row.avatarUrl ?? undefined} decorationId={row.decorationId} />
+                  {/* A group shows its own photo (or the default group icon) —
+                      the same field as the Conversations list and the header. */}
+                  <Avatar
+                    name={row.name}
+                    size={30}
+                    color={row.type === "group" ? "violet" : undefined}
+                    url={row.avatarUrl ?? undefined}
+                    decorationId={row.type === "group" ? null : row.decorationId}
+                    fallback={row.type === "group" ? <GroupIcon avatarSize={30} /> : undefined}
+                  />
                   <div className="fc-secret-row-main">
                     <span className="fc-secret-row-name">
                       <Lock size={12} /> {row.name}

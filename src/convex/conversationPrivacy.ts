@@ -502,7 +502,17 @@ export const secretChats = query({
             : otherProfile?.displayName ?? otherUser?.name ?? otherUser?.username ?? "Conversation",
         hidden: Boolean(membership.hidden),
         iconColor: convo.iconColor ?? "violet",
-        avatarUrl: others[0] ? await avatarUrlOf(ctx, others[0].userId) : null,
+        // A group shows its OWN photo (resolved from the same conversation
+        // field every other surface reads), never the first member's face;
+        // direct chats keep the other person's avatar.
+        avatarUrl:
+          convo.type === "group"
+            ? convo.iconStorageId
+              ? await ctx.storage.getUrl(convo.iconStorageId)
+              : null
+            : others[0]
+              ? await avatarUrlOf(ctx, others[0].userId)
+              : null,
         decorationId: otherProfile?.decorationId ?? null,
         memberCount: members.length,
         presence,
