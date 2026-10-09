@@ -1,6 +1,9 @@
 import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
+import { BrandSplash, DiagnosticsWatcher, GlobalConnectionBanner, ServiceStatusScreen } from "@/components/ServiceStatus";
+import { useServiceStatus } from "@/hooks/use-service-status";
+import { recordServiceError } from "@/lib/diagnostics";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient, useConvexAuth } from "convex/react";
@@ -25,23 +28,59 @@ function RouteLoading() {
 
 /**
  * Root gate: a signed-in visitor lands on the Dashboard immediately, with no
- * landing page, sign-in page, spinner or loading screen in between.
+ * landing page flash in between.
+ *
+ * This used to `return null` while the session resolved, which meant ANY
+ * failure to reach the Convex backend (an offline network, or a paused/
+ * disabled deployment returning 1013 AuthProviderDiscoveryFailed forever) left
+ * a completely black page. Every branch now renders something real:
+ *   - resolving   → the branded splash,
+ *   - usable      → the product (or the public landing page),
+ *   - unusable    → a themed explanation with a guarded Retry, and the public
+ *                   landing page is still served when the backend isn't needed.
  */
 function RootGate() {
-  const { isLoading, isAuthenticated } = useConvexAuth();
-  if (isLoading) return null;
-  return (
-    <FeatureBoundary label="Freecord" block>
-      {isAuthenticated ? <Dashboard /> : <Landing />}
-    </FeatureBoundary>
+  const { isAuthenticated } = useConvexAuth();
+  const handle = useServiceStatus();
+  const { status } = handle;
+
+  if (status.phase === "loading") return <BrandSplash />;
+
+  if (status.phase === "ready") {
+    return (
+      <FeatureBoundary key={handle.retryEpoch} label="Freecord" block>
+        {isAuthenticated ? <Dashboard /> : <Landing />}
+      </FeatureBoundary>
+    );
+  }
+
+  // The backend is unreachable. A signed-in user needs the backend, so they get
+  // the full explanation. A signed-out visitor does not — keep the public site
+  // usable and just explain why sign-in is unavailable.
+  if (isAuthenticated) return <ServiceStatusScreen handle={handle} />;
+
+  // The connection banner is rendered globally (GlobalConnectionBanner) so it
+  // is not duplicated here; this branch only picks between the explanation
+  // screen and the branded splash.
+  return status.phase === "unavailable" ? (
+    <ServiceStatusScreen handle={handle} />
+  ) : (
+    <BrandSplash label={status.phase === "offline" ? "Waiting for a network connection…" : "Reconnecting to Freecord…"} />
   );
 }
 
 /** `/auth` sends an already signed-in visitor straight to the Dashboard. */
 function AuthGate() {
-  const { isLoading, isAuthenticated } = useConvexAuth();
-  if (isLoading) return null;
+  const { isAuthenticated } = useConvexAuth();
+  const handle = useServiceStatus();
+
+  // Still resolving: show the splash rather than nothing.
+  if (handle.status.phase === "loading") return <BrandSplash />;
   if (isAuthenticated) return <Navigate to="/dashboard" replace />;
+
+  // Sign-in needs the backend, but the form stays reachable: it works the
+  // moment the connection returns, and never leaves a blank page in the
+  // meantime.
   return <AuthPage redirectAfterAuth="/dashboard" />;
 }
 
@@ -78,6 +117,9 @@ class RootErrorBoundary extends React.Component<
   }
   componentDidCatch(err: Error) {
     console.error("[Preview] Root crash:", err);
+    // Feed the diagnostic report so a crash is visible next to connection and
+    // auth failures instead of only in the console.
+    recordServiceError(err);
   }
   render() {
     if (this.state.hasError) {
@@ -157,6 +199,8 @@ createRoot(document.getElementById("root")!).render(
       </ToolbarErrorBoundary>
       <ConvexAuthProvider client={convex}>
         <BrowserRouter>
+          <DiagnosticsWatcher />
+          <GlobalConnectionBanner />
           <RouteSyncer />
           <Suspense fallback={<RouteLoading />}>
             <Routes>

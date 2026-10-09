@@ -291,3 +291,52 @@ When using convex, make sure:
 - This includes importing generated files like `@/convex/_generated/server`, `@/convex/_generated/api`
 - Remember to import functions like useQuery, useMutation, useAction, etc. from `convex/react`
 - NEVER have return type validators.
+
+## Deployment safety (read this before deploys and before debugging a black screen)
+
+The app reads and writes ONE pinned Convex deployment (`src/main.tsx` → `CONVEX_URL`).
+Everything a user does — including signing in — depends on that deployment being able to
+*execute functions*.
+
+### The failure mode that caused the last outage
+
+The deployment had a configured monthly usage limit (`Database I/O`, 2 GB, type
+`disable`). When the limit was crossed, Convex paused the deployment: every function call
+returned `500 ... This deployment has been disabled because it exceeded a configured usage
+limit`, including the `/.well-known/openid-configuration` route that Convex Auth serves.
+Convex could not discover the auth provider, so every client's WebSocket closed with
+`code 1013: AuthProviderDiscoveryFailed` in a reconnect loop. The UI only rendered `null`
+while auth resolved, so users saw a black page.
+
+Two lessons are baked into the code now:
+
+1. **Never render nothing while initializing.** `src/lib/service-status.ts` +
+   `src/components/ServiceStatus.tsx` + `src/hooks/use-service-status.ts` turn offline /
+   reconnecting / unavailable / paused-deployment into themed screens with an explanation and
+   a cooldown-protected Retry. `RootGate`, `AuthGate` and `RequireAuth` no longer return
+   `null`, and `GlobalConnectionBanner` explains a degraded connection on every route.
+2. **Keep backend database I/O bounded.** The retention sweep is the biggest background
+   consumer: it used to run every 10 minutes, reading the oldest message slices plus three
+   disposable tables (~2k document reads per run, ~0.2 GB/month on its own). It now runs
+   hourly (`src/convex/crons.ts`). Client subscriptions must never duplicate work — the DM
+   unread badge is derived from the existing `dms.listConversations` subscription instead of
+   a second `dms.unreadTotal` scan.
+
+### Before every deploy
+
+```bash
+bun run preflight            # read-only: deployment identity, auth env vars, usage vs limits
+bun run preflight -- --typecheck
+```
+
+`scripts/preflight.mjs` fails (exit 1) if the frontend/backend deployments disagree, if
+`JWKS` / `JWT_PRIVATE_KEY` are missing, or if any active `disable` usage limit is at ≥ 90%
+— the exact condition that pauses the deployment. It prints the `convex deployment
+usage-limits` command needed to raise a limit. It never changes anything by itself.
+
+### Diagnosing a "black screen"
+
+Errors are grouped and counted in memory (`src/lib/diagnostics.ts`, redacted of tokens,
+keys and emails) and surfaced in the status screen's Diagnostics disclosure. No error data
+is ever sent over the network. If the backend is paused, the app now says so explicitly
+instead of looping silently.

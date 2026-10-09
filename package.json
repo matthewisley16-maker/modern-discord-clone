@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "preflight": "node scripts/preflight.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "preview": "vite preview"

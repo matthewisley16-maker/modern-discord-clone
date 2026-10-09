@@ -1,3 +1,4 @@
+import { recordServiceError } from "@/lib/diagnostics";
 import { AlertTriangle } from "lucide-react";
 import { Component, Fragment, type ErrorInfo, type ReactNode } from "react";
 
@@ -36,6 +37,9 @@ export class FeatureBoundary extends Component<
   componentDidCatch(error: Error, info: ErrorInfo) {
     // Kept in the console only — never surfaced as a page-wide failure state.
     console.error(`[Freecord] ${this.props.label ?? "feature"} failed:`, error, info.componentStack);
+    // Recorded as a FEATURE failure: it appears in the diagnostic report but is
+    // never allowed to claim that the connection/backend is down.
+    recordServiceError(error, "feature");
   }
 
   private reset = () => this.setState((s) => ({ error: null, attempt: s.attempt + 1 }));

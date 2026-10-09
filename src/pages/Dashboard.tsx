@@ -67,7 +67,10 @@ export default function Dashboard() {
   const communities = useQuery(api.communities.listMine, {});
   const conversations = useQuery(api.dms.listConversations, {});
   const notifications = useQuery(api.social.listNotifications, {});
-  const dmUnread = useQuery(api.dms.unreadTotal, {});
+  // NOTE: there is deliberately no second `api.dms.unreadTotal` subscription
+  // here. It re-ran the exact same "every conversation, newest messages" scan
+  // that `listConversations` already performs, doubling database reads for a
+  // single badge. The badge is derived from the subscription we already pay for.
   const voiceSession = useQuery(api.communities.myVoiceSession, {});
   const incomingCall = useQuery(api.calls.incomingCall, {});
   const outgoingCall = useQuery(api.calls.outgoingCall, {});
@@ -86,6 +89,11 @@ export default function Dashboard() {
   );
   const activeConversations = useMemo(() => conversationList.filter((c) => !c.archived), [conversationList]);
   const archivedConversations = useMemo(() => conversationList.filter((c) => c.archived), [conversationList]);
+  // Unread DM badge, derived from the conversations we already subscribe to.
+  const dmUnread = useMemo(
+    () => conversationList.reduce((total, c) => total + (c.unread ?? 0), 0),
+    [conversationList],
+  );
   const notificationItems = useMemo(
     () => toSafeArrayField<NonNullable<NonNullable<typeof notifications>["items"]>[number]>(notifications, "items", { label: "Notifications", source: "api.social.listNotifications" }),
     [notifications],
@@ -291,11 +299,15 @@ export default function Dashboard() {
   // keystrokes, renders or navigation.
   useEffect(() => {
     ensureIdentity({}).catch(() => {});
-    const beat = () => { if (document.visibilityState === "visible") { trackOp("presence.heartbeat"); heartbeat({}).catch(() => {}); } };
+    // Nothing is written while the tab is hidden OR the device is offline: the
+    // server-side staleness window covers us, and a disconnected tab must not
+    // queue a burst of presence writes for the moment it reconnects.
+    const canPing = () => document.visibilityState === "visible" && navigator.onLine !== false;
+    const beat = () => { if (canPing()) { trackOp("presence.heartbeat"); heartbeat({}).catch(() => {}); } };
     beat();
     const t = setInterval(beat, 30_000);
     // Refresh the moment the user comes back, so online state is instant.
-    const onVisible = () => { if (document.visibilityState === "visible") heartbeat({}).catch(() => {}); };
+    const onVisible = () => { if (canPing()) heartbeat({}).catch(() => {}); };
     document.addEventListener("visibilitychange", onVisible);
     // Soft-disconnect on unload so presence and typing clear promptly.
     const bye = () => { disconnect({}).catch(() => {}); };

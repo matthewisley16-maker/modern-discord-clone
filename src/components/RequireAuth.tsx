@@ -8,6 +8,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
+import { useServiceStatus } from "@/hooks/use-service-status";
+import { BrandSplash, ServiceStatusScreen } from "@/components/ServiceStatus";
 import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router";
@@ -38,11 +40,18 @@ export function RequireAuth({
   const { isLoading, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const handle = useServiceStatus();
 
-  // No loading screen: while the session resolves we render nothing, so a
-  // signed-in user goes straight to their page without a spinner flash.
+  // While the session resolves we used to render NOTHING. That turned any
+  // failure to reach the backend (offline network, or a paused/disabled
+  // deployment) into a black page that never recovered. Now the user either
+  // gets the brief branded splash, or — when the backend really is unreachable
+  // — a themed explanation with a guarded Retry.
   if (isLoading) {
-    return null;
+    if (handle.status.phase === "unavailable" || handle.status.phase === "offline") {
+      return <ServiceStatusScreen handle={handle} />;
+    }
+    return <BrandSplash label="Loading your workspace…" />;
   }
 
   if (!isAuthenticated) {
