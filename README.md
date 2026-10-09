@@ -308,7 +308,29 @@ Convex could not discover the auth provider, so every client's WebSocket closed 
 `code 1013: AuthProviderDiscoveryFailed` in a reconnect loop. The UI only rendered `null`
 while auth resolved, so users saw a black page.
 
-Two lessons are baked into the code now:
+**Which deployment, and why the "development" spike matters.** There is currently ONE
+deployment (`academic-porcupine-929`, defined in `src/lib/deployment.ts`), used by dev, the
+preview and the deployed site. So Convex's usage chart splits the same deployment's traffic
+into *development* calls (the sandbox `convex dev` process and the preview app) and
+*production* calls (the deployed site) — and **both count against the same limits**. In the
+sampled hour the chart read 261 development calls against 6 production calls: the spike was
+not the deployed site, and a development spike can pause production. Measured limits at the
+time (`bunx convex deployment usage-limits list`): `Database I/O` month/disable 2 GB → **2 GB,
+triggered**; `Function calls` month/disable 200K → 140.079K (70%). Measured usage
+(`bunx convex deployment usage`): **0.212 GB of database I/O in one day** — roughly 6 GB/month
+against a 2 GB/month cap, i.e. the limit was genuinely exceeded by *inefficiency*, not by
+chat volume. If separate dev/prod deployments are ever created, change `CONVEX_URL` for the
+develop environment only and re-run `bun run preflight` to prove the two are distinct.
+
+Three lessons are baked into the code now:
+
+0. **A failed account read is a failure, not a signed-out user.** `useAuth` reads the
+   account with the NON-throwing `useQuery_experimental` instead of `useQuery` (which
+   re-throws into the nearest error boundary, hiding the reason and preventing recovery).
+   `users:currentUser` failing now records a service error, keeps `isLoading` true, returns no
+   fabricated user, and lets `RequireAuth` show the themed status screen rather than
+   redirecting to `/auth` — the sign-in loop this outage used to cause. It resolves by itself
+   when the deployment answers again.
 
 1. **Never render nothing while initializing.** `src/lib/service-status.ts` +
    `src/components/ServiceStatus.tsx` + `src/hooks/use-service-status.ts` turn offline /
@@ -328,6 +350,12 @@ Two lessons are baked into the code now:
      inbox) even when nothing had changed. It now reads only the messages *newer than the
      member's `lastReadAt`* via an index range on the implicit `_creationTime` key
      (`unreadIn`), plus one newest row for the preview - a caught-up inbox reads ~0 rows.
+   - `/admin` used to fetch every tab's data at once: `listUsers` (up to 4,000 users +
+     4,000 profiles), `listCommunities` (every community's full membership list) and the audit
+     log all stayed subscribed while the admin sat on another tab, so each re-execution re-scanned
+     thousands of rows for data nobody was looking at. The panel now fetches only the ACTIVE
+     tab's query (`"skip"` for the rest). `admin.stats` and the synthetic-data audit stay
+     subscribed because the overview cards above the tabs really do show them.
    - `chat.messages` / `dms.messages` expand up to 150 messages in a single execution, and
      used to resolve each message's author card (profile + user + avatar) and each @mention
      (user lookup + membership check) per message. `lib.memoizeAuthorCards` and the

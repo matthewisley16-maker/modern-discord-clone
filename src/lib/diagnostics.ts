@@ -13,6 +13,7 @@
  */
 
 import { classifyServiceError, type ServiceErrorKind } from "./service-status";
+import { DEPLOYMENT_NAME } from "./deployment";
 
 export type DiagnosticEntry = {
   kind: ServiceErrorKind;
@@ -116,6 +117,17 @@ export function recordServiceError(error: unknown, source: DiagnosticSource = "s
   console.warn(`[Freecord] ${kind}: ${message}`);
   notify();
   return { ...entry };
+}
+
+/**
+ * The deployment every failure in this report was produced against. Reported
+ * alongside the entries so an operational problem can name the affected backend
+ * — and, because Convex puts the function in the message itself
+ * (`[CONVEX Q(users:currentUser)] …`), the function too — without one extra
+ * request. The name is public (it is in the client bundle) and never a secret.
+ */
+export function diagnosticDeploymentName(): string {
+  return DEPLOYMENT_NAME;
 }
 
 /** Clear the report (called after a manual retry or a successful connection). */

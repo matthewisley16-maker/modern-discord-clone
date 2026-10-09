@@ -1,6 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AudioLines, ChevronDown, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
-import { getDiagnostics, installGlobalDiagnostics, subscribeDiagnostics, type DiagnosticEntry } from "@/lib/diagnostics";
+import {
+  diagnosticDeploymentName,
+  getDiagnostics,
+  installGlobalDiagnostics,
+  subscribeDiagnostics,
+  type DiagnosticEntry,
+} from "@/lib/diagnostics";
 import { PHASE_MESSAGES, statusCopy, type ServiceStatus } from "@/lib/service-status";
 import { useServiceStatus, type ServiceStatusHandle } from "@/hooks/use-service-status";
 
@@ -59,6 +65,11 @@ function DiagnosticsDetails() {
       </button>
       {open && (
         <ul>
+          {/* Which backend, and which function, each failure came from. */}
+          <li className="fc-status-diagnostics-context">
+            <strong>deployment</strong>
+            <em>{diagnosticDeploymentName()}</em>
+          </li>
           {entries.map((entry) => (
             <li key={`${entry.kind}:${entry.message}`}>
               <strong>{entry.kind}</strong>

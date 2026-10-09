@@ -42,15 +42,20 @@ export function RequireAuth({
   const location = useLocation();
   const handle = useServiceStatus();
 
-  // While the session resolves we used to render NOTHING. That turned any
-  // failure to reach the backend (offline network, or a paused/disabled
-  // deployment) into a black page that never recovered. Now the user either
-  // gets the brief branded splash, or — when the backend really is unreachable
-  // — a themed explanation with a guarded Retry.
+  // The backend is unreachable: signing in cannot succeed either, so explain the
+  // real problem instead of bouncing to `/auth` (which would be a loop that
+  // never resolves). This must come BEFORE the `!isAuthenticated` redirect, and
+  // it covers the account read itself failing — e.g. a deployment paused for
+  // exceeding a usage limit, where `users:currentUser` cannot answer.
+  if (handle.status.phase === "unavailable" || handle.status.phase === "offline") {
+    return <ServiceStatusScreen handle={handle} />;
+  }
+
+  // While the session resolves we used to render NOTHING, which is the black
+  // page the outage produced. The unreachable case is handled above; here the
+  // backend is reachable (or still connecting), so the brief branded splash is
+  // the honest thing to show.
   if (isLoading) {
-    if (handle.status.phase === "unavailable" || handle.status.phase === "offline") {
-      return <ServiceStatusScreen handle={handle} />;
-    }
     return <BrandSplash label="Loading your workspace…" />;
   }
 

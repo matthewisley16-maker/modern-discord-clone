@@ -72,11 +72,17 @@ function runConvex(subArgs) {
   });
 }
 
-/** The single deployment URL the bundle is pinned to (src/main.tsx). */
+/** The single deployment URL the bundle is pinned to. */
 function pinnedDeploymentName() {
-  const source = readFileSync(join(root, "src", "main.tsx"), "utf8");
-  const match = source.match(/https:\/\/([a-z0-9-]+)\.convex\.(cloud|site)/);
-  return match ? match[1] : null;
+  // The URL is defined once in `src/lib/deployment.ts` (and consumed by
+  // `src/main.tsx`); fall back to main.tsx for older layouts.
+  for (const file of ["src/lib/deployment.ts", "src/main.tsx"]) {
+    const path = join(root, ...file.split("/"));
+    if (!existsSync(path)) continue;
+    const match = readFileSync(path, "utf8").match(/https:\/\/([a-z0-9-]+)\.convex\.(cloud|site)/);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 function deploymentNameFrom(url) {
@@ -115,7 +121,7 @@ if (args.has("--typecheck")) {
 // ---------------------------------------------------------------------------
 const pinned = pinnedDeploymentName();
 if (!pinned) {
-  problems.push("Could not find a pinned Convex URL in src/main.tsx — the frontend has no defined backend.");
+  problems.push("Could not find a pinned Convex URL in src/lib/deployment.ts (or src/main.tsx) — the frontend has no defined backend.");
 }
 
 let env = null;

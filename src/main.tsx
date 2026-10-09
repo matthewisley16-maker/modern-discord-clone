@@ -4,6 +4,7 @@ import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { BrandSplash, DiagnosticsWatcher, GlobalConnectionBanner, ServiceStatusScreen } from "@/components/ServiceStatus";
 import { useServiceStatus } from "@/hooks/use-service-status";
 import { recordServiceError } from "@/lib/diagnostics";
+import { CONVEX_URL } from "@/lib/deployment";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient, useConvexAuth } from "convex/react";
@@ -155,17 +156,12 @@ class RootErrorBoundary extends React.Component<
   }
 }
 
-// One Convex deployment for every environment (dev, preview, production).
-//
-// This used to read `import.meta.env.VITE_CONVEX_URL`, which Vite inlines at
-// BUILD time — so a production build could be compiled against a different
-// deployment than the one the app is developed against. That split the data:
-// the deployed app wrote to a different database than dev, so nothing appeared
-// to save. Pinning a single URL here makes dev and the deployed app read and
-// write the exact same database, so they stay in sync in real time.
-//
-// To move to a different deployment, change this one line.
-const CONVEX_URL = "https://academic-porcupine-929.convex.cloud";
+// The deployment is defined once in `src/lib/deployment.ts` (so diagnostics can
+// name it) and shared by every environment. Reading `import.meta.env
+// .VITE_CONVEX_URL` here used to be inlined at BUILD time and could compile a
+// production build against a different deployment than dev, which split the
+// data: the deployed app wrote to a different database than dev, so nothing
+// appeared to save. Pinning one URL keeps dev and the deployed app in sync.
 const convex = new ConvexReactClient(CONVEX_URL);
 
 

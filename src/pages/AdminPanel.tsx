@@ -103,13 +103,24 @@ export default function AdminPanel() {
   }, [ensureIdentity]);
   const [userQuery, setUserQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
-  const users = useQuery(api.admin.listUsers, {
-    q: userQuery.trim() || undefined,
-    role: roleFilter === "all" ? undefined : roleFilter,
-  });
-  const communities = useQuery(api.admin.listCommunities, {});
-  const auditLogs = useQuery(api.admin.listAuditLogs, { limit: 150 });
-  const settings = useQuery(api.admin.getPlatformSettings, {});
+  // Only the ACTIVE tab's data is fetched.
+  //
+  // A Convex subscription re-executes its whole query whenever anything it read
+  // changes, so a query that scans the users table (or every community's whole
+  // membership list) runs again on unrelated activity — and billed reads scale
+  // with `(reads per execution) x (re-executions)`. The overview cards above the
+  // tabs genuinely need `stats` and the synthetic-data audit, but the tab lists
+  // do not: nothing is fetched for a tab the admin is not looking at (`"skip"`).
+  const [tab, setTab] = useState("users");
+  const users = useQuery(
+    api.admin.listUsers,
+    tab === "users"
+      ? { q: userQuery.trim() || undefined, role: roleFilter === "all" ? undefined : roleFilter }
+      : "skip",
+  );
+  const communities = useQuery(api.admin.listCommunities, tab === "communities" ? {} : "skip");
+  const auditLogs = useQuery(api.admin.listAuditLogs, tab === "audit" ? { limit: 150 } : "skip");
+  const settings = useQuery(api.admin.getPlatformSettings, tab === "settings" ? {} : "skip");
   // Read-only diagnostic: detects synthetic/test records that have leaked into
   // production. It never deletes anything — it only reports, so a moderator can
   // decide whether to run the verified cleanup operation.
@@ -301,7 +312,7 @@ export default function AdminPanel() {
           </Card>
         )}
 
-        <Tabs defaultValue="users" className="mt-6">
+        <Tabs value={tab} onValueChange={setTab} className="mt-6">
           <TabsList className="bg-white/5">
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="communities">Communities</TabsTrigger>
