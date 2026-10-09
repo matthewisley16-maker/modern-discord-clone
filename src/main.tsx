@@ -20,10 +20,13 @@ const AdminPanel = lazy(() => import("./pages/AdminPanel.tsx"));
 const Onboarding = lazy(() => import("./pages/Onboarding.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
-// No visual loading screen anywhere: lazy route chunks resolve into place
-// without a spinner or "Loading..." message.
+// Lazy route chunks resolve into place without a spinner or "Loading..."
+// message — but they must never resolve into a BLANK page either. A suspended
+// route (the Dashboard or the landing page being fetched) used to fall back to
+// `null`, which is the same black screen a paused backend produced. The branded
+// splash is instant, static and needs no backend connection.
 function RouteLoading() {
-  return null;
+  return <BrandSplash label="Opening Freecord…" />;
 }
 
 /**
