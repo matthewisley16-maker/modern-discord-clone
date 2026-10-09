@@ -4,8 +4,8 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 
 import type { Id } from "./_generated/dataModel";
 import { gifValidator, requireGif } from "./gif";
-import { authorCardOf, hasChannelPermission, isBlockedEitherWay, isTimedOut, notify } from "./lib";
-import { resolveMentions } from "./mentions";
+import { hasChannelPermission, isBlockedEitherWay, isTimedOut, memoizeAuthorCards, notify } from "./lib";
+import { resolveMentions, type MentionCache } from "./mentions";
 import { collectChannelNotifyTargets } from "../lib/server-notifications";
 
 async function signedIn(ctx: QueryCtx) {
@@ -60,6 +60,11 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
       : [],
   );
   const messages = await ctx.db.query("messages").withIndex("by_channel", q => q.eq("channelId", channelId)).order("desc").take(150);
+  // One read of each author's card and each @mention per execution instead of
+  // one per message. This query re-runs on every message in the channel, so
+  // the difference is what the whole page costs every time somebody types.
+  const authorCardFor = memoizeAuthorCards(ctx);
+  const mentionCache: MentionCache = new Map();
   return Promise.all(messages
     // Messages deleted for everyone are removed from the conversation entirely,
     // and per-user hides are filtered for this viewer only.
@@ -80,7 +85,7 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
           : { _id: parent._id, author: await nameOf(ctx, parent.userId), body: parent.body.slice(0, 140), deleted: false };
       }
     }
-    return { ...message, ...(await authorCardOf(ctx, message.userId)), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply, mentionUsers: await resolveMentions(ctx, message.body, { serverId: channel.serverId }) };
+    return { ...message, ...(await authorCardFor(message.userId)), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply, mentionUsers: await resolveMentions(ctx, message.body, { serverId: channel.serverId }, mentionCache) };
   }));
 }});
 export const createServer = mutation({ args: { name: v.string(), description: v.string() }, handler: async (ctx, args) => {

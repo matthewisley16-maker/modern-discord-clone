@@ -3,19 +3,52 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { gifValidator, requireGif } from "./gif";
-import { areFriends, authorCardOf, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
+import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, memoizeAuthorCards, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import { lockStateOf } from "./conversationPrivacy";
-import { resolveMentions } from "./mentions";
+import { resolveMentions, type MentionCache } from "./mentions";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 
 /**
- * How many of a conversation's NEWEST messages the sidebar preview/unread badge
- * looks at. Sending the whole history through the wire on every reactive update
- * was the single largest source of database reads + data egress; the badge and
- * preview never need more than this.
+ * Upper bound on how many messages a single conversation may contribute to the
+ * sidebar's unread badge / preview.
+ *
+ * This used to be a flat "newest 100 rows" read PER CONVERSATION on every
+ * reactive re-execution of `listConversations` — and that query re-runs on every
+ * DM message AND on every presence heartbeat, because each conversation card
+ * carries its members' presence. For a user in 20 conversations that was ~2,000
+ * document reads per re-execution even when nothing had changed.
+ *
+ * The unread pass now reads only the messages that are NEWER than the member's
+ * `lastReadAt` (an index range on the implicit `_creationTime` key), so an
+ * up-to-date inbox reads ~0 rows instead of 100 per conversation, and the count
+ * stays exact up to this cap.
  */
-const CONVO_PREVIEW_SCAN = 100;
+const UNREAD_SCAN = 100;
+
+/**
+ * Unread messages in one conversation for one member: only the slice newer than
+ * their read marker is ever touched. Reading this via the `by_conversation`
+ * index range (conversationId + `_creationTime` > lastReadAt) means a member who
+ * is caught up scans nothing at all.
+ */
+async function unreadIn(ctx: Parameters<typeof displayNameOf>[0], conversationId: Id<"dmConversations">, userId: Id<"users">, lastReadAt: number) {
+  const rows = await ctx.db
+    .query("dmMessages")
+    .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId).gt("_creationTime", lastReadAt))
+    .take(UNREAD_SCAN);
+  return rows.filter((m) => m.userId !== userId && !m.deleted).length;
+}
+
+/** The single newest message in a conversation (preview + recency), or undefined. */
+async function newestIn(ctx: Parameters<typeof displayNameOf>[0], conversationId: Id<"dmConversations">) {
+  const rows = await ctx.db
+    .query("dmMessages")
+    .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+    .order("desc")
+    .take(1);
+  return rows[0];
+}
 
 /**
  * Remove EVERY chat-specific privacy artifact a single member holds for one
@@ -141,16 +174,13 @@ export const listConversations = query({
       const others = members.filter((m) => m.userId !== userId);
       const otherCards = await Promise.all(others.map((m) => card(ctx, m.userId, userId)));
 
-      // Bounded read: newest slice only. Never pull a whole conversation into
-      // an index subscription just to render a preview and a count.
-      const recent = await ctx.db
-        .query("dmMessages")
-        .withIndex("by_conversation", (q) => q.eq("conversationId", convo._id))
-        .order("desc")
-        .take(CONVO_PREVIEW_SCAN);
+      // Cheap, bounded reads: the count only touches messages newer than the
+      // member's read marker, and the preview is a single newest row.
       const lastRead = membership.lastReadAt ?? 0;
-      const unread = recent.filter((m) => m.userId !== userId && m._creationTime > lastRead && !m.deleted).length;
-      const last = recent.length > 0 ? recent[0] : undefined;
+      const [unread, last] = await Promise.all([
+        unreadIn(ctx, convo._id, userId, lastRead),
+        newestIn(ctx, convo._id),
+      ]);
 
       out.push({
         conversationId: convo._id,
@@ -189,13 +219,7 @@ export const unreadTotal = query({
       // Hidden conversations are excluded from the badge total; a locked-but-
       // visible one still contributes its count (which reveals nothing).
       if (membership.hidden) continue;
-      const recent = await ctx.db
-        .query("dmMessages")
-        .withIndex("by_conversation", (q) => q.eq("conversationId", membership.conversationId))
-        .order("desc")
-        .take(CONVO_PREVIEW_SCAN);
-      const lastRead = membership.lastReadAt ?? 0;
-      total += recent.filter((m) => m.userId !== userId && m._creationTime > lastRead && !m.deleted).length;
+      total += await unreadIn(ctx, membership.conversationId, userId, membership.lastReadAt ?? 0);
     }
     return total;
   },
@@ -519,6 +543,10 @@ export const messages = query({
       .reverse();
     const term = search?.trim().toLowerCase();
 
+    // One read of each author's card and each @mention per execution, instead of
+    // one per message: this query re-runs on every message in the conversation.
+    const authorCardFor = memoizeAuthorCards(ctx);
+    const mentionCache: MentionCache = new Map();
     const result = [];
     for (const m of ordered) {
       if (term && !m.body.toLowerCase().includes(term)) continue;
@@ -538,12 +566,12 @@ export const messages = query({
       }
       result.push({
         ...m,
-        ...(await authorCardOf(ctx, m.userId)),
+        ...(await authorCardFor(m.userId)),
         reactions,
         // Attachments are removed on delete-for-everyone, so this stays empty.
         attachments,
         reply,
-        mentionUsers: await resolveMentions(ctx, m.body, { conversationId }),
+        mentionUsers: await resolveMentions(ctx, m.body, { conversationId }, mentionCache),
       });
     }
 

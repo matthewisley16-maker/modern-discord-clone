@@ -14,35 +14,58 @@ export function extractUsernames(body: string): string[] {
 }
 
 /**
+ * Cache of resolved mentions for one query execution, keyed by
+ * `scope:username`. A page of history commonly repeats the same @mention many
+ * times, and each resolution costs a users lookup plus a membership check; the
+ * caller passes one Map per execution so nothing is shared across invocations.
+ */
+export type MentionCache = Map<string, { username: string; userId: Id<"users"> } | null>;
+
+/**
  * Resolve the @usernames in a body to real user ids, restricted to people who
  * can actually see the message (server members / DM participants). Used so the
  * client can render clickable mentions backed by real ids — never guessed.
+ *
+ * Pass a `cache` (one per execution) when resolving many bodies at once.
  */
 export async function resolveMentions(
   ctx: QueryCtx,
   body: string,
   scope: { serverId?: Id<"servers">; conversationId?: Id<"dmConversations"> },
+  cache?: MentionCache,
 ): Promise<{ username: string; userId: Id<"users"> }[]> {
   const usernames = extractUsernames(body);
   if (usernames.length === 0) return [];
+  const scopeKey = scope.serverId ?? scope.conversationId ?? "";
   const out: { username: string; userId: Id<"users"> }[] = [];
   for (const uname of usernames) {
-    const target = await ctx.db.query("users").withIndex("username", (q) => q.eq("username", uname)).unique();
-    if (!target) continue;
-    if (scope.serverId) {
-      const membership = await ctx.db
-        .query("memberships")
-        .withIndex("by_server_user", (q) => q.eq("serverId", scope.serverId!).eq("userId", target._id))
-        .unique();
-      if (!membership) continue;
-    } else if (scope.conversationId) {
-      const member = await ctx.db
-        .query("dmMembers")
-        .withIndex("by_pair", (q) => q.eq("conversationId", scope.conversationId!).eq("userId", target._id))
-        .unique();
-      if (!member) continue;
+    const key = `${scopeKey}:${uname}`;
+    const cached = cache?.get(key);
+    if (cached !== undefined) {
+      if (cached) out.push(cached);
+      continue;
     }
-    out.push({ username: uname, userId: target._id });
+    let resolved: { username: string; userId: Id<"users"> } | null = null;
+    const target = await ctx.db.query("users").withIndex("username", (q) => q.eq("username", uname)).unique();
+    if (target) {
+      if (scope.serverId) {
+        const membership = await ctx.db
+          .query("memberships")
+          .withIndex("by_server_user", (q) => q.eq("serverId", scope.serverId!).eq("userId", target._id))
+          .unique();
+        if (membership) resolved = { username: uname, userId: target._id };
+      } else if (scope.conversationId) {
+        const member = await ctx.db
+          .query("dmMembers")
+          .withIndex("by_pair", (q) => q.eq("conversationId", scope.conversationId!).eq("userId", target._id))
+          .unique();
+        if (member) resolved = { username: uname, userId: target._id };
+      } else {
+        resolved = { username: uname, userId: target._id };
+      }
+    }
+    cache?.set(key, resolved);
+    if (resolved) out.push(resolved);
   }
   return out;
 }

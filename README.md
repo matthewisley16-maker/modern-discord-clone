@@ -315,12 +315,26 @@ Two lessons are baked into the code now:
    reconnecting / unavailable / paused-deployment into themed screens with an explanation and
    a cooldown-protected Retry. `RootGate`, `AuthGate` and `RequireAuth` no longer return
    `null`, and `GlobalConnectionBanner` explains a degraded connection on every route.
-2. **Keep backend database I/O bounded.** The retention sweep is the biggest background
-   consumer: it used to run every 10 minutes, reading the oldest message slices plus three
-   disposable tables (~2k document reads per run, ~0.2 GB/month on its own). It now runs
-   hourly (`src/convex/crons.ts`). Client subscriptions must never duplicate work — the DM
-   unread badge is derived from the existing `dms.listConversations` subscription instead of
-   a second `dms.unreadTotal` scan.
+2. **Keep backend database I/O bounded.** A Convex subscription re-executes its whole query
+   whenever anything it read changes, so the real cost of a feature is
+   `(reads per execution) x (how often it re-executes)`. Three measured offenders were fixed:
+   - The retention sweep used to run every 10 minutes, reading the oldest message slices plus
+     three disposable tables (~2k document reads per run, ~0.2 GB/month on its own). It now
+     runs hourly (`src/convex/crons.ts`).
+   - `dms.listConversations` re-executes on every DM message **and on every presence
+     heartbeat** (its conversation cards carry members' presence - the heartbeat runs every
+     30s per open tab). It used to read each conversation's newest 100 messages to compute an
+     unread count, i.e. ~100 reads per conversation per re-execution (~2,000 for a 20-chat
+     inbox) even when nothing had changed. It now reads only the messages *newer than the
+     member's `lastReadAt`* via an index range on the implicit `_creationTime` key
+     (`unreadIn`), plus one newest row for the preview - a caught-up inbox reads ~0 rows.
+   - `chat.messages` / `dms.messages` expand up to 150 messages in a single execution, and
+     used to resolve each message's author card (profile + user + avatar) and each @mention
+     (user lookup + membership check) per message. `lib.memoizeAuthorCards` and the
+     `MentionCache` in `mentions.resolveMentions` now resolve each author/username once per
+     execution (`bun author-card-cache-test.mjs`, `bun mention-cache-test.mjs`).
+   Client subscriptions must never duplicate work either - the DM unread badge is derived from
+   the existing `dms.listConversations` subscription instead of a second `dms.unreadTotal` scan.
 
 ### Before every deploy
 
@@ -333,6 +347,10 @@ bun run preflight -- --typecheck
 `JWKS` / `JWT_PRIVATE_KEY` are missing, or if any active `disable` usage limit is at ≥ 90%
 — the exact condition that pauses the deployment. It prints the `convex deployment
 usage-limits` command needed to raise a limit. It never changes anything by itself.
+
+Note the asymmetry that makes a *warning* limit worth having: a `warn` limit tells you before
+it is too late, while a `disable` limit takes the deployment offline (no sign-in, no
+messages) the moment it trips. Check `bunx convex deployment usage` after a busy day.
 
 ### Diagnosing a "black screen"
 

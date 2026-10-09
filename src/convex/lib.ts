@@ -109,6 +109,32 @@ export async function authorCardOf(ctx: Ctx, userId: Id<"users">) {
   };
 }
 
+/**
+ * Per-execution memo for `authorCardOf`.
+ *
+ * A page of chat history is read as ONE query that expands every message. When
+ * 150 messages come from 12 people, calling `authorCardOf` per message re-reads
+ * the same 12 profiles/users (and re-resolves the same avatars) 150 times —
+ * and that whole read is repeated on every reactive re-execution. This returns a
+ * function that resolves each author at most once per execution, which cuts the
+ * document reads of a message page by roughly (messages ÷ distinct authors).
+ *
+ * It is deliberately created per execution by the caller: cached values must
+ * never outlive the function invocation that produced them.
+ */
+export function memoizeAuthorCards(ctx: Ctx) {
+  const cache = new Map<string, Promise<Awaited<ReturnType<typeof authorCardOf>>>>();
+  return (userId: Id<"users">) => {
+    const key = userId as string;
+    let card = cache.get(key);
+    if (!card) {
+      card = authorCardOf(ctx, userId);
+      cache.set(key, card);
+    }
+    return card;
+  };
+}
+
 export async function settingsOf(ctx: Ctx, userId: Id<"users">) {
   return ctx.db
     .query("userSettings")
