@@ -363,6 +363,17 @@ Three lessons are baked into the code now:
      execution (`bun author-card-cache-test.mjs`, `bun mention-cache-test.mjs`).
    Client subscriptions must never duplicate work either - the DM unread badge is derived from
    the existing `dms.listConversations` subscription instead of a second `dms.unreadTotal` scan.
+3. **Record WHY the backend closed the connection.** `AuthProviderDiscoveryFailed` is
+   emitted by the Convex *backend*, not by a query, so it never reached the app: the loop
+   lived only in the console, the account read stayed pending, and the UI reported a generic
+   connection loss instead of the real cause. `ConvexReactClient` is now constructed with
+   `onServerDisconnectError` (`src/main.tsx`), which hands the close reason straight to
+   `recordServiceError`. The store groups identical messages into one counted entry and makes
+   no request, so a 10-minute reconnect loop becomes a single `auth-discovery` line — the
+   status screen and the Diagnostics disclosure then name the true cause instead of guessing
+   (`bun service-status-test.mjs` asserts this end-to-end path). One client, created once at
+   module scope, is still the only client: nothing about this adds a subscription, a poll or
+   a retry of its own.
 
 ### Before every deploy
 
@@ -386,3 +397,15 @@ Errors are grouped and counted in memory (`src/lib/diagnostics.ts`, redacted of 
 keys and emails) and surfaced in the status screen's Diagnostics disclosure. No error data
 is ever sent over the network. If the backend is paused, the app now says so explicitly
 instead of looping silently.
+
+**Not every console warning is a bug in this app.** The preview harness injects
+`@vly-ai/integrations` into `<head>` (`vlyPlugin()` in `vite.config.ts`), and that module
+loads `https://cdn.jsdelivr.net/npm/html2canvas-pro@2.0.4/dist/html2canvas-pro.min.js` for
+the platform's own project-thumbnail capture. It is loaded as an `async` module script, its
+failure is caught and warned about, and it is only used when the parent frame asks for a
+screenshot (`vly-screenshot-request`). Freecord itself has no screenshot feature and does
+not reference `html2canvas` anywhere — so an Edge warning such as *"Tracking Prevention
+blocked access to storage for …/html2canvas-pro.min.js"* is the platform's third-party
+script touching storage that the browser denies to a cross-site origin. It is unrelated to
+Freecord's own authentication and must not be "fixed" by deleting the dependency (that
+would break the preview/toolbar bridge) or by weakening browser security.

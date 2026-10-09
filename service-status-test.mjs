@@ -18,6 +18,7 @@ import {
   RETRY_COOLDOWN_MS,
   MAX_RETRY_COOLDOWN_MS,
 } from "./src/lib/service-status.ts";
+import { getDiagnostics, recordServiceError, resetServiceDiagnostics } from "./src/lib/diagnostics.ts";
 
 let pass = 0, fail = 0;
 const ok = (name) => { pass++; console.log(`PASS: ${name}`); };
@@ -176,6 +177,63 @@ check("a finished cooldown allows a retry again", () => {
   const s = deriveServiceStatus({ ...base, elapsedMs: 25000, attempts: 1, cooldownUntil: 999_000 });
   assert(s.retryable === true, "an expired cooldown must allow a retry");
   assert(s.cooldownRemainingMs === 0, "no time should remain");
+});
+
+// ---------------------------------------------------------------------------
+// the WIRED path: what the Convex client hands the app on an abnormal close
+// ---------------------------------------------------------------------------
+// main.tsx passes this exact callback to the client:
+//
+//     new ConvexReactClient(CONVEX_URL, {
+//       onServerDisconnectError: (message) => recordServiceError(message),
+//     })
+//
+// These tests go through that same entry point (the string the client actually
+// produces, into the diagnostics store, out through the status decision), so a
+// regression anywhere in that chain — including silently dropping the close
+// reason again — fails here instead of only showing up as a black screen.
+check("the client's 1013 close reason is what the app records", () => {
+  resetServiceDiagnostics();
+  recordServiceError(REAL_CONSOLE); // exactly what onServerDisconnectError receives
+  const entries = getDiagnostics();
+  assert(entries.length === 1, `expected one entry, got ${entries.length}`);
+  assert(entries[0].kind === "auth-discovery", `expected auth-discovery, got ${entries[0].kind}`);
+  assert(entries[0].message.includes("AuthProviderDiscoveryFailed"), "the cause must survive redaction");
+});
+
+check("a recorded close reason replaces the generic network message on screen", () => {
+  resetServiceDiagnostics();
+  const silent = deriveServiceStatus({ ...base, elapsedMs: 25000 });
+  recordServiceError(REAL_CONSOLE);
+  const status = deriveServiceStatus({ ...base, elapsedMs: 25000, errorKind: "auth-discovery" });
+  assert(status.copy?.title === SERVICE_ERROR_COPY["auth-discovery"].title,
+    `expected the auth copy, got "${status.copy?.title}"`);
+  assert(status.copy?.title !== silent.copy?.title,
+    "the known cause must not be reported as a plain connection loss");
+});
+
+check("a reconnected backend clears the failure instead of pinning the screen", () => {
+  // The deployment answers again (as it did once the usage limit was raised):
+  // the socket is connected and the account resolves, so the app is ready even
+  // though the failure is still in the report.
+  const status = deriveServiceStatus({
+    ...base,
+    isWebSocketConnected: true,
+    authLoading: false,
+    hasEverConnected: true,
+    elapsedMs: 60000,
+    errorKind: "auth-discovery",
+  });
+  assert(status.phase === "ready", `expected ready after recovery, got ${status.phase}`);
+});
+
+check("an auth-discovery loop cannot flood the report", () => {
+  resetServiceDiagnostics();
+  // 10 minutes of the client's capped 16s reconnect backoff.
+  for (let i = 0; i < 40; i += 1) recordServiceError(REAL_CONSOLE);
+  const entries = getDiagnostics();
+  assert(entries.length === 1, `expected one grouped entry, got ${entries.length}`);
+  assert(entries[0].count === 40, `expected every occurrence counted, got ${entries[0].count}`);
 });
 
 check("statusCopy always yields real copy for every phase", () => {

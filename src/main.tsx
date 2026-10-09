@@ -162,7 +162,23 @@ class RootErrorBoundary extends React.Component<
 // production build against a different deployment than dev, which split the
 // data: the deployed app wrote to a different database than dev, so nothing
 // appeared to save. Pinning one URL keeps dev and the deployed app in sync.
-const convex = new ConvexReactClient(CONVEX_URL);
+const convex = new ConvexReactClient(CONVEX_URL, {
+  /**
+   * Record WHY the backend closed the connection.
+   *
+   * The last outage produced `WebSocket closed with code 1013:
+   * AuthProviderDiscoveryFailed` in a continuous loop. That message is emitted
+   * by the Convex backend (not by any query), so nothing in the app ever saw
+   * it: the loop existed only in the browser console, the account read stayed
+   * pending, and the UI fell back to the generic "can't reach the backend"
+   * copy even though the real cause was known. `onServerDisconnectError` is
+   * the supported hook for it, and it is called once per ABNORMAL close
+   * (normal closes are filtered out inside the client), so routing it through
+   * the diagnostics store — which groups identical messages into one counted
+   * entry and never makes a request — cannot become a log or request loop.
+   */
+  onServerDisconnectError: (message) => recordServiceError(message),
+});
 
 
 
