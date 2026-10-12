@@ -61,6 +61,22 @@ if (listResult.result === undefined) {
 }
 
 // ---------------------------------------------------------------------------
+// The moderation (hidden message) query
+// ---------------------------------------------------------------------------
+const hiddenResult = await rejection(() =>
+  anonymous.query(api.adminMessages.listMineHiddenMessages, {
+    paginationOpts: { numItems: 5, cursor: null },
+  }),
+);
+if (hiddenResult.error === null) bad("anonymous caller cannot list hidden messages", "the query returned data");
+else ok("anonymous caller cannot list hidden messages");
+if (hiddenResult.error && /sign in/i.test(hiddenResult.error)) {
+  ok("the moderation query is refused by the server-side sign-in gate");
+} else {
+  bad("the moderation query is refused by the server-side sign-in gate", `unexpected rejection: ${hiddenResult.error}`);
+}
+
+// ---------------------------------------------------------------------------
 // The permanent-delete mutation
 // ---------------------------------------------------------------------------
 const purgeResult = await rejection(() =>
@@ -81,12 +97,33 @@ if (purgeResult.error && /sign in/i.test(purgeResult.error)) {
 }
 
 // ---------------------------------------------------------------------------
+// The administrator-only global delete of a HIDDEN message (the moderation
+// route). Same fabricated-id caveat as above: with no session it can never
+// succeed, and a caller that cannot mint a real visibility id cannot reach the
+// handler at all.
+// ---------------------------------------------------------------------------
+const hiddenPurge = await rejection(() =>
+  anonymous.mutation(api.deletion.deleteHiddenForEveryone, { visibilityId: FABRICATED_ID }),
+);
+if (hiddenPurge.error === null) bad("anonymous caller cannot globally delete a hidden message", "the mutation succeeded");
+else ok("anonymous caller cannot globally delete a hidden message");
+if (hiddenPurge.error && /sign in/i.test(hiddenPurge.error)) {
+  ok("the hidden-message delete is refused by the server-side sign-in gate");
+} else if (hiddenPurge.error && /ArgumentValidationError|Validator/i.test(hiddenPurge.error)) {
+  ok("a fabricated id is refused before the hidden-message delete handler runs");
+} else {
+  bad("the hidden-message delete is refused", `unexpected rejection: ${hiddenPurge.error}`);
+}
+
+// ---------------------------------------------------------------------------
 // The functions really exist on the deployment (a rename would otherwise make
 // both checks above "pass" by failing with function-not-found).
 // ---------------------------------------------------------------------------
-const notFound = listResult.error && /not found|CouldNotFindFunction|no function/i.test(listResult.error);
-if (notFound) bad("api.adminMessages.listMineDeletedMessages exists on the deployment", listResult.error);
+const notFound = (r) => r.error && /not found|CouldNotFindFunction|no function/i.test(r.error);
+if (notFound(listResult)) bad("api.adminMessages.listMineDeletedMessages exists on the deployment", listResult.error);
 else ok("api.adminMessages.listMineDeletedMessages exists on the deployment");
+if (notFound(hiddenResult)) bad("api.adminMessages.listMineHiddenMessages exists on the deployment", hiddenResult.error);
+else ok("api.adminMessages.listMineHiddenMessages exists on the deployment");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

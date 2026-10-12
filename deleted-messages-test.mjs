@@ -11,6 +11,7 @@ import {
   DELETED_PREVIEW_MAX,
   deletedMessagePreview,
   hasRetainedContent,
+  isRetainedHiddenMessage,
   isRetainedOwnDeletion,
   matchesDeletedMessageSearch,
 } from "./src/lib/deleted-messages";
@@ -54,6 +55,27 @@ is("missing optional facts do not make a row eligible", isRetainedOwnDeletion({
 }), false);
 is("an unknown sender is never eligible", isRetainedOwnDeletion({ ...mine, messageSenderId: undefined }), false);
 
+// ---------------------------------------------------------------------------
+// The administrator moderation rule (any sender, still retained)
+// ---------------------------------------------------------------------------
+is("a moderator may reach another member's hidden message", isRetainedHiddenMessage({
+  viewerId: ME, hiddenByUserId: ME, messageExists: true, messageSenderId: OTHER,
+  deletedForEveryone: false, body: "their message",
+}), true);
+is("but only for a message they hid themselves", isRetainedHiddenMessage({
+  viewerId: ME, hiddenByUserId: OTHER, messageExists: true, messageSenderId: OTHER,
+  deletedForEveryone: false, body: "their message",
+}), false);
+is("a moderation target deleted for everyone is never listed", isRetainedHiddenMessage({
+  viewerId: ME, hiddenByUserId: ME, messageExists: true, messageSenderId: OTHER,
+  deletedForEveryone: true, body: "their message",
+}), false);
+is("an attachment-only moderation target is still eligible", isRetainedHiddenMessage({
+  viewerId: ME, hiddenByUserId: ME, messageExists: true, messageSenderId: OTHER,
+  deletedForEveryone: false, body: "", attachmentCount: 1,
+}), true);
+is("the own-sender rule is exactly the strict variant",
+  isRetainedOwnDeletion({ viewerId: ME, hiddenByUserId: ME, messageExists: true, messageSenderId: OTHER, deletedForEveryone: false, body: "x" }), false);
 is("whitespace-only body has no retained content", hasRetainedContent({ body: "\n\t  " }), false);
 is("a GIF counts as retained content", hasRetainedContent({ body: "", hasGif: true }), true);
 is("an attachment counts as retained content", hasRetainedContent({ attachmentCount: 2 }), true);

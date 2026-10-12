@@ -7,7 +7,7 @@ import { auditAdmin, currentUserId, displayNameOf, requirePanelAccess } from "./
 import { deleteChannelMessage, deleteDmMessage } from "./storage";
 import {
   deletedMessagePreview,
-  isRetainedOwnDeletion,
+  isRetainedHiddenMessage,
   matchesDeletedMessageSearch,
 } from "../lib/deleted-messages";
 
@@ -20,10 +20,18 @@ import {
  * normal history queries just filter the id out. Nothing was ever able to look
  * those messages up again, so their content sat in storage forever.
  *
- * This module is that missing view, scoped twice over:
- *   - only callers with panel access (`requirePanelAccess`, rank >= admin), and
- *   - only the caller's OWN messages that the caller hid (never another user's,
- *     never a message deleted for everyone).
+ * This module is that missing view, in two deliberately separate lists, both
+ * reachable only by callers with panel access (`requirePanelAccess`, rank >=
+ * admin):
+ *   - `listMineDeletedMessages` — the caller's OWN messages they hid;
+ *   - `listMineHiddenMessages` — the moderation list: any message the caller hid
+ *     themselves (an administrator may moderate another member's message without
+ *     restoring it to their own history first). It never becomes a way to browse
+ *     arbitrary private conversations: a row exists only because the caller
+ *     already saw that message and hid it, and the global delete
+ *     (`deletion.deleteHiddenForEveryone`) re-checks the role on the server.
+ *
+ * Neither list ever shows a message deleted for everyone — its content is gone.
  *
  * Reads are indexed (`messageVisibility.by_user`, ordered newest-first) and
  * paginated, so the section never scans the whole message history and never
@@ -67,6 +75,8 @@ export type RetainedDeletedMessage = {
   sentAt: number;
   /** When the current user hid it with "Delete for me". */
   hiddenAt: number;
+  /** True when the viewer wrote the message themselves. */
+  senderIsMe: boolean;
 };
 
 /** Display-name lookups resolved once per request (never twice for one user). */
@@ -108,8 +118,13 @@ async function dmAttachments(ctx: QueryCtx, messageId: Id<"dmMessages">): Promis
 
 /**
  * Turn one visibility row into a panel entry, or `null` when it is not
- * something this section may show (not mine, message gone, deleted for
- * everyone, already filtered out by the search term).
+ * something the requested list may show (not hidden by me, message gone,
+ * deleted for everyone, already filtered out by the search term).
+ *
+ * `ownSenderOnly` is the difference between the two admin lists:
+ *   - "My Deleted Messages" — only messages I wrote and hid,
+ *   - the moderation list — any message I hid (an administrator may moderate
+ *     another member's message without first unhiding it).
  */
 async function describeHiddenMessage(
   ctx: QueryCtx,
@@ -117,6 +132,7 @@ async function describeHiddenMessage(
   vis: Doc<"messageVisibility">,
   term: string,
   names: NameCache,
+  ownSenderOnly: boolean,
 ): Promise<RetainedDeletedMessage | null> {
   const channelMessageId = ctx.db.normalizeId("messages", vis.messageId);
   const dmMessageId = channelMessageId ? null : ctx.db.normalizeId("dmMessages", vis.messageId);
@@ -127,7 +143,7 @@ async function describeHiddenMessage(
     if (!message) return null;
     const attachments = await channelAttachments(ctx, channelMessageId);
     if (
-      !isRetainedOwnDeletion({
+      !isRetainedHiddenMessage({
         viewerId,
         hiddenByUserId: vis.userId,
         messageExists: true,
@@ -136,6 +152,7 @@ async function describeHiddenMessage(
         body: message.body,
         attachmentCount: attachments.length,
         hasGif: Boolean(message.gif),
+        requireOwnSender: ownSenderOnly,
       })
     ) {
       return null;
@@ -170,6 +187,7 @@ async function describeHiddenMessage(
       senderName: await nameOf(ctx, names, message.userId),
       sentAt: message._creationTime,
       hiddenAt: vis.hiddenAt,
+      senderIsMe: message.userId === viewerId,
     };
   }
 
@@ -177,7 +195,7 @@ async function describeHiddenMessage(
   if (!message) return null;
   const attachments = await dmAttachments(ctx, dmMessageId!);
   if (
-    !isRetainedOwnDeletion({
+    !isRetainedHiddenMessage({
       viewerId,
       hiddenByUserId: vis.userId,
       messageExists: true,
@@ -186,6 +204,7 @@ async function describeHiddenMessage(
       body: message.body,
       attachmentCount: attachments.length,
       hasGif: Boolean(message.gif),
+      requireOwnSender: ownSenderOnly,
     })
   ) {
     return null;
@@ -231,7 +250,50 @@ async function describeHiddenMessage(
     senderName: await nameOf(ctx, names, message.userId),
     sentAt: message._creationTime,
     hiddenAt: vis.hiddenAt,
+    senderIsMe: message.userId === viewerId,
   };
+}
+
+/**
+ * The shared indexed, paginated read behind both admin lists: newest local hide
+ * first, filtered per row, with a bounded number of index pages per request so
+ * one search can never walk the whole visibility table.
+ */
+async function paginateHidden(
+  ctx: QueryCtx,
+  viewerId: Id<"users">,
+  ownSenderOnly: boolean,
+  paginationOpts: { numItems: number; cursor: string | null },
+  search: string | undefined,
+) {
+  const term = search ?? "";
+  const numItems = Math.min(Math.max(paginationOpts.numItems, 1), MAX_PAGE_ITEMS);
+  const names: NameCache = new Map();
+  const items: RetainedDeletedMessage[] = [];
+
+  let cursor = paginationOpts.cursor;
+  let continueCursor = paginationOpts.cursor ?? "";
+  let isDone = false;
+  let pages = 0;
+
+  while (pages < MAX_PAGES_PER_REQUEST) {
+    const page = await ctx.db
+      .query("messageVisibility")
+      .withIndex("by_user", (q) => q.eq("userId", viewerId))
+      .order("desc")
+      .paginate({ cursor, numItems });
+    pages++;
+    for (const vis of page.page) {
+      const item = await describeHiddenMessage(ctx, viewerId, vis, term, names, ownSenderOnly);
+      if (item) items.push(item);
+    }
+    continueCursor = page.continueCursor;
+    isDone = page.isDone;
+    cursor = page.continueCursor;
+    if (isDone || items.length >= numItems) break;
+  }
+
+  return { page: items, continueCursor, isDone };
 }
 
 /**
@@ -247,35 +309,28 @@ export const listMineDeletedMessages = query({
   handler: async (ctx, { paginationOpts, search }) => {
     const viewerId = await currentUserId(ctx);
     await requirePanelAccess(ctx, viewerId);
+    return await paginateHidden(ctx, viewerId, true, paginationOpts, search);
+  },
+});
 
-    const term = search ?? "";
-    const numItems = Math.min(Math.max(paginationOpts.numItems, 1), MAX_PAGE_ITEMS);
-    const names: NameCache = new Map();
-    const items: RetainedDeletedMessage[] = [];
-
-    let cursor = paginationOpts.cursor;
-    let continueCursor = paginationOpts.cursor ?? "";
-    let isDone = false;
-    let pages = 0;
-
-    while (pages < MAX_PAGES_PER_REQUEST) {
-      const page = await ctx.db
-        .query("messageVisibility")
-        .withIndex("by_user", (q) => q.eq("userId", viewerId))
-        .order("desc")
-        .paginate({ cursor, numItems });
-      pages++;
-      for (const vis of page.page) {
-        const item = await describeHiddenMessage(ctx, viewerId, vis, term, names);
-        if (item) items.push(item);
-      }
-      continueCursor = page.continueCursor;
-      isDone = page.isDone;
-      cursor = page.continueCursor;
-      if (isDone || items.length >= numItems) break;
-    }
-
-    return { page: items, continueCursor, isDone };
+/**
+ * Every retained message I hid with "Delete for me", whatever its sender — the
+ * moderation view. Admin-only, indexed and paginated exactly like the list
+ * above, and read-only: nothing is deleted simply by looking at it.
+ *
+ * The global delete for one of these rows is `deletion.deleteHiddenForEveryone`,
+ * which re-verifies the administrator role and this same visibility row on the
+ * server.
+ */
+export const listMineHiddenMessages = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    search: v.optional(v.string()),
+  },
+  handler: async (ctx, { paginationOpts, search }) => {
+    const viewerId = await currentUserId(ctx);
+    await requirePanelAccess(ctx, viewerId);
+    return await paginateHidden(ctx, viewerId, false, paginationOpts, search);
   },
 });
 

@@ -19,8 +19,8 @@
 /** Longest message preview the Admin Panel shows for a retained message. */
 export const DELETED_PREVIEW_MAX = 160;
 
-/** The structural facts the eligibility rule needs about one candidate. */
-export type RetainedOwnDeletion = {
+/** The structural facts the eligibility rules need about one candidate. */
+export type RetainedHiddenMessage = {
   /** The administrator viewing the panel. */
   viewerId: string;
   /** `messageVisibility.userId` — who hid the message. */
@@ -34,7 +34,16 @@ export type RetainedOwnDeletion = {
   body?: string | null;
   attachmentCount?: number;
   hasGif?: boolean;
+  /**
+   * Only messages the viewer wrote qualify (the "My Deleted Messages" list).
+   * The administrator moderation list leaves this unset, because a global
+   * administrator may also moderate another member's message they had hidden.
+   */
+  requireOwnSender?: boolean;
 };
+
+/** Kept as the strict, own-message-only shape. */
+export type RetainedOwnDeletion = Omit<RetainedHiddenMessage, "requireOwnSender">;
 
 /** True when a message still has content worth showing/deleting. */
 export function hasRetainedContent(content: {
@@ -48,20 +57,29 @@ export function hasRetainedContent(content: {
 }
 
 /**
- * The eligibility rule for **My Deleted Messages**:
+ * The shared eligibility rule for retained "delete for me" records:
  *   - the visibility row must be MY OWN local delete,
  *   - the message itself must still exist (a removed row cannot be recovered),
- *   - I must be the original sender (never another member's message),
  *   - it must NOT have been deleted for everyone (its content is already gone,
  *     and pretending it is recoverable would be a lie),
- *   - something must actually still be retained to show or delete.
+ *   - something must actually still be retained to show or delete,
+ *   - and, when `requireOwnSender` is set, I must also be the original sender.
  */
-export function isRetainedOwnDeletion(candidate: RetainedOwnDeletion): boolean {
+export function isRetainedHiddenMessage(candidate: RetainedHiddenMessage): boolean {
   if (!candidate.messageExists) return false;
   if (candidate.hiddenByUserId !== candidate.viewerId) return false;
-  if (candidate.messageSenderId !== candidate.viewerId) return false;
+  if (candidate.requireOwnSender && candidate.messageSenderId !== candidate.viewerId) return false;
   if (candidate.deletedForEveryone) return false;
   return hasRetainedContent(candidate);
+}
+
+/**
+ * The rule for **My Deleted Messages**: my own messages that I hid myself.
+ * A message another member wrote is never part of this list, even though a
+ * platform administrator may moderate it through the moderation list.
+ */
+export function isRetainedOwnDeletion(candidate: RetainedOwnDeletion): boolean {
+  return isRetainedHiddenMessage({ ...candidate, requireOwnSender: true });
 }
 
 /** One-line preview: the message text when there is any, otherwise its files. */

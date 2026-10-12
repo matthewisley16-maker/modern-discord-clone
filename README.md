@@ -370,6 +370,59 @@ so the section reads only the caller's own rows.
   sweep (past `STORAGE_RETENTION_MS`) or by "delete for everyone" cannot be recovered, and the
   panel says so instead of pretending otherwise.
 
+## Community cover art in Discover
+
+The community image shown on a Discover card is the community's OWN uploaded cover — one
+field, one upload, one URL:
+
+| Step | Where |
+| --- | --- |
+| Upload | `CommunitySettings.tsx` ("Community icon") |
+| Persist | `communities.updateSettings { iconStorageId }` → `servers.iconStorageId` |
+| Resolve | `communities.discover` → `iconUrl` (`ctx.storage.getUrl`), same field as the rail/sidebar |
+| Render | `src/components/dashboard/DiscoverView.tsx` (`CommunityCard`) |
+
+- **The card binds that image.** The cover sits at the top of the card with `object-fit: cover`
+  (`.fc-community-cover`, 16/7, no stretching) and the name, description, member count, tags and
+  Join/Open actions below it. The old placeholder-only card (a hardcoded gradient with the first
+  letter) ignored `iconUrl` entirely; the gradient is now used *only* as the fallback, so no
+  generated or unrelated image can ever replace real cover art.
+- **Fallbacks.** No cover → the gradient + community initial. A failed load (`onError`) → the same
+  fallback, so a deleted file degrades instead of breaking the card. The decision lives in
+  `src/lib/community-cover.ts` (`bun community-cover-test.mjs`).
+- **Freshness.** A storage id is part of the Convex file URL, so replacing a cover yields a NEW
+  URL — browsers cannot serve the old picture from cache. The card reads the reactive
+  `communities.discover` subscription, so an owner's change appears without a refresh.
+- **Upload integrity.** `updateSettings` now validates the blob server-side (exists, PNG/JPG/GIF/
+  WebP/AVIF, ≤5 MB) and deletes the blob it replaces (or clears), so old covers neither linger in
+  file storage nor can be referenced by a non-image upload.
+
+## Administrator message moderation (delete anyone's message for everyone)
+
+The existing global-deletion mechanism is reused, not reimplemented: `deletion.deleteForEveryone`
+and `deletion.deleteDmForEveryone` redact the row (`deletedForEveryone`, body emptied, reactions and
+orphan-safe attachments removed) and every view, search, preview and reply quote already hides it.
+
+- **Who may do it.** The author (unchanged), a community moderator with
+  `manageMessages`/`deleteMessages` (unchanged), and now a **global platform administrator**
+  (`rankOf(users.role) >= ROLE_RANK.admin`, read server-side — never a client flag). Community
+  channels also require membership; a DM requires being a participant.
+- **Surfaces.** The channel menu ("Delete for everyone" on anyone's message, gated by
+  `deletion.canModerateHere`, which now includes administrators) and the DM menu (the same item on
+  anyone's message when `users.me.isAdmin`). Both confirm first with a dialog naming the message and
+  the conversation, and report success/error.
+- **Messages an administrator already hid.** `adminMessages.listMineHiddenMessages` (Admin Panel →
+  "Hidden Messages") lists every retained message the administrator hid with "Delete for me",
+  whoever wrote it, and `deletion.deleteHiddenForEveryone` globally deletes one from there — no
+  need to restore it to their own history first, and it stays hidden from their view.
+- **Safety.** Administrator checks come first in every handler; both mutations are idempotent
+  (`alreadyDeleted` instead of a second delete); the audit entry records actor, action, message id,
+  conversation reference and timestamp — never the message content.
+- **Tests.** `bun deleted-messages-test.mjs` (retention rules), `bun deleted-messages-authz-test.mjs`
+  (live refusal of anonymous callers), and the account-creating `bun admin-authz-test.mjs`
+  (phase 8b: an Admin deletes another member's channel + DM message, non-admins are refused with a
+  real message id).
+
 ## Deployment safety (read this before deploys and before debugging a black screen)
 
 The app reads and writes ONE pinned Convex deployment (`src/main.tsx` → `CONVEX_URL`).

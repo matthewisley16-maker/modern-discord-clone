@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
+import { deleteStoredFile } from "./maintenance";
 import {
   audit,
   avatarUrlOf,
@@ -21,7 +22,26 @@ import {
   requirePermission,
 } from "./lib";
 import type { Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+
+/** Community cover art / banner limits (mirrors the client-side picker). */
+const COVER_MAX_BYTES = 5 * 1024 * 1024;
+const COVER_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"];
+
+/**
+ * Never trust the client about what it uploaded: the storage object must exist
+ * and really be an image of a sane size before a community can reference it as
+ * its cover art. A blob of the wrong kind would otherwise show as a broken
+ * image on every surface that reads `iconStorageId` (rail, sidebar, Discover).
+ */
+async function assertUsableCover(ctx: MutationCtx, storageId: Id<"_storage">) {
+  const meta = await ctx.db.system.get("_storage", storageId);
+  if (!meta) throw new ConvexError("That image is no longer available — please choose it again.");
+  if (!COVER_TYPES.includes(meta.contentType ?? "")) {
+    throw new ConvexError("Community art must be a PNG, JPG, GIF, WebP or AVIF image.");
+  }
+  if (meta.size > COVER_MAX_BYTES) throw new ConvexError("Community art must be 5 MB or smaller.");
+}
 
 const permissionArg = v.union(
   v.literal("viewChannels"), v.literal("sendMessages"), v.literal("attachFiles"),
@@ -245,10 +265,31 @@ export const updateSettings = mutation({
     if (patch.tags !== undefined) clean.tags = patch.tags.slice(0, 6);
     if (patch.category !== undefined) clean.category = patch.category;
     if (patch.slowModeSeconds !== undefined) clean.slowModeSeconds = Math.max(0, Math.min(300, patch.slowModeSeconds));
-    if (patch.iconStorageId !== undefined) clean.iconStorageId = patch.iconStorageId;
-    if (patch.bannerStorageId !== undefined) clean.bannerStorageId = patch.bannerStorageId;
-    if (patch.clearIcon) clean.iconStorageId = undefined;
+    // Cover art: the uploaded object is validated server-side before it is
+    // referenced, and the blob it replaces (or the one being cleared) is dropped
+    // so old covers never accumulate in file storage.
+    const previous = await ctx.db.get(serverId);
+    const replaced: Id<"_storage">[] = [];
+    if (patch.iconStorageId !== undefined) {
+      await assertUsableCover(ctx, patch.iconStorageId);
+      clean.iconStorageId = patch.iconStorageId;
+      if (previous?.iconStorageId) replaced.push(previous.iconStorageId);
+    }
+    if (patch.bannerStorageId !== undefined) {
+      await assertUsableCover(ctx, patch.bannerStorageId);
+      clean.bannerStorageId = patch.bannerStorageId;
+      if (previous?.bannerStorageId) replaced.push(previous.bannerStorageId);
+    }
+    if (patch.clearIcon) {
+      clean.iconStorageId = undefined;
+      if (previous?.iconStorageId) replaced.push(previous.iconStorageId);
+    }
     await ctx.db.patch(serverId, clean);
+    for (const blob of replaced) {
+      // Re-selecting the same image (or clearing what is already clear) is a no-op.
+      if (blob === patch.iconStorageId || blob === patch.bannerStorageId) continue;
+      await deleteStoredFile(ctx, blob);
+    }
     await audit(ctx, "community.update", userId, `Updated community settings`, "community", serverId);
   },
 });

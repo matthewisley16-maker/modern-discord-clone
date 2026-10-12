@@ -97,7 +97,7 @@ export const syntheticAudit = query({
  * those, which would abort the whole transaction and stall the purge. A missing
  * object is exactly the state we want, so it must not be fatal.
  */
-async function deleteStoredFile(ctx: MutationCtx, storageId: Id<"_storage">) {
+export async function deleteStoredFile(ctx: MutationCtx, storageId: Id<"_storage">) {
   try {
     await ctx.storage.delete(storageId);
   } catch {

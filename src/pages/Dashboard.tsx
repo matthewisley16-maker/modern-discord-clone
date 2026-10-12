@@ -1296,7 +1296,7 @@ export default function Dashboard() {
                     </div>
                   }
                 >
-                  <DmView conversationId={conversationId} myUserId={me?.userId ?? ""} onOpenProfile={setProfileUserId} onStartCall={startDmCall} highlightMessageId={highlightMessageId} onHighlightHandled={() => setHighlightMessageId(null)} />
+                  <DmView conversationId={conversationId} myUserId={me?.userId ?? ""} isPlatformAdmin={Boolean(me?.isAdmin)} onOpenProfile={setProfileUserId} onStartCall={startDmCall} highlightMessageId={highlightMessageId} onHighlightHandled={() => setHighlightMessageId(null)} />
                 </FeatureBoundary>
               ) : conversationId ? (
                 <div className="fc-scroll-view">

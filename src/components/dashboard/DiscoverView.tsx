@@ -3,11 +3,85 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toSafeArray } from "@/lib/collection";
+import { communityCoverUrl, communityInitial } from "@/lib/community-cover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, SectionHeader } from "./ui";
 import { toast } from "sonner";
 import { Compass, Hash, Plus, Search, Users } from "lucide-react";
+
+type DiscoveredCommunity = {
+  serverId: string;
+  name: string;
+  description: string;
+  iconUrl?: string | null;
+  memberCount: number;
+  tags: string[];
+  category: string;
+};
+
+/**
+ * One discovery card.
+ *
+ * The cover is the community's OWN uploaded art (`iconUrl`, derived server-side
+ * from `servers.iconStorageId`) shown with `object-cover` so it is cropped, never
+ * stretched. With no cover — or if the image fails to load — the original
+ * gradient placeholder with the community's initial is shown instead, so the card
+ * never collapses or shows a broken image.
+ */
+function CommunityCard({
+  community,
+  joined,
+  onOpen,
+  onJoin,
+}: {
+  community: DiscoveredCommunity;
+  joined: boolean;
+  onOpen: () => void;
+  onJoin: () => Promise<void>;
+}) {
+  const [failed, setFailed] = useState(false);
+  const cover = communityCoverUrl({ iconUrl: community.iconUrl, failed });
+  const tags = toSafeArray<string>(community.tags);
+  return (
+    <article className="fc-community-card">
+      <div className="fc-community-cover">
+        {cover ? (
+          <img
+            src={cover}
+            alt={`${community.name} cover`}
+            loading="lazy"
+            decoding="async"
+            /* A replaced cover is a NEW storage object with a new URL, so this
+               only ever fires for a deleted/unreachable file. */
+            onError={() => setFailed(true)}
+          />
+        ) : (
+          <span className="fc-community-cover-fallback" aria-hidden>
+            {communityInitial(community.name)}
+          </span>
+        )}
+      </div>
+      <div className="fc-community-card-head">
+        <div className="min-w-0">
+          <h3>{community.name}</h3>
+          <p className="fc-muted"><Users size={12} /> {community.memberCount} members</p>
+        </div>
+      </div>
+      <p className="fc-community-desc">{community.description || "No description yet."}</p>
+      {tags.length > 0 && (
+        <div className="fc-tag-row">{tags.map((t) => <span key={t} className="fc-tag">{t}</span>)}</div>
+      )}
+      <div className="fc-community-card-actions">
+        {joined ? (
+          <Button size="sm" variant="outline" onClick={onOpen}>Open</Button>
+        ) : (
+          <Button size="sm" onClick={onJoin}>Join</Button>
+        )}
+      </div>
+    </article>
+  );
+}
 
 export default function DiscoverView({
   onOpenCommunity,
@@ -67,29 +141,16 @@ export default function DiscoverView({
         )}
         <div className="fc-community-grid">
           {resultList.map((c) => (
-            <article key={c.serverId} className="fc-community-card">
-              <div className="fc-community-card-head">
-                <span className="fc-community-icon" style={{ background: "linear-gradient(135deg,#7c5cf6,#4c1d95)" }}>{c.name.slice(0, 1).toUpperCase()}</span>
-                <div className="min-w-0">
-                  <h3>{c.name}</h3>
-                  <p className="fc-muted"><Users size={12} /> {c.memberCount} members</p>
-                </div>
-              </div>
-              <p className="fc-community-desc">{c.description || "No description yet."}</p>
-              {toSafeArray<string>(c.tags).length > 0 && (
-                <div className="fc-tag-row">{toSafeArray<string>(c.tags).map((t) => <span key={t} className="fc-tag">{t}</span>)}</div>
-              )}
-              <div className="fc-community-card-actions">
-                {joinedIds.has(c.serverId) ? (
-                  <Button size="sm" variant="outline" onClick={() => onOpenCommunity(c.serverId)}>Open</Button>
-                ) : (
-                  <Button size="sm" onClick={async () => {
-                    try { await join({ serverId: c.serverId as Id<"servers"> }); toast.success(`Joined ${c.name}`); onOpenCommunity(c.serverId); }
-                    catch (e) { toast.error(e instanceof Error ? e.message : "Could not join."); }
-                  }}>Join</Button>
-                )}
-              </div>
-            </article>
+            <CommunityCard
+              key={c.serverId}
+              community={c as DiscoveredCommunity}
+              joined={joinedIds.has(c.serverId)}
+              onOpen={() => onOpenCommunity(c.serverId)}
+              onJoin={async () => {
+                try { await join({ serverId: c.serverId as Id<"servers"> }); toast.success(`Joined ${c.name}`); onOpenCommunity(c.serverId); }
+                catch (e) { toast.error(e instanceof Error ? e.message : "Could not join."); }
+              }}
+            />
           ))}
         </div>
       </section>

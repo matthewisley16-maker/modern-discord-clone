@@ -92,6 +92,8 @@ type PendingAction =
 
 /** One row of `api.adminMessages.listMineDeletedMessages` (type taken from the query itself). */
 type DeletedMessageRow = FunctionReturnType<typeof api.adminMessages.listMineDeletedMessages>["page"][number];
+/** The same row shape, returned by the moderation list. */
+type HiddenMessageRow = FunctionReturnType<typeof api.adminMessages.listMineHiddenMessages>["page"][number];
 
 export default function AdminPanel() {
   const navigate = useNavigate();
@@ -120,6 +122,10 @@ export default function AdminPanel() {
   const [deletedQuery, setDeletedQuery] = useState("");
   const [deletedSearch, setDeletedSearch] = useState("");
   const [pendingPurge, setPendingPurge] = useState<DeletedMessageRow | null>(null);
+  // Moderation list: messages I hid (any sender) that can still be deleted for everyone.
+  const [moderationQuery, setModerationQuery] = useState("");
+  const [moderationSearch, setModerationSearch] = useState("");
+  const [pendingModerate, setPendingModerate] = useState<HiddenMessageRow | null>(null);
   const users = useQuery(
     api.admin.listUsers,
     tab === "users"
@@ -134,6 +140,15 @@ export default function AdminPanel() {
   const deletedMessages = usePaginatedQuery(
     api.adminMessages.listMineDeletedMessages,
     tab === "deleted" ? { search: deletedSearch.trim() || undefined } : "skip",
+    { initialNumItems: 20 },
+  );
+  useEffect(() => {
+    const timer = setTimeout(() => setModerationSearch(moderationQuery), 300);
+    return () => clearTimeout(timer);
+  }, [moderationQuery]);
+  const hiddenMessages = usePaginatedQuery(
+    api.adminMessages.listMineHiddenMessages,
+    tab === "moderation" ? { search: moderationSearch.trim() || undefined } : "skip",
     { initialNumItems: 20 },
   );
   const communities = useQuery(api.admin.listCommunities, tab === "communities" ? {} : "skip");
@@ -156,6 +171,10 @@ export default function AdminPanel() {
     () => toSafeArray<DeletedMessageRow>(deletedMessages.results, { label: "My deleted messages", source: "api.adminMessages.listMineDeletedMessages" }),
     [deletedMessages.results],
   );
+  const hiddenList = useMemo(
+    () => toSafeArray<HiddenMessageRow>(hiddenMessages.results, { label: "Hidden messages", source: "api.adminMessages.listMineHiddenMessages" }),
+    [hiddenMessages.results],
+  );
 
   const setUserRole = useMutation(api.admin.setUserRole);
   const banUser = useMutation(api.admin.banUser);
@@ -167,6 +186,7 @@ export default function AdminPanel() {
   const updateCommunity = useMutation(api.admin.updateCommunity);
   const updatePlatformSettings = useMutation(api.admin.updatePlatformSettings);
   const permanentlyDeleteMine = useMutation(api.adminMessages.permanentlyDeleteMine);
+  const deleteHiddenForEveryone = useMutation(api.deletion.deleteHiddenForEveryone);
 
   const [pending, setPending] = useState<PendingAction>(null);
   const [reason, setReason] = useState("");
@@ -340,6 +360,7 @@ export default function AdminPanel() {
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="communities">Communities</TabsTrigger>
             <TabsTrigger value="deleted">My Deleted Messages</TabsTrigger>
+            <TabsTrigger value="moderation">Hidden Messages</TabsTrigger>
             <TabsTrigger value="audit">Audit Log</TabsTrigger>
             <TabsTrigger value="settings">Platform Settings</TabsTrigger>
           </TabsList>
@@ -645,6 +666,109 @@ export default function AdminPanel() {
             </Card>
           </TabsContent>
 
+          {/* ---------------- Hidden messages (moderation) ---------------- */}
+          <TabsContent value="moderation" className="mt-4">
+            <Card className="border-white/10 bg-card/40">
+              <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle className="text-base">Messages you hid — moderation</CardTitle>
+                  <CardDescription>
+                    Every retained message you deleted for yourself, whoever wrote it. Delete one for everyone here
+                    without restoring it to your own history first.
+                  </CardDescription>
+                </div>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={moderationQuery}
+                    onChange={(e) => setModerationQuery(e.target.value)}
+                    placeholder="Search text, conversation, file"
+                    className="w-full pl-8 sm:w-64"
+                  />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="rounded-lg border border-sky-400/25 bg-sky-400/[0.06] p-3 text-xs text-muted-foreground">
+                  This list only contains messages <span className="text-sky-200">you</span> hid, so it never becomes a
+                  window into other people&apos;s private conversations. Deleting for everyone removes the content and
+                  its attachments for all participants — it cannot be restored, and a message already deleted for
+                  everyone is not listed.
+                </p>
+
+                {hiddenMessages.status === "LoadingFirstPage" && (
+                  <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+                )}
+
+                {hiddenMessages.status === "Exhausted" && hiddenList.length === 0 && (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground">
+                      {moderationSearch.trim() ? "No hidden messages match your search." : "Nothing hidden right now."}
+                    </p>
+                    <p className="mt-1 text-xs">
+                      {moderationSearch.trim()
+                        ? "Try a different word, conversation or file name."
+                        : "Messages you hide with “Delete for me” show up here while their content is still retained."}
+                    </p>
+                  </div>
+                )}
+
+                {hiddenList.map((item) => (
+                  <div key={item.visibilityId} className="rounded-lg border border-white/8 bg-white/[0.02] p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="border-sky-400/40 text-sky-200">
+                        Hidden by you — retained in storage
+                      </Badge>
+                      <Badge variant="secondary">
+                        {item.conversationType === "channel"
+                          ? "Channel"
+                          : item.conversationType === "group"
+                            ? "Group DM"
+                            : "Direct message"}
+                      </Badge>
+                      <span className="truncate text-sm font-medium">{item.conversationName}</span>
+                      {item.communityName && (
+                        <span className="text-xs text-muted-foreground">in {item.communityName}</span>
+                      )}
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {new Date(item.sentAt).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm text-foreground/90">
+                      {item.body.trim() ? item.body : item.preview}
+                    </p>
+
+                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      <span>Sent by {item.senderName}{item.senderIsMe ? " (you)" : ""}</span>
+                      <span aria-hidden>·</span>
+                      <span>Deleted for you {new Date(item.hiddenAt).toLocaleString()}</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="ml-auto text-destructive"
+                        disabled={busy}
+                        onClick={() => setPendingModerate(item)}
+                      >
+                        <Trash2 className="mr-1 size-4" /> Delete for everyone
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+
+                {hiddenMessages.status === "CanLoadMore" && (
+                  <div className="flex justify-center pt-1">
+                    <Button variant="secondary" size="sm" onClick={() => hiddenMessages.loadMore(20)}>
+                      Load older hidden messages
+                    </Button>
+                  </div>
+                )}
+                {hiddenMessages.status === "LoadingMore" && (
+                  <p className="py-2 text-center text-xs text-muted-foreground">Loading…</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* ---------------- Audit log ---------------- */}
           <TabsContent value="audit" className="mt-4">
             <Card className="border-white/10 bg-card/40">
@@ -814,6 +938,51 @@ export default function AdminPanel() {
               }}
             >
               Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete-for-everyone confirmation (Hidden Messages moderation) */}
+      <Dialog open={pendingModerate !== null} onOpenChange={(open) => { if (!open) setPendingModerate(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this message for everyone?</DialogTitle>
+            <DialogDescription>
+              {pendingModerate
+                ? `“${pendingModerate.preview}” — sent by ${pendingModerate.senderName} in ${pendingModerate.conversationName}`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            The message is removed for <strong>all participants</strong>, and its attachments are deleted. This cannot
+            be undone. It stays hidden from your own view either way.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingModerate(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={async () => {
+                if (!pendingModerate) return;
+                const target = pendingModerate;
+                setBusy(true);
+                try {
+                  const result = await deleteHiddenForEveryone({ visibilityId: target.visibilityId });
+                  toast.success(
+                    result.alreadyDeleted
+                      ? "That message had already been deleted for everyone."
+                      : "Message deleted for everyone.",
+                  );
+                  setPendingModerate(null);
+                } catch (err) {
+                  toast.error(friendly(err, "Could not delete the message."));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Delete for everyone
             </Button>
           </DialogFooter>
         </DialogContent>

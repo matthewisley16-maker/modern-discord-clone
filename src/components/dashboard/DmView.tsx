@@ -42,6 +42,7 @@ function fileSize(bytes: number) {
 export default function DmView({
   conversationId,
   myUserId,
+  isPlatformAdmin,
   onOpenProfile,
   onStartCall,
   highlightMessageId,
@@ -49,6 +50,13 @@ export default function DmView({
 }: {
   conversationId: Id<"dmConversations">;
   myUserId: string;
+  /**
+   * Platform administrator (from `users.me`). This only decides whether the
+   * moderation action is OFFERED on someone else's message — `deleteDmForEveryone`
+   * re-reads the role from the users table on the server, so a client cannot
+   * grant itself the power by flipping this prop.
+   */
+  isPlatformAdmin?: boolean;
   onOpenProfile: (userId: string) => void;
   onStartCall: (media: "voice" | "video") => void;
   highlightMessageId?: string | null;
@@ -138,6 +146,9 @@ export default function DmView({
   const [editing, setEditing] = useState<{ id: Id<"dmMessages">; body: string } | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  // Delete-for-everyone always asks first, and names the message and conversation.
+  const [confirmDelete, setConfirmDelete] = useState<{ messageId: Id<"dmMessages">; author: string; body: string } | null>(null);
+  const [deletingMessage, setDeletingMessage] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -324,6 +335,29 @@ export default function DmView({
   }
 
   return (
+    <>
+    {confirmDelete && (
+      <div className="fc-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Confirm delete">
+        <div className="fc-confirm">
+          <h3>Delete for everyone?</h3>
+          <p className="fc-confirm-quote">
+            “{confirmDelete.body.trim() ? confirmDelete.body.slice(0, 140) : "(attachment only)"}” — sent by <strong>{confirmDelete.author}</strong> in <strong>{title}</strong>
+          </p>
+          <p>This removes the message for everyone in this conversation and deletes its attachments. It cannot be undone.</p>
+          <div className="fc-confirm-actions">
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={deletingMessage} onClick={async () => {
+              setDeletingMessage(true);
+              try {
+                const result = await deleteDmForEveryone({ messageId: confirmDelete.messageId });
+                toast.success(result.alreadyDeleted ? "That message was already deleted for everyone." : "Message deleted for everyone.");
+              } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); }
+              finally { setDeletingMessage(false); setConfirmDelete(null); }
+            }}>{deletingMessage ? "Deleting…" : "Delete for everyone"}</Button>
+          </div>
+        </div>
+      </div>
+    )}
     <div
       className="fc-conversation"
       onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -577,14 +611,19 @@ export default function DmView({
                     {mine && <button onClick={() => { setEditing({ id: m._id, body: m.body }); setDraft(m.body); setReplyTo(null); setOpenMenu(null); }}><Pencil size={13} /> Edit</button>}
                     {/* Delete for me only hides the message for this user. */}
                     <button onClick={async () => { try { await deleteDmForMe({ messageId: m._id }); toast.success("Message hidden for you only."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setOpenMenu(null); }}><Trash2 size={13} /> Delete for me</button>
-                    {mine && <button className="danger" onClick={async () => { try { await deleteDmForEveryone({ messageId: m._id }); toast.success("Message deleted for everyone."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setOpenMenu(null); }}><Trash2 size={13} /> Delete for everyone</button>}
+                    {/* The author, or a platform administrator moderating anyone's message. */}
+                    {(mine || isPlatformAdmin) && (
+                      <button className="danger" onClick={() => { setConfirmDelete({ messageId: m._id, author: m.author, body: m.body }); setOpenMenu(null); }}>
+                        <Trash2 size={13} /> Delete for everyone
+                      </button>
+                    )}
                     <button onClick={async () => { try { await report({ targetType: "dmMessage", targetId: m._id, category: "other", description: "Reported from DM" }); toast.success("Report sent to moderators."); } catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); } setOpenMenu(null); }}><Flag size={13} /> Report</button>
                   </div>
                 )}
               </div>
             </article>
           );
-        }), [messages, myUserId, openMenu, onOpenProfile, react, setPinned, deleteDmForMe, deleteDmForEveryone, report])}
+        }), [messages, myUserId, openMenu, onOpenProfile, react, setPinned, deleteDmForMe, deleteDmForEveryone, report, isPlatformAdmin])}
         {typingList.length > 0 && <p className="fc-typing">{typingLabel(typingList)}</p>}
       </div>
 
@@ -704,5 +743,6 @@ export default function DmView({
         </div>
       </div>
     </div>
+    </>
   );
 }

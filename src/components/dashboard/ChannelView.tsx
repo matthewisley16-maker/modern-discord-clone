@@ -94,7 +94,9 @@ export default function ChannelView({
   const attach = useMutation(api.uploads.attach);
   const requestCleanup = useMutation(api.storage.requestCleanup);
   const { play: playSound } = useMessageSound();
-  const [confirmDelete, setConfirmDelete] = useState<{ messageId: Id<"messages"> } | null>(null);
+  // Identifies the message (and its author/text) in the confirmation dialog so an
+  // administrator moderating someone else's message knows exactly what they picked.
+  const [confirmDelete, setConfirmDelete] = useState<{ messageId: Id<"messages">; author: string; body: string } | null>(null);
   const [longPressFor, setLongPressFor] = useState<string | null>(null);
   const pressTimer = useRef<number | null>(null);
 
@@ -104,6 +106,7 @@ export default function ChannelView({
   const [search, setSearch] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [deletingMessage, setDeletingMessage] = useState(false);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -239,15 +242,22 @@ export default function ChannelView({
     {confirmDelete && (
       <div className="fc-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Confirm delete">
         <div className="fc-confirm">
-          <h3>Delete message?</h3>
-          <p>Are you sure you want to delete this message for everyone? This action cannot be undone.</p>
+          <h3>Delete for everyone?</h3>
+          <p className="fc-confirm-quote">
+            “{confirmDelete.body.trim() ? confirmDelete.body.slice(0, 140) : "(attachment only)"}” — sent by <strong>{confirmDelete.author}</strong> in <strong>#{channelName}</strong>
+          </p>
+          <p>This removes the message for every member of this community and deletes its attachments. It cannot be undone.</p>
           <div className="fc-confirm-actions">
             <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={async () => {
-              try { await deleteForEveryone({ messageId: confirmDelete.messageId }); toast.success("Message deleted for everyone."); }
+            <Button variant="destructive" disabled={deletingMessage} onClick={async () => {
+              setDeletingMessage(true);
+              try {
+                const result = await deleteForEveryone({ messageId: confirmDelete.messageId });
+                toast.success(result.alreadyDeleted ? "That message was already deleted for everyone." : "Message deleted for everyone.");
+              }
               catch (e) { toast.error(e instanceof Error ? e.message : "Failed."); }
-              finally { setConfirmDelete(null); }
-            }}>Delete for everyone</Button>
+              finally { setDeletingMessage(false); setConfirmDelete(null); }
+            }}>{deletingMessage ? "Deleting…" : "Delete for everyone"}</Button>
           </div>
         </div>
       </div>
@@ -372,7 +382,7 @@ export default function ChannelView({
                     </button>
                     {/* Delete for everyone only appears when permitted. */}
                     {(mine || canModerate) && (
-                      <button className="danger" onClick={() => { setConfirmDelete({ messageId: m._id }); setMenuFor(null); }}>
+                      <button className="danger" onClick={() => { setConfirmDelete({ messageId: m._id, author: m.author, body: m.body }); setMenuFor(null); }}>
                         <Trash2 size={13} /> Delete for everyone
                       </button>
                     )}

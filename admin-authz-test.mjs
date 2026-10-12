@@ -232,6 +232,100 @@ await expectTrue("duplicate account cannot demote the real owner", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 8b — global administrator message moderation.
+// A promoted Admin (A) must be able to delete ANOTHER user's message for
+// everyone in a community channel, in a DM, and from the retained "hidden by
+// me" list — while a normal member (B) and a Moderator (E) cannot.
+// ---------------------------------------------------------------------------
+const isRefused = async (fn) => {
+  try { await fn(); return false; } catch { return true; }
+};
+
+await expectTrue("a normal user cannot list retained hidden messages", () =>
+  isRefused(() => B.client.query(api.adminMessages.listMineHiddenMessages, { paginationOpts: { numItems: 5, cursor: null } })));
+await expectTrue("a Moderator cannot list another user's retained deleted messages", () =>
+  isRefused(() => E.client.query(api.adminMessages.listMineDeletedMessages, { paginationOpts: { numItems: 5, cursor: null } })));
+
+const modServerId = await A.client.mutation(api.communities.create, { name: `Authz Mod ${stamp}`, description: "moderation", isPublic: false });
+const modInvite = (await A.client.query(api.communities.details, { serverId: modServerId })).inviteCode;
+await expectOk("B joins the moderation test community", () => B.client.mutation(api.communities.joinByCode, { code: modInvite }));
+const modChannelId = (await A.client.query(api.communities.details, { serverId: modServerId })).channels.find((c) => c.name === "general")._id;
+
+// ---- A community channel message written by someone else ----
+let bMessage = null;
+await expectOk("B sends a message", async () => {
+  bMessage = await B.client.mutation(api.chat.sendMessage, { channelId: modChannelId, body: `admin target ${stamp}` });
+});
+await expectError("a normal member still cannot delete another member's message for everyone", () =>
+  B.client.mutation(api.deletion.deleteForEveryone, { messageId: bMessage }));
+await expectTrue("the Admin can delete another user's channel message for everyone", async () => {
+  const res = await A.client.mutation(api.deletion.deleteForEveryone, { messageId: bMessage });
+  if (res.alreadyDeleted) throw new Error("reported as already deleted");
+  const forB = await B.client.query(api.chat.messages, { channelId: modChannelId });
+  const forA = await A.client.query(api.chat.messages, { channelId: modChannelId });
+  return !forB.some((m) => m._id === bMessage) && !forA.some((m) => m._id === bMessage);
+});
+await expectTrue("deleting it again is a no-op, not a second deletion", async () => {
+  const res = await A.client.mutation(api.deletion.deleteForEveryone, { messageId: bMessage });
+  return res.alreadyDeleted === true;
+});
+await expectTrue("the moderation delete is audited with the message and conversation", async () => {
+  const logs = await O.client.query(api.admin.listAuditLogs, { limit: 200 });
+  return logs.some((l) => l.action === "message.delete_admin" && l.targetId === bMessage);
+});
+
+// ---- The Admin Panel route: a message the administrator already HID ----
+let hiddenTarget = null;
+await expectOk("B sends a second message", async () => {
+  hiddenTarget = await B.client.mutation(api.chat.sendMessage, { channelId: modChannelId, body: `hidden target ${stamp}` });
+});
+await expectOk("the Admin hides it for themselves only", () => A.client.mutation(api.deletion.deleteForMe, { messageId: hiddenTarget }));
+let hiddenRow = null;
+await expectTrue("the Admin's moderation list finds the message they hid (any sender)", async () => {
+  const page = await A.client.query(api.adminMessages.listMineHiddenMessages, { paginationOpts: { numItems: 50, cursor: null } });
+  hiddenRow = page.page.find((r) => r.messageId === hiddenTarget) ?? null;
+  return Boolean(hiddenRow && hiddenRow.senderIsMe === false && hiddenRow.body.includes(stamp));
+});
+await expectTrue("a normal member is refused the hidden-message delete with a REAL id", async () => {
+  if (!hiddenRow) throw new Error("no row to test with");
+  return isRefused(() => B.client.mutation(api.deletion.deleteHiddenForEveryone, { visibilityId: hiddenRow.visibilityId }));
+});
+await expectTrue("a Moderator is refused the hidden-message delete with a REAL id", async () => {
+  if (!hiddenRow) throw new Error("no row to test with");
+  return isRefused(() => E.client.mutation(api.deletion.deleteHiddenForEveryone, { visibilityId: hiddenRow.visibilityId }));
+});
+await expectTrue("the Admin can globally delete a message they had hidden", async () => {
+  if (!hiddenRow) throw new Error("no row to test with");
+  const res = await A.client.mutation(api.deletion.deleteHiddenForEveryone, { visibilityId: hiddenRow.visibilityId });
+  if (res.alreadyDeleted) throw new Error("reported as already deleted");
+  const forB = await B.client.query(api.chat.messages, { channelId: modChannelId });
+  const goneFromList = (await A.client.query(api.adminMessages.listMineHiddenMessages, { paginationOpts: { numItems: 50, cursor: null } })).page
+    .some((r) => r.messageId === hiddenTarget) === false;
+  return !forB.some((m) => m._id === hiddenTarget) && goneFromList;
+});
+
+// ---- Direct messages ----
+await expectOk("A and B become friends", async () => {
+  await B.client.mutation(api.social.sendFriendRequest, { toId: A.userId });
+  const { incoming } = await A.client.query(api.social.listRequests, {});
+  const fromB = incoming.find((r) => r.userId === B.userId);
+  await A.client.mutation(api.social.respondFriendRequest, { requestId: fromB.requestId, accept: true });
+});
+await expectTrue("the Admin can delete another user's DM message for everyone", async () => {
+  const convo = await A.client.mutation(api.dms.startDirect, { userId: B.userId });
+  const message = await B.client.mutation(api.dms.sendMessage, { conversationId: convo, body: `dm target ${stamp}` });
+  await A.client.mutation(api.deletion.deleteDmForEveryone, { messageId: message });
+  const forB = (await B.client.query(api.dms.messages, { conversationId: convo })).messages;
+  return !forB.some((m) => m._id === message);
+});
+await expectOk("the author can still delete their own DM message for everyone", async () => {
+  const convo = await A.client.mutation(api.dms.startDirect, { userId: B.userId });
+  const message = await A.client.mutation(api.dms.sendMessage, { conversationId: convo, body: "mine to remove" });
+  await A.client.mutation(api.deletion.deleteDmForEveryone, { messageId: message });
+});
+try { await A.client.mutation(api.communities.deleteCommunity, { serverId: modServerId }); } catch {}
+
+// ---------------------------------------------------------------------------
 // Phase 9 — owner can demote regular admins; protected owner survives.
 // ---------------------------------------------------------------------------
 await expectOk("owner demotes the first Admin", () => O.client.mutation(api.admin.setUserRole, { userId: A.userId, role: "user" }));
