@@ -257,7 +257,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-dm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 1px 8px; padding: 7px 9px; border-radius: 8px; color: #b7b1cc; font-size: 13px; text-align: left; }
 .fc-dm:hover { background: rgba(255,255,255,.05); color: #e5e0ff; }
 .fc-dm.active { background: rgba(139,92,246,.18); color: #cfbeff; }
-.fc-dm-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Two lines: name + time, then the latest message preview. */
+.fc-dm-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.fc-dm-title-row { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.fc-dm-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-dm-time { font-style: normal; font-size: 10px; color: #7f7a95; flex-shrink: 0; }
+.fc-dm-preview { font-size: 11px; color: #8b86a3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fc-dm-flag { font-size: 10px; }
 .fc-dm-badge { min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: #8b5cf6; color: #fff; font-size: 10px; font-style: normal; font-weight: 700; display: grid; place-items: center; }
 .fc-dm-tools { display: flex; gap: 2px; padding-right: 8px; opacity: 0; }

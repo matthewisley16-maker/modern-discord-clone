@@ -423,6 +423,57 @@ orphan-safe attachments removed) and every view, search, preview and reply quote
   (phase 8b: an Admin deletes another member's channel + DM message, non-admins are refused with a
   real message id).
 
+## Admin Panel retention tabs — the "multiple paginated queries" trap
+
+Both retention tabs (`listMineDeletedMessages`, `listMineHiddenMessages`) share one indexed read,
+`paginateHidden`. It used to LOOP over `paginate` calls (to keep filling a page while rows were
+filtered out), which Convex rejects at runtime:
+
+```
+Uncaught Error: This query or mutation function ran multiple paginated queries.
+    at async paginateHidden (src/convex/adminMessages.ts)
+```
+
+The client rethrows a failed paginated query, so that error took the **whole Admin Panel** down —
+clicking the Deleted Messages tab (or Hidden Messages) looked like "the admin panel is broken".
+
+- **Fix:** one `paginate` per execution, with a bounded scan window
+  (`pageSize × SCAN_MULTIPLIER`, capped at `MAX_SCAN_ROWS`). Rows the filters reject are skipped;
+  `continueCursor` still points past everything the call examined, so nothing is skipped or
+  duplicated. Verified against the live deployment with a temporary internal diagnostic (since
+  removed): the read returns real rows (e.g. 19 retained "deleted for me" messages, `isDone: false`,
+  cursor present) instead of the error.
+- **Isolation:** each tab's subscription now lives in its own component (`MyDeletedMessagesList`,
+  `HiddenMessagesList`) inside a `FeatureBoundary`, so a failure shows a retryable error *in that
+  tab* — never a false empty list and never a dead panel. `"skip"` keeps the inactive tab
+  unsubscribed.
+- **Malformed rows** are tolerated (defensive `body`/`preview`/`attachments`/timestamp reads), and the
+  empty state only appears when the query actually answered with `Exhausted` and no rows.
+
+## Direct Messages tab — real conversations instead of a false empty state
+
+The DM pane is driven by `conversationId` (an explicit click). It starts `null`, so opening the tab —
+including on a narrow viewport where the sidebar is collapsed — showed only "Start a conversation
+with someone on Freecord" even for an account with plenty of chats (the data was always there;
+`dmConversations`/`dmMembers` rows exist in the deployment, and `bun run preflight` confirms the
+frontend and backend target the same deployment).
+
+- `selectedConversationId = conversationId ?? activeConversations[0]?.conversationId ?? null` — the
+  most recent conversation (the list is already sorted pinned-then-recent) opens automatically, so
+  the tab shows real chats immediately. Reactive: a new conversation becomes selected with no reload.
+- Three separate states in the pane: **loading** (`Loading your conversations…` while
+  `dms.listConversations` is unresolved), **archived-only** (points at the Archived section), and
+  **genuinely empty** (the only case that shows the “Start a conversation” CTA, with the Friends
+  shortcut kept as an option). The sidebar says “Loading conversations…” until the query answers and
+  only then “No conversations yet”.
+- Each row shows the conversation name (group rows include the member count), the **latest message
+  preview and its timestamp** — both already returned by `dms.listConversations`, so no extra query
+  or read — plus the unread badge, lock/pin/mute flags and the other member's live avatar. A
+  protected chat that has not been unlocked reads “🔒 Locked”, never its content.
+- The conversation list is wrapped in a `FeatureBoundary`, so a malformed row cannot blank the
+  sidebar; a failing query throws (Convex semantics) into the enclosing boundary's error + “Try
+  again”, never a bogus empty state. No extra subscriptions, polling or full-table reads were added.
+
 ## Deployment safety (read this before deploys and before debugging a black screen)
 
 The app reads and writes ONE pinned Convex deployment (`src/main.tsx` → `CONVEX_URL`).

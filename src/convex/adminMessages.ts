@@ -41,11 +41,15 @@ import {
 /** Hard cap on rows returned per page, whatever the client asks for. */
 const MAX_PAGE_ITEMS = 50;
 /**
- * Bounded number of index pages examined per request while rows are being
- * filtered out (search, other people's hides, messages deleted for everyone).
- * Without this, one search could walk the entire visibility table.
+ * Rows examined per request to fill one page. The filters below (search, other
+ * people's hides, messages deleted for everyone) can drop rows from the window,
+ * so the window is a few times the requested page size — and it is a SINGLE
+ * paginated read, because Convex allows exactly one `paginate` call per function
+ * execution ("This query or mutation function ran multiple paginated queries").
  */
-const MAX_PAGES_PER_REQUEST = 4;
+const SCAN_MULTIPLIER = 4;
+/** Hard cap on rows examined by one request, whatever the client asks for. */
+const MAX_SCAN_ROWS = 200;
 /** Attachment previews returned per retained message. */
 const MAX_ATTACHMENTS = 6;
 
@@ -256,8 +260,17 @@ async function describeHiddenMessage(
 
 /**
  * The shared indexed, paginated read behind both admin lists: newest local hide
- * first, filtered per row, with a bounded number of index pages per request so
- * one search can never walk the whole visibility table.
+ * first, filtered per row, bounded to one scan window so a search can never walk
+ * the whole visibility table.
+ *
+ * CONVEX RULE: at most ONE paginated query may run per function execution. This
+ * used to loop over several `paginate` calls (to keep filling a page while rows
+ * were filtered out), which made the query throw
+ * "This query or mutation function ran multiple paginated queries" — the whole
+ * Admin Panel then failed, because the client rethrows a failed paginated query.
+ * A single, slightly larger scan window gives the same bounded behaviour: rows
+ * the filters reject are skipped, and `continueCursor` still points past
+ * everything this call examined, so no row is ever skipped or duplicated.
  */
 async function paginateHidden(
   ctx: QueryCtx,
@@ -267,33 +280,23 @@ async function paginateHidden(
   search: string | undefined,
 ) {
   const term = search ?? "";
-  const numItems = Math.min(Math.max(paginationOpts.numItems, 1), MAX_PAGE_ITEMS);
+  const pageSize = Math.min(Math.max(paginationOpts.numItems, 1), MAX_PAGE_ITEMS);
+  const scanSize = Math.min(pageSize * SCAN_MULTIPLIER, MAX_SCAN_ROWS);
   const names: NameCache = new Map();
+
+  const result = await ctx.db
+    .query("messageVisibility")
+    .withIndex("by_user", (q) => q.eq("userId", viewerId))
+    .order("desc")
+    .paginate({ cursor: paginationOpts.cursor, numItems: scanSize });
+
   const items: RetainedDeletedMessage[] = [];
-
-  let cursor = paginationOpts.cursor;
-  let continueCursor = paginationOpts.cursor ?? "";
-  let isDone = false;
-  let pages = 0;
-
-  while (pages < MAX_PAGES_PER_REQUEST) {
-    const page = await ctx.db
-      .query("messageVisibility")
-      .withIndex("by_user", (q) => q.eq("userId", viewerId))
-      .order("desc")
-      .paginate({ cursor, numItems });
-    pages++;
-    for (const vis of page.page) {
-      const item = await describeHiddenMessage(ctx, viewerId, vis, term, names, ownSenderOnly);
-      if (item) items.push(item);
-    }
-    continueCursor = page.continueCursor;
-    isDone = page.isDone;
-    cursor = page.continueCursor;
-    if (isDone || items.length >= numItems) break;
+  for (const vis of result.page) {
+    const item = await describeHiddenMessage(ctx, viewerId, vis, term, names, ownSenderOnly);
+    if (item) items.push(item);
   }
 
-  return { page: items, continueCursor, isDone };
+  return { page: items, continueCursor: result.continueCursor, isDone: result.isDone };
 }
 
 /**

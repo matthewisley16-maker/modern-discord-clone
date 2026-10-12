@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { toast } from "sonner";
 import {
   ArrowLeft, Ban, Check, Crown, Paperclip, Search, ShieldAlert, ShieldCheck, Trash2, UserCog, Users, Clock,
@@ -65,6 +66,216 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+/**
+ * The rows of a retention list. Presentational only — it holds no query and no
+ * hooks, so it can never subscribe to anything itself; malformed values are
+ * tolerated instead of crashing the tab.
+ */
+function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMore }: {
+  mode: "mine" | "moderation";
+  rows: RetainedRow[];
+  status: RetentionStatus;
+  searching: boolean;
+  busy: boolean;
+  onDelete: (row: RetainedRow) => void;
+  onLoadMore: () => void;
+}) {
+  const mine = mode === "mine";
+  return (
+    <>
+      <p className={mine
+        ? "rounded-lg border border-amber-400/25 bg-amber-400/[0.06] p-3 text-xs text-muted-foreground"
+        : "rounded-lg border border-sky-400/25 bg-sky-400/[0.06] p-3 text-xs text-muted-foreground"}>
+        {mine ? (
+          <>
+            Every entry below is a <span className="text-amber-200">local delete only</span> — the message stays hidden
+            from your normal chat history (nothing here restores it) and its content is still in storage. Messages
+            deleted for <em>everyone</em> are not listed: their content was already removed and cannot be recovered.
+          </>
+        ) : (
+          <>
+            This list only contains messages <span className="text-sky-200">you</span> hid, so it never becomes a window
+            into other people&apos;s private conversations. Deleting for everyone removes the content and its
+            attachments for all participants — it cannot be restored, and a message already deleted for everyone is
+            not listed.
+          </>
+        )}
+      </p>
+
+      {status === "LoadingFirstPage" && (
+        <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+      )}
+
+      {status === "Exhausted" && rows.length === 0 && (
+        <div className="py-8 text-center text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">
+            {searching ? "No messages match your search." : mine ? "No deleted messages." : "Nothing hidden right now."}
+          </p>
+          <p className="mt-1 text-xs">
+            {searching
+              ? "Try a different word, conversation or file name."
+              : mine
+                ? "When you delete one of your own messages with “Delete for me”, it appears here."
+                : "Messages you hide with “Delete for me” show up here while their content is still retained."}
+          </p>
+        </div>
+      )}
+
+      {rows.map((item) => {
+        // Defensive reads: a legacy or partial row can never break the tab.
+        const body = typeof item.body === "string" ? item.body : "";
+        const preview = typeof item.preview === "string" && item.preview ? item.preview : "(no text content)";
+        const attachments = toSafeArray<RetainedRow["attachments"][number]>(item.attachments, {
+          label: "Retained attachments",
+          source: "api.adminMessages",
+        });
+        const senderName = item.senderName || "Unknown sender";
+        const conversationName = item.conversationName || "Unknown conversation";
+        const sentAt = typeof item.sentAt === "number" ? new Date(item.sentAt).toLocaleString() : "unknown time";
+        const hiddenAt = typeof item.hiddenAt === "number" ? new Date(item.hiddenAt).toLocaleString() : "unknown time";
+        return (
+          <div key={item.visibilityId} className="rounded-lg border border-white/8 bg-white/[0.02] p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className={mine ? "border-amber-400/40 text-amber-300" : "border-sky-400/40 text-sky-200"}>
+                {mine ? "Deleted for me — retained in storage" : "Hidden by you — retained in storage"}
+              </Badge>
+              <Badge variant="secondary">
+                {item.conversationType === "channel"
+                  ? "Channel"
+                  : item.conversationType === "group"
+                    ? "Group DM"
+                    : "Direct message"}
+              </Badge>
+              <span className="truncate text-sm font-medium">{conversationName}</span>
+              {item.communityName && <span className="text-xs text-muted-foreground">in {item.communityName}</span>}
+              <span className="ml-auto text-xs text-muted-foreground">{sentAt}</span>
+            </div>
+
+            <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm text-foreground/90">
+              {body.trim() ? body : preview}
+            </p>
+
+            {(attachments.length > 0 || item.gifUrl) && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {attachments.map((file, index) =>
+                  file.isImage && file.url ? (
+                    <img
+                      key={`${item.visibilityId}-att-${index}`}
+                      src={file.url}
+                      alt={file.name}
+                      className="h-20 w-20 rounded-md border border-white/10 object-cover"
+                    />
+                  ) : (
+                    <span
+                      key={`${item.visibilityId}-att-${index}`}
+                      className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-muted-foreground"
+                    >
+                      <Paperclip className="size-3" /> {file.name}
+                    </span>
+                  ),
+                )}
+                {item.gifUrl && (
+                  <img src={item.gifUrl} alt="GIF" className="h-20 rounded-md border border-white/10 object-cover" />
+                )}
+              </div>
+            )}
+
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              <span>Sent by {senderName}{mine ? "" : item.senderIsMe ? " (you)" : ""}</span>
+              <span aria-hidden>·</span>
+              <span>Deleted for you {hiddenAt}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto text-destructive"
+                disabled={busy}
+                onClick={() => onDelete(item)}
+              >
+                <Trash2 className="mr-1 size-4" /> {mine ? "Permanently Delete" : "Delete for everyone"}
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+
+      {status === "CanLoadMore" && (
+        <div className="flex justify-center pt-1">
+          <Button variant="secondary" size="sm" onClick={onLoadMore}>
+            Load older messages
+          </Button>
+        </div>
+      )}
+      {status === "LoadingMore" && <p className="py-2 text-center text-xs text-muted-foreground">Loading…</p>}
+    </>
+  );
+}
+
+/**
+ * Deleted Messages / Hidden Messages list bodies.
+ *
+ * Each one owns its OWN paginated subscription and is rendered inside a
+ * `FeatureBoundary`. Convex hooks THROW on failure, so keeping the subscription
+ * in this child (instead of in the panel body) means a failing retention query
+ * shows a retryable error inside its own tab instead of taking the whole Admin
+ * Panel down. `"skip"` keeps the tab the admin is not looking at unsubscribed.
+ */
+function MyDeletedMessagesList({ active, search, busy, onDelete }: {
+  active: boolean;
+  search: string;
+  busy: boolean;
+  onDelete: (row: RetainedRow) => void;
+}) {
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.adminMessages.listMineDeletedMessages,
+    active ? { search: search.trim() || undefined } : "skip",
+    { initialNumItems: 20 },
+  );
+  const rows = useMemo(
+    () => toSafeArray<RetainedRow>(results, { label: "My deleted messages", source: "api.adminMessages.listMineDeletedMessages" }),
+    [results],
+  );
+  return (
+    <RetainedRows
+      mode="mine"
+      rows={rows}
+      status={status}
+      searching={Boolean(search.trim())}
+      busy={busy}
+      onDelete={onDelete}
+      onLoadMore={() => loadMore(20)}
+    />
+  );
+}
+
+/** The moderation list: every retained message the administrator hid. */
+function HiddenMessagesList({ active, search, busy, onDelete }: {
+  active: boolean;
+  search: string;
+  busy: boolean;
+  onDelete: (row: RetainedRow) => void;
+}) {
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.adminMessages.listMineHiddenMessages,
+    active ? { search: search.trim() || undefined } : "skip",
+    { initialNumItems: 20 },
+  );
+  const rows = useMemo(
+    () => toSafeArray<RetainedRow>(results, { label: "Hidden messages", source: "api.adminMessages.listMineHiddenMessages" }),
+    [results],
+  );
+  return (
+    <RetainedRows
+      mode="moderation"
+      rows={rows}
+      status={status}
+      searching={Boolean(search.trim())}
+      busy={busy}
+      onDelete={onDelete}
+      onLoadMore={() => loadMore(20)}
+    />
+  );
+}
+
 type AdminUser = {
   userId: string;
   username: string;
@@ -90,10 +301,15 @@ type PendingAction =
   | { type: "delete"; user: AdminUser }
   | null;
 
-/** One row of `api.adminMessages.listMineDeletedMessages` (type taken from the query itself). */
-type DeletedMessageRow = FunctionReturnType<typeof api.adminMessages.listMineDeletedMessages>["page"][number];
-/** The same row shape, returned by the moderation list. */
-type HiddenMessageRow = FunctionReturnType<typeof api.adminMessages.listMineHiddenMessages>["page"][number];
+/**
+ * One retained-message row. Both retention queries
+ * (`listMineDeletedMessages`, `listMineHiddenMessages`) return the same shape,
+ * so the two tabs share one row renderer.
+ */
+type RetainedRow = FunctionReturnType<typeof api.adminMessages.listMineDeletedMessages>["page"][number];
+
+/** The status `usePaginatedQuery` reports for its current page. */
+type RetentionStatus = "LoadingFirstPage" | "LoadingMore" | "CanLoadMore" | "Exhausted";
 
 export default function AdminPanel() {
   const navigate = useNavigate();
@@ -121,11 +337,11 @@ export default function AdminPanel() {
   // "My deleted messages": only the ACTIVE tab is subscribed (see the note above).
   const [deletedQuery, setDeletedQuery] = useState("");
   const [deletedSearch, setDeletedSearch] = useState("");
-  const [pendingPurge, setPendingPurge] = useState<DeletedMessageRow | null>(null);
+  const [pendingPurge, setPendingPurge] = useState<RetainedRow | null>(null);
   // Moderation list: messages I hid (any sender) that can still be deleted for everyone.
   const [moderationQuery, setModerationQuery] = useState("");
   const [moderationSearch, setModerationSearch] = useState("");
-  const [pendingModerate, setPendingModerate] = useState<HiddenMessageRow | null>(null);
+  const [pendingModerate, setPendingModerate] = useState<RetainedRow | null>(null);
   const users = useQuery(
     api.admin.listUsers,
     tab === "users"
@@ -137,20 +353,10 @@ export default function AdminPanel() {
     const timer = setTimeout(() => setDeletedSearch(deletedQuery), 300);
     return () => clearTimeout(timer);
   }, [deletedQuery]);
-  const deletedMessages = usePaginatedQuery(
-    api.adminMessages.listMineDeletedMessages,
-    tab === "deleted" ? { search: deletedSearch.trim() || undefined } : "skip",
-    { initialNumItems: 20 },
-  );
   useEffect(() => {
     const timer = setTimeout(() => setModerationSearch(moderationQuery), 300);
     return () => clearTimeout(timer);
   }, [moderationQuery]);
-  const hiddenMessages = usePaginatedQuery(
-    api.adminMessages.listMineHiddenMessages,
-    tab === "moderation" ? { search: moderationSearch.trim() || undefined } : "skip",
-    { initialNumItems: 20 },
-  );
   const communities = useQuery(api.admin.listCommunities, tab === "communities" ? {} : "skip");
   const auditLogs = useQuery(api.admin.listAuditLogs, tab === "audit" ? { limit: 150 } : "skip");
   const settings = useQuery(api.admin.getPlatformSettings, tab === "settings" ? {} : "skip");
@@ -167,14 +373,6 @@ export default function AdminPanel() {
   const userList = useMemo(() => toSafeArray<NonNullable<typeof users>[number]>(users, { label: "Admin users", source: "api.admin.listUsers" }), [users]);
   const communityList = useMemo(() => toSafeArray<NonNullable<typeof communities>[number]>(communities, { label: "Admin communities", source: "api.admin.listCommunities" }), [communities]);
   const auditLogList = useMemo(() => toSafeArray<NonNullable<typeof auditLogs>[number]>(auditLogs, { label: "Admin audit log", source: "api.admin.listAuditLogs" }), [auditLogs]);
-  const deletedList = useMemo(
-    () => toSafeArray<DeletedMessageRow>(deletedMessages.results, { label: "My deleted messages", source: "api.adminMessages.listMineDeletedMessages" }),
-    [deletedMessages.results],
-  );
-  const hiddenList = useMemo(
-    () => toSafeArray<HiddenMessageRow>(hiddenMessages.results, { label: "Hidden messages", source: "api.adminMessages.listMineHiddenMessages" }),
-    [hiddenMessages.results],
-  );
 
   const setUserRole = useMutation(api.admin.setUserRole);
   const banUser = useMutation(api.admin.banUser);
@@ -556,112 +754,15 @@ export default function AdminPanel() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="rounded-lg border border-amber-400/25 bg-amber-400/[0.06] p-3 text-xs text-muted-foreground">
-                  Every entry below is a <span className="text-amber-200">local delete only</span> — the message stays
-                  hidden from your normal chat history (nothing here restores it) and its content is still in storage.
-                  Messages deleted for <em>everyone</em> are not listed: their content was already removed and cannot
-                  be recovered.
-                </p>
-
-                {deletedMessages.status === "LoadingFirstPage" && (
-                  <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
-                )}
-
-                {deletedMessages.status === "Exhausted" && deletedList.length === 0 && (
-                  <div className="py-8 text-center text-sm text-muted-foreground">
-                    <p className="font-medium text-foreground">
-                      {deletedSearch.trim() ? "No deleted messages match your search." : "No deleted messages."}
-                    </p>
-                    <p className="mt-1 text-xs">
-                      {deletedSearch.trim()
-                        ? "Try a different word, conversation or file name."
-                        : "When you delete one of your own messages with “Delete for me”, it appears here."}
-                    </p>
-                  </div>
-                )}
-
-                {deletedList.map((item) => (
-                  <div key={item.visibilityId} className="rounded-lg border border-white/8 bg-white/[0.02] p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="border-amber-400/40 text-amber-300">
-                        Deleted for me — retained in storage
-                      </Badge>
-                      <Badge variant="secondary">
-                        {item.conversationType === "channel"
-                          ? "Channel"
-                          : item.conversationType === "group"
-                            ? "Group DM"
-                            : "Direct message"}
-                      </Badge>
-                      <span className="truncate text-sm font-medium">{item.conversationName}</span>
-                      {item.communityName && (
-                        <span className="text-xs text-muted-foreground">in {item.communityName}</span>
-                      )}
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {new Date(item.sentAt).toLocaleString()}
-                      </span>
-                    </div>
-
-                    <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm text-foreground/90">
-                      {item.body.trim() ? item.body : item.preview}
-                    </p>
-
-                    {(item.attachments.length > 0 || item.gifUrl) && (
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {item.attachments.map((file, index) =>
-                          file.isImage && file.url ? (
-                            <img
-                              key={`${item.visibilityId}-att-${index}`}
-                              src={file.url}
-                              alt={file.name}
-                              className="h-20 w-20 rounded-md border border-white/10 object-cover"
-                            />
-                          ) : (
-                            <span
-                              key={`${item.visibilityId}-att-${index}`}
-                              className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-muted-foreground"
-                            >
-                              <Paperclip className="size-3" /> {file.name}
-                            </span>
-                          ),
-                        )}
-                        {item.gifUrl && (
-                          <img
-                            src={item.gifUrl}
-                            alt="GIF"
-                            className="h-20 rounded-md border border-white/10 object-cover"
-                          />
-                        )}
-                      </div>
-                    )}
-
-                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                      <span>Sent by {item.senderName}</span>
-                      <span aria-hidden>·</span>
-                      <span>Deleted for you {new Date(item.hiddenAt).toLocaleString()}</span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="ml-auto text-destructive"
-                        disabled={busy}
-                        onClick={() => setPendingPurge(item)}
-                      >
-                        <Trash2 className="mr-1 size-4" /> Permanently Delete
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-
-                {deletedMessages.status === "CanLoadMore" && (
-                  <div className="flex justify-center pt-1">
-                    <Button variant="secondary" size="sm" onClick={() => deletedMessages.loadMore(20)}>
-                      Load older deleted messages
-                    </Button>
-                  </div>
-                )}
-                {deletedMessages.status === "LoadingMore" && (
-                  <p className="py-2 text-center text-xs text-muted-foreground">Loading…</p>
-                )}
+                {/* Its own boundary: a failing retention query shows a retryable error in THIS tab. */}
+                <FeatureBoundary label="Deleted messages" block>
+                  <MyDeletedMessagesList
+                    active={tab === "deleted"}
+                    search={deletedSearch}
+                    busy={busy}
+                    onDelete={setPendingPurge}
+                  />
+                </FeatureBoundary>
               </CardContent>
             </Card>
           </TabsContent>
@@ -688,83 +789,15 @@ export default function AdminPanel() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="rounded-lg border border-sky-400/25 bg-sky-400/[0.06] p-3 text-xs text-muted-foreground">
-                  This list only contains messages <span className="text-sky-200">you</span> hid, so it never becomes a
-                  window into other people&apos;s private conversations. Deleting for everyone removes the content and
-                  its attachments for all participants — it cannot be restored, and a message already deleted for
-                  everyone is not listed.
-                </p>
-
-                {hiddenMessages.status === "LoadingFirstPage" && (
-                  <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
-                )}
-
-                {hiddenMessages.status === "Exhausted" && hiddenList.length === 0 && (
-                  <div className="py-8 text-center text-sm text-muted-foreground">
-                    <p className="font-medium text-foreground">
-                      {moderationSearch.trim() ? "No hidden messages match your search." : "Nothing hidden right now."}
-                    </p>
-                    <p className="mt-1 text-xs">
-                      {moderationSearch.trim()
-                        ? "Try a different word, conversation or file name."
-                        : "Messages you hide with “Delete for me” show up here while their content is still retained."}
-                    </p>
-                  </div>
-                )}
-
-                {hiddenList.map((item) => (
-                  <div key={item.visibilityId} className="rounded-lg border border-white/8 bg-white/[0.02] p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="border-sky-400/40 text-sky-200">
-                        Hidden by you — retained in storage
-                      </Badge>
-                      <Badge variant="secondary">
-                        {item.conversationType === "channel"
-                          ? "Channel"
-                          : item.conversationType === "group"
-                            ? "Group DM"
-                            : "Direct message"}
-                      </Badge>
-                      <span className="truncate text-sm font-medium">{item.conversationName}</span>
-                      {item.communityName && (
-                        <span className="text-xs text-muted-foreground">in {item.communityName}</span>
-                      )}
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {new Date(item.sentAt).toLocaleString()}
-                      </span>
-                    </div>
-
-                    <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm text-foreground/90">
-                      {item.body.trim() ? item.body : item.preview}
-                    </p>
-
-                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                      <span>Sent by {item.senderName}{item.senderIsMe ? " (you)" : ""}</span>
-                      <span aria-hidden>·</span>
-                      <span>Deleted for you {new Date(item.hiddenAt).toLocaleString()}</span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="ml-auto text-destructive"
-                        disabled={busy}
-                        onClick={() => setPendingModerate(item)}
-                      >
-                        <Trash2 className="mr-1 size-4" /> Delete for everyone
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-
-                {hiddenMessages.status === "CanLoadMore" && (
-                  <div className="flex justify-center pt-1">
-                    <Button variant="secondary" size="sm" onClick={() => hiddenMessages.loadMore(20)}>
-                      Load older hidden messages
-                    </Button>
-                  </div>
-                )}
-                {hiddenMessages.status === "LoadingMore" && (
-                  <p className="py-2 text-center text-xs text-muted-foreground">Loading…</p>
-                )}
+                {/* Its own boundary: a failing moderation query shows a retryable error in THIS tab. */}
+                <FeatureBoundary label="Hidden messages" block>
+                  <HiddenMessagesList
+                    active={tab === "moderation"}
+                    search={moderationSearch}
+                    busy={busy}
+                    onDelete={setPendingModerate}
+                  />
+                </FeatureBoundary>
               </CardContent>
             </Card>
           </TabsContent>

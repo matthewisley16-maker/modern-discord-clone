@@ -30,8 +30,49 @@ import { trackOp } from "@/lib/usage-monitor";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
 import {
-  AtSign, Bell, BellOff, Compass, Hash, Home, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, Users, Volume2, X,
+  AtSign, Bell, BellOff, Compass, Hash, Home, Loader2, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, Users, Volume2, X,
 } from "lucide-react";
+
+/**
+ * The text of one Conversations-list row: the conversation name, the latest
+ * message preview, and when that message arrived.
+ *
+ * `dms.listConversations` already returns `lastMessage` / `lastMessageAt` for
+ * every conversation, so this adds no query and no extra read. The preview is
+ * empty while a protected chat has not been unlocked (a locked chat must never
+ * leak its content in the list) and for a conversation with no messages yet.
+ * Shared by the active and archived lists, so both read the same way.
+ */
+function DmRowLabel({
+  convo,
+}: {
+  convo: {
+    name: string;
+    type?: string;
+    memberCount?: number;
+    lastMessage?: string;
+    lastMessageAt?: number;
+    locked?: boolean;
+    unlocked?: boolean;
+  };
+}) {
+  const title = convo.type === "group" ? `${convo.name} · ${convo.memberCount ?? 0}` : convo.name;
+  const lastMessage = typeof convo.lastMessage === "string" ? convo.lastMessage.trim() : "";
+  const preview = convo.locked && !convo.unlocked ? "🔒 Locked" : lastMessage || "No messages yet";
+  const when =
+    typeof convo.lastMessageAt === "number" && convo.lastMessageAt > 0
+      ? new Date(convo.lastMessageAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+      : "";
+  return (
+    <span className="fc-dm-name">
+      <span className="fc-dm-title-row">
+        <span className="fc-dm-title">{title}</span>
+        {when && <em className="fc-dm-time">{when}</em>}
+      </span>
+      <small className="fc-dm-preview">{preview}</small>
+    </span>
+  );
+}
 
 /**
  * The icon for one Conversations-list row.
@@ -205,6 +246,19 @@ export default function Dashboard() {
   const [communityId, setCommunityId] = useState<Id<"servers"> | null>(null);
   const [channelId, setChannelId] = useState<Id<"channels"> | null>(null);
   const [conversationId, setConversationId] = useState<Id<"dmConversations"> | null>(null);
+  /**
+   * Which conversation the DM pane shows.
+   *
+   * `conversationId` holds the user's explicit choice; when they have not picked
+   * one yet (first visit, reload, or arriving from the rail) the most recent
+   * conversation opens automatically. Without this, opening the Direct Messages
+   * tab showed a "Start a conversation" pane even though the sidebar listed real
+   * chats — which reads as "you have no conversations". The list is loaded from
+   * `dms.listConversations` (already sorted by pinned then most recent), so this
+   * stays reactive: a new conversation appears selected without a reload.
+   */
+  const selectedConversationId: Id<"dmConversations"> | null =
+    conversationId ?? (section === "dms" ? activeConversations[0]?.conversationId ?? null : null);
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [fullProfileUserId, setFullProfileUserId] = useState<string | null>(null);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
@@ -1095,13 +1149,20 @@ export default function Dashboard() {
               <button aria-label="New message" title="New message" onClick={() => setNewMessageOpen(true)}><Plus size={13} /></button>
             </div>
             <div className="fc-sidebar-scroll fc-dm-list" ref={dmListRef}>
+            {/* Loading, empty and error are separate: nothing claims "no conversations"
+                until the query has actually answered, and a failing row render is
+                contained here instead of blanking the whole sidebar. */}
+            {conversations === undefined && (
+              <p className="fc-sidebar-empty"><Loader2 className="mr-1 inline size-3 animate-spin" /> Loading conversations…</p>
+            )}
             {conversations && conversationList.length === 0 && (
               <p className="fc-sidebar-empty">No conversations yet. Start one with the ＋ button.</p>
             )}
+            <FeatureBoundary label="Your conversations">
             {activeConversations.map((c) => (
               <div key={c.conversationId} className="fc-dm-row">
                 <button
-                  className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
+                  className={`fc-dm ${selectedConversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                   onClick={() => openConversation(c.conversationId)}
                 >
                   {/* Direct chat: the other person's real, live presence — the same
@@ -1109,7 +1170,7 @@ export default function Dashboard() {
                       popouts (invisible users arrive here as "offline").
                       Group: the group's own photo, or the default group icon. */}
                   <ConversationIcon convo={c} />
-                  <span className="fc-dm-name">{c.type === "group" ? `${c.name} · ${c.memberCount}` : c.name}</span>
+                  <DmRowLabel convo={c} />
                   {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
                   {c.pinned && <span className="fc-dm-flag">📌</span>}
                   {c.muted && <span className="fc-dm-flag">🔇</span>}
@@ -1128,6 +1189,7 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
+            </FeatureBoundary>
             {archivedConversations.length > 0 && (
               <>
                 <button className="fc-sidebar-action" onClick={() => setArchivedOpen((v) => !v)}>
@@ -1136,11 +1198,11 @@ export default function Dashboard() {
                 {archivedOpen && archivedConversations.map((c) => (
                   <div key={c.conversationId} className="fc-dm-row">
                     <button
-                      className={`fc-dm ${conversationId === c.conversationId && section === "dms" ? "active" : ""}`}
+                      className={`fc-dm ${selectedConversationId === c.conversationId && section === "dms" ? "active" : ""}`}
                       onClick={() => openConversation(c.conversationId)}
                     >
                       <ConversationIcon convo={c} />
-                      <span className="fc-dm-name">{c.name}</span>
+                      <DmRowLabel convo={c} />
                       {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
                       {c.unread > 0 && <i className="fc-dm-badge">{c.unread}</i>}
                     </button>
@@ -1277,12 +1339,12 @@ export default function Dashboard() {
             {section === "discover" && <DiscoverView onOpenCommunity={openCommunity} onCreate={() => openModal("createCommunity")} onJoinByCode={() => openModal("join")} />}
             {section === "search" && <SearchView query={searchQuery} onOpenProfile={setProfileUserId} onOpenCommunity={openCommunity} />}
             {section === "dms" && (
-              conversationId && (conversations === undefined || conversationList.some((c) => c.conversationId === conversationId)) ? (
+              selectedConversationId && (conversations === undefined || conversationList.some((c) => c.conversationId === selectedConversationId)) ? (
                 // A per-conversation boundary: one malformed conversation shows
                 // its own fallback; the sidebar and every other conversation keep
                 // working. Keyed by id so switching conversations retries cleanly.
                 <FeatureBoundary
-                  key={conversationId}
+                  key={selectedConversationId}
                   label="This conversation"
                   block
                   fallback={
@@ -1296,9 +1358,9 @@ export default function Dashboard() {
                     </div>
                   }
                 >
-                  <DmView conversationId={conversationId} myUserId={me?.userId ?? ""} isPlatformAdmin={Boolean(me?.isAdmin)} onOpenProfile={setProfileUserId} onStartCall={startDmCall} highlightMessageId={highlightMessageId} onHighlightHandled={() => setHighlightMessageId(null)} />
+                  <DmView conversationId={selectedConversationId} myUserId={me?.userId ?? ""} isPlatformAdmin={Boolean(me?.isAdmin)} onOpenProfile={setProfileUserId} onStartCall={startDmCall} highlightMessageId={highlightMessageId} onHighlightHandled={() => setHighlightMessageId(null)} />
                 </FeatureBoundary>
-              ) : conversationId ? (
+              ) : selectedConversationId ? (
                 <div className="fc-scroll-view">
                   <div className="fc-empty">
                     <AtSign size={30} />
@@ -1307,14 +1369,38 @@ export default function Dashboard() {
                     <Button className="mt-3" onClick={() => setConversationId(null)}>Back to messages</Button>
                   </div>
                 </div>
-              ) : (
+              ) : conversations === undefined ? (
+                // Still loading: never claim the account has no conversations.
+                <div className="fc-scroll-view">
+                  <div className="fc-view-head"><AtSign size={20} /><h2>Direct Messages</h2></div>
+                  <div className="fc-empty">
+                    <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                    <h3>Loading your conversations…</h3>
+                    <p>Fetching your direct messages and group chats.</p>
+                  </div>
+                </div>
+              ) : conversationList.length === 0 ? (
+                // Genuinely empty: this is the only case that shows the CTA.
                 <div className="fc-scroll-view">
                   <div className="fc-view-head"><AtSign size={20} /><h2>Direct Messages</h2></div>
                   <div className="fc-empty">
                     <AtSign size={30} />
                     <h3>Start a conversation with someone on Freecord.</h3>
                     <p>Open your friends list and pick someone to message.</p>
-                    <Button className="mt-3" onClick={() => setSection("home")}>Go to friends</Button>
+                    <Button className="mt-3" onClick={() => setSection("home")}>
+                      <Users className="mr-1 h-4 w-4" /> Go to friends
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                // Conversations exist, but every one of them is archived.
+                <div className="fc-scroll-view">
+                  <div className="fc-view-head"><AtSign size={20} /><h2>Direct Messages</h2></div>
+                  <div className="fc-empty">
+                    <AtSign size={30} />
+                    <h3>Your conversations are archived.</h3>
+                    <p>Open “Archived” in the conversation list to pick one up again.</p>
+                    <Button className="mt-3" variant="outline" onClick={() => setArchivedOpen(true)}>Show archived</Button>
                   </div>
                 </div>
               )
