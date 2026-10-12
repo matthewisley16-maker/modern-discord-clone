@@ -97,6 +97,22 @@ if (purgeResult.error && /sign in/i.test(purgeResult.error)) {
 }
 
 // ---------------------------------------------------------------------------
+// "Delete All Deleted Messages" (the bulk cleanup of the list). Anonymous, so it
+// must be refused before it can read or remove anything — this is the same
+// server-side gate the list uses, so the bulk path adds no way in.
+// ---------------------------------------------------------------------------
+const purgeAll = await rejection(() => anonymous.mutation(api.adminMessages.permanentlyDeleteAllMine, {}));
+if (purgeAll.error === null) bad("anonymous caller cannot delete all deleted messages", "the mutation succeeded");
+else ok("anonymous caller cannot delete all deleted messages");
+if (purgeAll.error && /sign in/i.test(purgeAll.error)) {
+  ok("the bulk delete is refused by the server-side sign-in gate");
+} else {
+  bad("the bulk delete is refused by the server-side sign-in gate", `unexpected rejection: ${purgeAll.error}`);
+}
+if (purgeAll.result === undefined) ok("the bulk delete returns nothing to an anonymous caller");
+else bad("the bulk delete returns nothing to an anonymous caller", purgeAll.result);
+
+// ---------------------------------------------------------------------------
 // The administrator-only global delete of a HIDDEN message (the moderation
 // route). Same fabricated-id caveat as above: with no session it can never
 // succeed, and a caller that cannot mint a real visibility id cannot reach the

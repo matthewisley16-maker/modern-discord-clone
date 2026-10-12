@@ -25,4 +25,15 @@ const crons = cronJobs();
 // failed write is unchanged (`storage.requestCleanup`).
 crons.interval("storage retention sweep", { hours: 1 }, internal.storage.runCleanup, {});
 
+// Expire "Delete for me" retention entries seven days after each user deleted a
+// message for themselves (Admin Panel → My Deleted Messages).
+//
+// Every six hours is far more than this needs: the window is seven days long and
+// the Admin Panel query already refuses to list a closed window the moment it
+// closes, so the sweep only records the expiry durably. The job reads a bounded,
+// indexed slice of `messageVisibility` (`by_hidden_at`, oldest unexpired first)
+// and marks at most a few hundred rows, so it never scans the table and never
+// polls. It deletes no messages, hides or attachments.
+crons.interval("delete-for-me retention expiry", { hours: 6 }, internal.deleteForMeRetention.expireRetainedEntries, {});
+
 export default crons;

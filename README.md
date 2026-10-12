@@ -334,16 +334,17 @@ A group with no photo (or a deleted one) renders the shared default group icon
 attachment records all stayed in storage, unreachable by anyone. The Admin Panel now exposes
 that retention and lets the original author purge it.
 
-No schema change was needed: `messageVisibility` (`userId`, `messageId`, `channelId` |
-`conversationId`, `hiddenAt`) already IS the deletion metadata, and it is indexed `by_user`,
-so the section reads only the caller's own rows.
+`messageVisibility` (`userId`, `messageId`, `channelId` | `conversationId`, `hiddenAt`) already IS the
+deletion metadata, and it is indexed `by_user`, so the section reads only the caller's own rows.
 
 | Surface | Where |
 | --- | --- |
 | Section (tab "My Deleted Messages") | `src/pages/AdminPanel.tsx` |
 | Query `adminMessages.listMineDeletedMessages` | `src/convex/adminMessages.ts` |
-| Purge `adminMessages.permanentlyDeleteMine` | `src/convex/adminMessages.ts` |
-| Eligibility / preview / search rules | `src/lib/deleted-messages.ts` (`bun deleted-messages-test.mjs`) |
+| Purge one `adminMessages.permanentlyDeleteMine` | `src/convex/adminMessages.ts` |
+| Purge all `adminMessages.permanentlyDeleteAllMine` ("Delete all deleted messages") | `src/convex/adminMessages.ts` |
+| Eligibility / preview / search / seven-day window rules | `src/lib/deleted-messages.ts` (`bun deleted-messages-test.mjs`) |
+| Seven-day expiry sweep | `src/convex/deleteForMeRetention.ts` (cron in `src/convex/crons.ts`) |
 
 - **Scope, enforced server-side.** Both functions call `requirePanelAccess` (rank >= admin) and
   then require the visibility row AND the message to belong to the caller. Another member's
@@ -361,14 +362,120 @@ so the section reads only the caller's own rows.
   subscribed while the tab is active (`"skip"` otherwise). Display names are resolved once per
   request; no polling and no duplicate subscription.
 - **Audited.** A successful purge writes `message.delete_permanent` to `auditLogs` and the
-  legacy moderation feed.
+  legacy moderation feed; the bulk cleanup writes `message.delete_permanent_all` once per run.
+- **"Delete all deleted messages".** The tab header has one confirmed bulk action that
+  permanently removes the caller's own retained entries, newest first. It is bounded by design:
+  one call purges at most 10 entries (out of the 60 newest markers it examines) and reports
+  `{ deleted, remaining, hasMore }`, so the button can be pressed again while entries remain —
+  never one unbounded transaction. It uses exactly the same eligibility rule as the list, so it
+  can never remove something the list would not show (other people's markers, expired entries,
+  messages deleted for everyone, or messages that are not the caller's).
 - **Verification.** `bun deleted-messages-test.mjs` covers the eligibility/preview/search rules
-  offline (29 assertions); `bun deleted-messages-authz-test.mjs` calls both functions with NO
-  session and asserts the deployment refuses them with no data and no effect (it creates
-  nothing, so it is safe against the real deployment).
+  and the seven-day window offline (57 assertions, fixed clock);
+  `bun deleted-messages-authz-test.mjs` calls all three functions with NO session and asserts the
+  deployment refuses them with no data and no effect (it creates nothing, so it is safe against
+  the real deployment).
 - **Limitations.** The message row must still exist: a message already removed by the retention
   sweep (past `STORAGE_RETENTION_MS`) or by "delete for everyone" cannot be recovered, and the
   panel says so instead of pretending otherwise.
+
+## "Delete for me" entries expire after seven days
+
+A "Delete for me" record is a TEMPORARY recovery window for the platform, not a permanent archive:
+seven days after the user deleted the message for themselves, its entry leaves
+Admin Panel → My Deleted Messages on its own. This applies to that entry only — it does not mean
+Freecord deletes messages after seven days.
+
+| Piece | Where |
+| --- | --- |
+| The rule (`DELETED_FOR_ME_TTL_MS`, expiry/remaining helpers) | `src/lib/deleted-messages.ts` |
+| Where the clock starts | `deletion.hideForMe` writes `messageVisibility.hiddenAt = Date.now()` on the server |
+| Authoritative expiry in the list | `adminMessages.describeHiddenMessage` → `isRetainedHiddenMessage(..., now)` |
+| Durable server-side cleanup | `deleteForMeRetention.expireRetainedEntries` — cron every 6 hours |
+| Progress state (indexed, no rescans) | `retentionState` row, key `deleteForMeRetention` |
+| New indexes/fields | `messageVisibility.by_hidden_at`, `messageVisibility.entryExpiredAt` |
+
+- **The timer starts once, when the user deletes.** It is `hiddenAt`, written server-side at the
+  moment of the local delete (`hideForMe` also returns early when a marker already exists, so
+  repeating the action cannot restart it). Opening the tab, refreshing, re-subscribing or
+  paginating back through the list never touches it — nothing in the read path writes anything.
+- **Server-side, not front-end filtering.** Two layers, deliberately:
+  `isDeletedForMeExpired(hiddenAt, now)` is applied inside the admin queries (with ONE `now` per
+  request, so a page is judged against a single instant), which makes the behaviour exact to the
+  millisecond with no dependence on any job; and the scheduled sweep records the expiry durably
+  in `entryExpiredAt`, so the backend itself cleans up with no user action and no request-time
+  cost.
+- **What expiry does NOT do.** It never deletes the message, its body, its GIF, its attachment
+  records, its files, another participant's copy, or the user's own "hidden for me" state — the
+  marker row is kept, because deleting it would resurrect the message into the deleter's chat
+  history, which is not what "Delete for me" means. Only the Admin Panel entry ends, and with it
+  the ability to permanently purge that message from the panel (a stale page can no longer delete
+  it for everyone: `deletion.deleteHiddenForEveryone` refuses an expired entry server-side).
+- **Per user, always.** Every marker carries its own `userId` and `hiddenAt`, and the sweeps and
+  lists only ever look at one marker at a time. One user's seven-day expiry cannot remove another
+  user's visibility, markers or messages — including two users who hid the same message.
+- **Cost and safety.** The sweep does ONE indexed range read (`by_hidden_at`, oldest first, only
+  entries whose window has already closed), bounded to 200 rows per run (hard cap 400), and
+  advances `retentionState.cursorHiddenAt` so it never re-reads the rows it has already expired.
+  It is idempotent and retry-safe (already-marked rows are skipped, every change is a single
+  transactional write), it runs every six hours rather than polling, and it touches nothing the
+  Admin Panel reads at request time, so a failed run can never break the panel.
+- **Verified live.** After deploy, the scheduled job expired all 34 closed windows of the
+  deployment's 130 markers on its own (newer entries stayed), re-running it examined 0 rows and
+  changed nothing, and `messages` (307) / `dmMessages` (1589) / marker counts were identical
+  before and after — with a sampled expired entry whose message and body were still intact.
+  `bun deleted-messages-test.mjs` pins the boundary itself with a fixed clock: 7 days minus a
+  minute is still listed, exactly 7 days is not.
+
+## Optional Admin PIN (never forced, never a way in)
+
+The Admin Panel can be protected by a PIN that an ADMINISTRATOR chooses for their own account. It
+is optional in every direction: no setup is required, skipping is remembered, and turning it off
+cannot change anyone's access — the server-side role checks stay the only thing that grants
+administrator authority.
+
+| Piece | Where |
+| --- | --- |
+| Rules (1–10 digits, leading zeros, lockout maths) | `src/lib/admin-pin.ts` (`bun admin-pin-test.mjs`) |
+| Backend: status / setPin / unlock / disable / skip / lock | `src/convex/adminPin.ts` |
+| Storage | `adminPinSettings` (`by_user`, one row per administrator who opts in) |
+| Lock screen and Admin Settings card | `src/components/admin/admin-pin.tsx` |
+| Where it is applied | `src/pages/AdminPanel.tsx` (gate + `panelOpen`) |
+
+- **Nothing forces a PIN.** There is no row and no PIN by default, so the panel opens on the
+  existing account authentication plus `requirePanelAccess` (rank >= admin) exactly as it did
+  before this feature existed. The option lives in Admin Settings → "Admin PIN (optional)" with
+  **Enable Admin PIN** / **Set Up PIN** and **Skip for Now**; skipping writes `skippedAt` so the
+  administrator is never prompted again. Ordinary members are never asked for a PIN anywhere —
+  this UI only exists inside the panel, which role checks already close to them.
+- **When it is on**, the gate replaces the whole panel: no admin query is even subscribed
+  (`panelOpen` is false, so statistics, tabs and both retention lists are `"skip"`ped), and a
+  correct PIN grants the session 30 minutes on that device. "Lock panel now" revokes it, and the
+  grant is bound to the auth session (`unlockedSessionId`), so signing out or using another device
+  asks again. The choice itself (`enabled`) persists across refreshes and sign-ins.
+- **A PIN never grants access.** Every public function starts with `panelAccess`, which re-checks
+  the signed-in account's role on the server; `status` returns harmless defaults to anyone without
+  panel access rather than hinting at an administrator's preference. A PIN alone unlocks nothing.
+- **Turning it off is identity-checked, and can never weaken the role checks.** Disabling requires
+  the current PIN, or the account's password verified against its stored Scrypt hash (the existing
+  Freecord credential) — so a forgotten PIN is not a lockout. The single case with no stronger
+  proof is an administrator whose account has NO password credential (email-code or guest
+  sign-in): there the signed-in administrator session is the existing authentication, and since the
+  PIN never granted authority, protection can be turned off on that basis. Both paths write
+  `admin_pin.disable` to the audit log, and neither touches `users.role` or the panel's
+  authorization code — `RequireAuth`, `requirePanelAccess` and every admin mutation behave exactly
+  the same with the PIN on or off.
+- **Storage and abuse.** The PIN is only ever a one-way Scrypt hash (`pinHash`), never returned by
+  a query, never logged and never echoed in an error; crypto runs in actions, not queries. Failed
+  entries are rate limited (`enforceLimit`) and after 5 failures the account is locked out for 5
+  minutes (`lockedUntil`), which the UI counts down. 1–10 digits are accepted and kept as a STRING
+  throughout, so leading zeros are significant (`007` differs from `7`) — the input field
+  sanitises to digits only and never parses the value as a number.
+- **Verification.** `bun admin-pin-test.mjs` covers the rules offline (fixed inputs, leading
+  zeros, sanitising, lockout countdown) AND the live boundary with no session: the status read
+  returns safe defaults, and setPin / unlock / disable / skip / lock are all refused by the
+  server-side sign-in gate (44 assertions). A real administrator clicking through the gate needs a
+  live admin session, which cannot be automated against this deployment.
 
 ## Community cover art in Discover
 

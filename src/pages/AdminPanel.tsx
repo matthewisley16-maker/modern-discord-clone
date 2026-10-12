@@ -5,6 +5,7 @@ import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toSafeArray } from "@/lib/collection";
+import { DELETED_FOR_ME_TTL_MS, deletedForMeRemainingLabel } from "@/lib/deleted-messages";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
+import { AdminPinGate, AdminPinSettings } from "@/components/admin/admin-pin";
 import { toast } from "sonner";
 import {
   ArrowLeft, Ban, Check, Crown, Paperclip, Search, ShieldAlert, ShieldCheck, Trash2, UserCog, Users, Clock,
@@ -22,6 +24,9 @@ import {
 
 /** Mirrors the backend ROLE_RANK so the UI reflects — never decides — authority. */
 const RANK: Record<string, number> = { member: 0, user: 0, moderator: 1, admin: 2, owner: 3, owner_admin: 3 };
+
+/** The retention window in plain words, so the copy can never drift from the rule. */
+const RETENTION_DAYS = Math.round(DELETED_FOR_ME_TTL_MS / 86_400_000);
 
 const ROLE_LABEL: Record<string, string> = {
   owner_admin: "Owner Admin",
@@ -81,6 +86,14 @@ function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMor
   onLoadMore: () => void;
 }) {
   const mine = mode === "mine";
+  // One slow local tick per list (once a minute) keeps the retention countdown
+  // truthful without polling anything: it causes no query, no network traffic and
+  // no server work, and it stops when the list is unmounted.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
   return (
     <>
       <p className={mine
@@ -91,13 +104,20 @@ function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMor
             Every entry below is a <span className="text-amber-200">local delete only</span> — the message stays hidden
             from your normal chat history (nothing here restores it) and its content is still in storage. Messages
             deleted for <em>everyone</em> are not listed: their content was already removed and cannot be recovered.
+            <br />
+            Each entry expires on its own <span className="text-amber-200">{RETENTION_DAYS} days</span> after you deleted
+            the message for yourself: it then disappears from this list without any action from you. Expiring an entry
+            removes the entry only — the message stays hidden for you, and everyone else keeps their own copy and
+            attachments.
           </>
         ) : (
           <>
             This list only contains messages <span className="text-sky-200">you</span> hid, so it never becomes a window
             into other people&apos;s private conversations. Deleting for everyone removes the content and its
             attachments for all participants — it cannot be restored, and a message already deleted for everyone is
-            not listed.
+            not listed. Entries you hid are listable for <span className="text-sky-200">{RETENTION_DAYS} days</span>;
+            after that they expire on their own and can no longer be deleted from here (everyone keeps their own copy
+            either way).
           </>
         )}
       </p>
@@ -133,6 +153,9 @@ function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMor
         const conversationName = item.conversationName || "Unknown conversation";
         const sentAt = typeof item.sentAt === "number" ? new Date(item.sentAt).toLocaleString() : "unknown time";
         const hiddenAt = typeof item.hiddenAt === "number" ? new Date(item.hiddenAt).toLocaleString() : "unknown time";
+        // Seven-day retention window for THIS entry (server-decided; this is display only).
+        const remaining = typeof item.hiddenAt === "number" ? deletedForMeRemainingLabel(item.hiddenAt, now) : "expired";
+        const windowClosed = remaining === "expired";
         return (
           <div key={item.visibilityId} className="rounded-lg border border-white/8 bg-white/[0.02] p-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -184,6 +207,17 @@ function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMor
               <span>Sent by {senderName}{mine ? "" : item.senderIsMe ? " (you)" : ""}</span>
               <span aria-hidden>·</span>
               <span>Deleted for you {hiddenAt}</span>
+              <span aria-hidden>·</span>
+              <span
+                className={windowClosed ? "text-destructive" : "text-amber-200/90"}
+                title={
+                  typeof item.expiresAt === "number"
+                    ? `This entry expires ${new Date(item.expiresAt).toLocaleString()} (seven days after you deleted it for yourself).`
+                    : undefined
+                }
+              >
+                {windowClosed ? "Entry expired" : `Entry expires in ${remaining}`}
+              </span>
               <Button
                 size="sm"
                 variant="outline"
@@ -314,7 +348,16 @@ type RetentionStatus = "LoadingFirstPage" | "LoadingMore" | "CanLoadMore" | "Exh
 export default function AdminPanel() {
   const navigate = useNavigate();
   const access = useQuery(api.admin.panelAccess, {});
-  const stats = useQuery(api.admin.stats, {});
+  // OPTIONAL Admin PIN: is protection on, and is THIS session open? The query
+  // returns harmless defaults for anyone without panel access, so it is safe to
+  // subscribe unconditionally. Hook order never changes: the value is only used
+  // to decide what to render and which admin queries to subscribe to.
+  const pinStatus = useQuery(api.adminPin.status, {});
+  // Nothing behind the PIN gate is fetched: while protection is on and this
+  // session has not entered the PIN, every admin query below is skipped, so a
+  // locked panel holds no admin data at all (not even statistics).
+  const panelOpen = pinStatus !== undefined && (!pinStatus.enabled || pinStatus.unlocked);
+  const stats = useQuery(api.admin.stats, panelOpen ? {} : "skip");
   // Re-run the server-side identity sync on entry so a protected Owner Admin
   // who deep-links straight to /admin is recognised without a detour through
   // the Dashboard first. The role itself is still decided entirely server-side.
@@ -338,13 +381,14 @@ export default function AdminPanel() {
   const [deletedQuery, setDeletedQuery] = useState("");
   const [deletedSearch, setDeletedSearch] = useState("");
   const [pendingPurge, setPendingPurge] = useState<RetainedRow | null>(null);
+  const [purgeAllOpen, setPurgeAllOpen] = useState(false);
   // Moderation list: messages I hid (any sender) that can still be deleted for everyone.
   const [moderationQuery, setModerationQuery] = useState("");
   const [moderationSearch, setModerationSearch] = useState("");
   const [pendingModerate, setPendingModerate] = useState<RetainedRow | null>(null);
   const users = useQuery(
     api.admin.listUsers,
-    tab === "users"
+    tab === "users" && panelOpen
       ? { q: userQuery.trim() || undefined, role: roleFilter === "all" ? undefined : roleFilter }
       : "skip",
   );
@@ -357,13 +401,13 @@ export default function AdminPanel() {
     const timer = setTimeout(() => setModerationSearch(moderationQuery), 300);
     return () => clearTimeout(timer);
   }, [moderationQuery]);
-  const communities = useQuery(api.admin.listCommunities, tab === "communities" ? {} : "skip");
-  const auditLogs = useQuery(api.admin.listAuditLogs, tab === "audit" ? { limit: 150 } : "skip");
-  const settings = useQuery(api.admin.getPlatformSettings, tab === "settings" ? {} : "skip");
+  const communities = useQuery(api.admin.listCommunities, tab === "communities" && panelOpen ? {} : "skip");
+  const auditLogs = useQuery(api.admin.listAuditLogs, tab === "audit" && panelOpen ? { limit: 150 } : "skip");
+  const settings = useQuery(api.admin.getPlatformSettings, tab === "settings" && panelOpen ? {} : "skip");
   // Read-only diagnostic: detects synthetic/test records that have leaked into
   // production. It never deletes anything — it only reports, so a moderator can
   // decide whether to run the verified cleanup operation.
-  const syntheticAudit = useQuery(api.maintenance.syntheticAudit, {});
+  const syntheticAudit = useQuery(api.maintenance.syntheticAudit, panelOpen ? {} : "skip");
   const syntheticCount = syntheticAudit?.syntheticCount ?? 0;
   const orphanCount = syntheticAudit?.orphanCount ?? 0;
   // TOTAL USERS must reflect legitimate production accounts only, so detected
@@ -384,6 +428,7 @@ export default function AdminPanel() {
   const updateCommunity = useMutation(api.admin.updateCommunity);
   const updatePlatformSettings = useMutation(api.admin.updatePlatformSettings);
   const permanentlyDeleteMine = useMutation(api.adminMessages.permanentlyDeleteMine);
+  const permanentlyDeleteAllMine = useMutation(api.adminMessages.permanentlyDeleteAllMine);
   const deleteHiddenForEveryone = useMutation(api.deletion.deleteHiddenForEveryone);
 
   const [pending, setPending] = useState<PendingAction>(null);
@@ -410,7 +455,7 @@ export default function AdminPanel() {
     return base;
   }, [actorIsOwner]);
 
-  if (access === undefined || !identityChecked) return null;
+  if (access === undefined || !identityChecked || pinStatus === undefined) return null;
 
   if (!access.canAccess) {
     return (
@@ -433,6 +478,13 @@ export default function AdminPanel() {
         </Card>
       </main>
     );
+  }
+
+  // OPTIONAL Admin PIN. Only reached by an account that already has panel access:
+  // the administrator chose to require their PIN, and this session has not entered
+  // it yet, so the panel itself is not rendered at all.
+  if (pinStatus.enabled && !pinStatus.unlocked) {
+    return <AdminPinGate status={pinStatus} />;
   }
 
   const run = async (fn: () => Promise<unknown>, successMsg: string) => {
@@ -739,25 +791,36 @@ export default function AdminPanel() {
                 <div>
                   <CardTitle className="text-base">My deleted messages</CardTitle>
                   <CardDescription>
-                    Messages you sent and then deleted for yourself. Their content is still retained in storage until
-                    you remove it here.
+                    Messages you sent and then deleted for yourself. Their content is retained in storage — and listed
+                    here — for {RETENTION_DAYS} days after you deleted it, then the entry expires by itself.
                   </CardDescription>
                 </div>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={deletedQuery}
-                    onChange={(e) => setDeletedQuery(e.target.value)}
-                    placeholder="Search text, conversation, file"
-                    className="w-full pl-8 sm:w-64"
-                  />
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={deletedQuery}
+                      onChange={(e) => setDeletedQuery(e.target.value)}
+                      placeholder="Search text, conversation, file"
+                      className="w-full pl-8 sm:w-64"
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-destructive"
+                    disabled={busy}
+                    onClick={() => setPurgeAllOpen(true)}
+                  >
+                    <Trash2 className="mr-1 size-4" /> Delete all deleted messages
+                  </Button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
                 {/* Its own boundary: a failing retention query shows a retryable error in THIS tab. */}
                 <FeatureBoundary label="Deleted messages" block>
                   <MyDeletedMessagesList
-                    active={tab === "deleted"}
+                    active={tab === "deleted" && panelOpen}
                     search={deletedSearch}
                     busy={busy}
                     onDelete={setPendingPurge}
@@ -792,7 +855,7 @@ export default function AdminPanel() {
                 {/* Its own boundary: a failing moderation query shows a retryable error in THIS tab. */}
                 <FeatureBoundary label="Hidden messages" block>
                   <HiddenMessagesList
-                    active={tab === "moderation"}
+                    active={tab === "moderation" && panelOpen}
                     search={moderationSearch}
                     busy={busy}
                     onDelete={setPendingModerate}
@@ -851,8 +914,11 @@ export default function AdminPanel() {
             </Card>
           </TabsContent>
 
-          {/* ---------------- Platform settings ---------------- */}
+          {/* ---------------- Platform settings + optional Admin PIN ---------------- */}
           <TabsContent value="settings" className="mt-4">
+            <div className="space-y-4">
+            {/* Optional Admin PIN: per-administrator, opt-in, never forced. */}
+            <AdminPinSettings status={pinStatus} />
             <Card className="border-white/10 bg-card/40">
               <CardHeader>
                 <CardTitle className="text-base">Platform settings</CardTitle>
@@ -914,6 +980,7 @@ export default function AdminPanel() {
                 )}
               </CardContent>
             </Card>
+            </div>
           </TabsContent>
         </Tabs>
       </div>
@@ -1016,6 +1083,55 @@ export default function AdminPanel() {
               }}
             >
               Delete for everyone
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* "Delete All Deleted Messages" — immediate bulk cleanup of the list */}
+      <Dialog open={purgeAllOpen} onOpenChange={(open) => { if (!open) setPurgeAllOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete all deleted messages?</DialogTitle>
+            <DialogDescription>
+              Permanently removes every retained message listed under “My deleted messages” — the content, its
+              attachments and any file no other message still uses.
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-destructive">
+            This is permanent and cannot be undone. Other participants keep their own messages and attachments, and
+            entries that have already expired are not affected (they are cleaned up automatically). Up to 10 entries
+            are removed per action — run it again to continue while entries remain.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPurgeAllOpen(false)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const result = await permanentlyDeleteAllMine({});
+                  if (result.deleted === 0) {
+                    toast.success("Nothing left to remove — the list is already empty.");
+                    setPurgeAllOpen(false);
+                  } else if (result.remaining > 0 || result.hasMore) {
+                    toast.success(
+                      `Removed ${result.deleted} retained message${result.deleted === 1 ? "" : "s"}. ` +
+                        "More are still listed — run “Delete all deleted messages” again to continue.",
+                    );
+                  } else {
+                    toast.success(`Removed ${result.deleted} retained message${result.deleted === 1 ? "" : "s"}.`);
+                    setPurgeAllOpen(false);
+                  }
+                } catch (err) {
+                  toast.error(friendly(err, "Could not delete the messages."));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Delete all
             </Button>
           </DialogFooter>
         </DialogContent>

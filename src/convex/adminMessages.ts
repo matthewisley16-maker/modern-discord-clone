@@ -6,8 +6,10 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { auditAdmin, currentUserId, displayNameOf, requirePanelAccess } from "./lib";
 import { deleteChannelMessage, deleteDmMessage } from "./storage";
 import {
+  deletedForMeExpiresAt,
   deletedMessagePreview,
   isRetainedHiddenMessage,
+  isRetainedOwnDeletion,
   matchesDeletedMessageSearch,
 } from "../lib/deleted-messages";
 
@@ -42,16 +44,26 @@ import {
 const MAX_PAGE_ITEMS = 50;
 /**
  * Rows examined per request to fill one page. The filters below (search, other
- * people's hides, messages deleted for everyone) can drop rows from the window,
- * so the window is a few times the requested page size — and it is a SINGLE
- * paginated read, because Convex allows exactly one `paginate` call per function
- * execution ("This query or mutation function ran multiple paginated queries").
+ * people's hides, messages deleted for everyone, entries past the seven-day
+ * retention window) can drop rows from the window, so the window is a few times
+ * the requested page size — and it is a SINGLE paginated read, because Convex
+ * allows exactly one `paginate` call per function execution ("This query or
+ * mutation function ran multiple paginated queries").
  */
 const SCAN_MULTIPLIER = 4;
 /** Hard cap on rows examined by one request, whatever the client asks for. */
 const MAX_SCAN_ROWS = 200;
 /** Attachment previews returned per retained message. */
 const MAX_ATTACHMENTS = 6;
+/**
+ * "Delete All Deleted Messages": entries permanently purged by ONE call. Each
+ * purge removes a message plus its attachment/reaction/visibility rows, so the
+ * batch stays small enough for a single well-bounded transaction; the admin can
+ * run it again until nothing is left.
+ */
+const PURGE_ALL_BATCH = 10;
+/** Newest markers examined by one bulk purge (indexed read). */
+const PURGE_ALL_WINDOW = 60;
 
 export type RetainedAttachment = {
   name: string;
@@ -79,6 +91,12 @@ export type RetainedDeletedMessage = {
   sentAt: number;
   /** When the current user hid it with "Delete for me". */
   hiddenAt: number;
+  /**
+   * When this entry disappears from the panel on its own: exactly seven days
+   * after `hiddenAt`. Enforced server-side (see `isDeletedForMeExpired`) and by
+   * the scheduled sweep — never by the client.
+   */
+  expiresAt: number;
   /** True when the viewer wrote the message themselves. */
   senderIsMe: boolean;
 };
@@ -137,6 +155,7 @@ async function describeHiddenMessage(
   term: string,
   names: NameCache,
   ownSenderOnly: boolean,
+  now: number,
 ): Promise<RetainedDeletedMessage | null> {
   const channelMessageId = ctx.db.normalizeId("messages", vis.messageId);
   const dmMessageId = channelMessageId ? null : ctx.db.normalizeId("dmMessages", vis.messageId);
@@ -157,6 +176,9 @@ async function describeHiddenMessage(
         attachmentCount: attachments.length,
         hasGif: Boolean(message.gif),
         requireOwnSender: ownSenderOnly,
+        hiddenAt: vis.hiddenAt,
+        entryExpiredAt: vis.entryExpiredAt,
+        now,
       })
     ) {
       return null;
@@ -191,6 +213,7 @@ async function describeHiddenMessage(
       senderName: await nameOf(ctx, names, message.userId),
       sentAt: message._creationTime,
       hiddenAt: vis.hiddenAt,
+      expiresAt: deletedForMeExpiresAt(vis.hiddenAt),
       senderIsMe: message.userId === viewerId,
     };
   }
@@ -209,6 +232,9 @@ async function describeHiddenMessage(
       attachmentCount: attachments.length,
       hasGif: Boolean(message.gif),
       requireOwnSender: ownSenderOnly,
+      hiddenAt: vis.hiddenAt,
+      entryExpiredAt: vis.entryExpiredAt,
+      now,
     })
   ) {
     return null;
@@ -254,6 +280,7 @@ async function describeHiddenMessage(
     senderName: await nameOf(ctx, names, message.userId),
     sentAt: message._creationTime,
     hiddenAt: vis.hiddenAt,
+    expiresAt: deletedForMeExpiresAt(vis.hiddenAt),
     senderIsMe: message.userId === viewerId,
   };
 }
@@ -283,6 +310,12 @@ async function paginateHidden(
   const pageSize = Math.min(Math.max(paginationOpts.numItems, 1), MAX_PAGE_ITEMS);
   const scanSize = Math.min(pageSize * SCAN_MULTIPLIER, MAX_SCAN_ROWS);
   const names: NameCache = new Map();
+  // ONE instant for the whole page, so every row's seven-day window is judged
+  // against the same clock. Expiry is decided here, on the server, from each
+  // marker's own `hiddenAt`: an entry disappears at exactly seven days even if
+  // the maintenance sweep has not run yet, and re-opening the tab can never
+  // extend or restart the window.
+  const now = Date.now();
 
   const result = await ctx.db
     .query("messageVisibility")
@@ -292,7 +325,7 @@ async function paginateHidden(
 
   const items: RetainedDeletedMessage[] = [];
   for (const vis of result.page) {
-    const item = await describeHiddenMessage(ctx, viewerId, vis, term, names, ownSenderOnly);
+    const item = await describeHiddenMessage(ctx, viewerId, vis, term, names, ownSenderOnly, now);
     if (item) items.push(item);
   }
 
@@ -406,6 +439,127 @@ export const permanentlyDeleteMine = mutation({
     await deleteDmMessage(ctx, message);
     await recordPermanentDelete(ctx, viewerId, vis, label, "dmMessage");
     return { deleted: true, alreadyGone: false };
+  },
+});
+
+/**
+ * The facts the shared eligibility rule needs about one of MY OWN markers, read
+ * with indexed point lookups only (no scans). Used by the bulk purge, which must
+ * decide "is this still listed and still mine to remove?" before touching a
+ * message — the same rule the list itself uses, so the two can never disagree.
+ */
+async function loadRetainedOwnTarget(
+  ctx: MutationCtx,
+  viewerId: Id<"users">,
+  vis: Doc<"messageVisibility">,
+  now: number,
+): Promise<{ kind: "channel"; message: Doc<"messages"> } | { kind: "dm"; message: Doc<"dmMessages"> } | null> {
+  const channelMessageId = ctx.db.normalizeId("messages", vis.messageId);
+  const dmMessageId = channelMessageId ? null : ctx.db.normalizeId("dmMessages", vis.messageId);
+  if (!channelMessageId && !dmMessageId) return null;
+
+  if (channelMessageId) {
+    const message = await ctx.db.get(channelMessageId);
+    if (!message) return null;
+    const attachment = await ctx.db
+      .query("attachments")
+      .withIndex("by_message", (q) => q.eq("messageId", channelMessageId))
+      .take(1);
+    const eligible = isRetainedOwnDeletion({
+      viewerId,
+      hiddenByUserId: vis.userId,
+      messageExists: true,
+      messageSenderId: message.userId,
+      deletedForEveryone: message.deletedForEveryone,
+      body: message.body,
+      attachmentCount: attachment.length,
+      hasGif: Boolean(message.gif),
+      hiddenAt: vis.hiddenAt,
+      entryExpiredAt: vis.entryExpiredAt,
+      now,
+    });
+    return eligible ? { kind: "channel", message } : null;
+  }
+
+  const message = await ctx.db.get(dmMessageId!);
+  if (!message) return null;
+  const attachment = await ctx.db
+    .query("attachments")
+    .withIndex("by_dm_message", (q) => q.eq("dmMessageId", dmMessageId!))
+    .take(1);
+  const eligible = isRetainedOwnDeletion({
+    viewerId,
+    hiddenByUserId: vis.userId,
+    messageExists: true,
+    messageSenderId: message.userId,
+    deletedForEveryone: message.deletedForEveryone,
+    body: message.body,
+    attachmentCount: attachment.length,
+    hasGif: Boolean(message.gif),
+    hiddenAt: vis.hiddenAt,
+    entryExpiredAt: vis.entryExpiredAt,
+    now,
+  });
+  return eligible ? { kind: "dm", message } : null;
+}
+
+/**
+ * "Delete All Deleted Messages" — the immediate, manual cleanup of the list.
+ *
+ * Permanently removes up to `PURGE_ALL_BATCH` of MY OWN retained entries in one
+ * bounded transaction (newest first), applies exactly the same eligibility rule
+ * as the list, and never touches anyone else's markers or messages. When more
+ * entries remain, the caller is told how many so the UI can offer it again.
+ *
+ * Entries whose seven-day window has closed are not part of the list any more
+ * and are left alone here — they are handled by the scheduled sweep, which keeps
+ * this action O(batch) whatever the size of the history.
+ */
+export const permanentlyDeleteAllMine = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const viewerId = await currentUserId(ctx);
+    await requirePanelAccess(ctx, viewerId);
+
+    const markers = await ctx.db
+      .query("messageVisibility")
+      .withIndex("by_user", (q) => q.eq("userId", viewerId))
+      .order("desc")
+      .take(PURGE_ALL_WINDOW);
+
+    const now = Date.now();
+    let deleted = 0;
+    let remaining = 0;
+    for (const vis of markers) {
+      const target = await loadRetainedOwnTarget(ctx, viewerId, vis, now);
+      if (!target) continue; // expired, already gone, deleted for everyone, or not mine
+      if (deleted >= PURGE_ALL_BATCH) {
+        remaining++;
+        continue;
+      }
+      if (target.kind === "channel") await deleteChannelMessage(ctx, target.message);
+      else await deleteDmMessage(ctx, target.message);
+      deleted++;
+    }
+
+    if (deleted > 0) {
+      await auditAdmin(ctx, {
+        action: "message.delete_permanent_all",
+        actorId: viewerId,
+        actorName: await displayNameOf(ctx, viewerId),
+        targetType: "user",
+        targetId: viewerId,
+        targetName: await displayNameOf(ctx, viewerId),
+        detail: `Permanently deleted ${deleted} of their own retained "delete for me" message${deleted === 1 ? "" : "s"}`,
+      });
+    }
+
+    return {
+      deleted,
+      remaining,
+      // The window was full, so there may be more entries beyond it.
+      hasMore: markers.length === PURGE_ALL_WINDOW,
+    };
   },
 });
 

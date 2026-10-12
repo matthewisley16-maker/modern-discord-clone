@@ -329,6 +329,36 @@ const schema = defineSchema(
     }).index("by_user", ["userId"]),
 
     /**
+     * OPTIONAL Admin PIN — one row per administrator who chooses to use it.
+     *
+     * Completely separate from normal Freecord sign-in and from the conversation
+     * PINs above: it only gates the Admin Panel's protected pages, and it never
+     * grants authority. A missing row means "no PIN protection", which is the
+     * default state for every account, including administrators — nothing forces
+     * a PIN to be created. Only the server reads or writes this row, and it is
+     * only ever touched for the signed-in administrator themself.
+     */
+    adminPinSettings: defineTable({
+      userId: v.id("users"),
+      /** The administrator's explicit preference: false = protection off. */
+      enabled: v.boolean(),
+      /** One-way Scrypt hash of the 1–10 digit PIN. Never returned to a client. */
+      pinHash: v.optional(v.string()),
+      failedAttempts: v.number(),
+      lockedUntil: v.optional(v.number()), // temporary lockout after repeated failures
+      /**
+       * Short-lived elevation for ONE auth session, granted by a correct PIN.
+       * Scoped to `unlockedSessionId` so signing out or opening another device
+       * asks for the PIN again.
+       */
+      unlockedUntil: v.optional(v.number()),
+      unlockedSessionId: v.optional(v.string()),
+      /** Set by "Skip for now" so a deliberate choice is never re-prompted. */
+      skippedAt: v.optional(v.number()),
+      updatedAt: v.number(),
+    }).index("by_user", ["userId"]),
+
+    /**
      * Short-lived unlock grants. `conversationId` is absent for a grant that
      * covers every locked conversation (issued by the Secret Chats screen); a
      * concrete id unlocks exactly one conversation (the Lock Only prompt).
@@ -485,11 +515,37 @@ const schema = defineSchema(
       channelId: v.optional(v.id("channels")),
       conversationId: v.optional(v.id("dmConversations")),
       hiddenAt: v.number(),
+      /**
+       * When this "Delete for me" RETENTION ENTRY expired (hiddenAt + 7 days).
+       * Written by the bounded sweep in `deleteForMeRetention.ts`; optional, and
+       * deliberately NOT the source of truth — `hiddenAt` decides, so the panel
+       * is correct even before the sweep runs. The row itself stays: it is what
+       * keeps the message hidden for this user, which must never be undone by an
+       * expiry (that would silently resurrect a deleted message for them).
+       */
+      entryExpiredAt: v.optional(v.number()),
     })
       .index("by_user", ["userId"])
       .index("by_user_message", ["userId", "messageId"])
       // Lets storage cleanup remove "hidden for me" markers whose message is gone.
-      .index("by_message", ["messageId"]),
+      .index("by_message", ["messageId"])
+      // Bounded, indexed expiry of retained "delete for me" entries: lets the
+      // sweep read ONLY the markers whose seven-day window has already closed
+      // (oldest first) instead of scanning the visibility table.
+      .index("by_hidden_at", ["hiddenAt"]),
+
+    /**
+     * Progress of one bounded maintenance pass (the "delete for me" retention
+     * sweep). It stores how far the sweep has already expired entries, so the
+     * job always moves forward over the oldest unexpired rows instead of
+     * re-reading the same already-expired prefix on every run.
+     */
+    retentionState: defineTable({
+      key: v.string(),
+      /** Every entry with `hiddenAt` <= this instant has been expired. */
+      cursorHiddenAt: v.number(),
+      updatedAt: v.number(),
+    }).index("by_key", ["key"]),
 
     messages: defineTable({
       channelId: v.id("channels"),

@@ -14,6 +14,7 @@ import {
 } from "./lib";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { isDeletedForMeExpired } from "../lib/deleted-messages";
 
 /** Hide a message for the current user only. Never touches the message itself. */
 async function hideForMe(
@@ -240,6 +241,16 @@ export const deleteHiddenForEveryone = mutation({
     if (!vis) throw new ConvexError("That hidden message is no longer listed.");
     if (vis.userId !== userId) {
       throw new ConvexError("You can only moderate messages you hid yourself.");
+    }
+    // The seven-day window is enforced here too, not just in the list: a stale
+    // page (or a hand-made request) must not be able to delete-for-everyone a
+    // message whose retention entry has already expired. The message itself is
+    // untouched by the expiry, so this only closes the panel's route, never
+    // anyone's content.
+    if (vis.entryExpiredAt != null || isDeletedForMeExpired(vis.hiddenAt, Date.now())) {
+      throw new ConvexError(
+        "The seven-day retention window for this entry has ended, so it can no longer be deleted for everyone from here.",
+      );
     }
 
     const channelMessageId = ctx.db.normalizeId("messages", vis.messageId);
