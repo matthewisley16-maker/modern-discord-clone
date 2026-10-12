@@ -71,7 +71,12 @@ function withOverride(overrides: Override[], target: string, permission: string,
   return next;
 }
 
-export default function ServerPermissions({ serverId }: { serverId: Id<"servers"> }) {
+/**
+ * `defaultTab` lets the community settings sections open this panel directly on
+ * the part they are about (Permissions → roles/channel overrides, Members →
+ * members). It is only the starting tab; every tab stays reachable.
+ */
+export default function ServerPermissions({ serverId, defaultTab = "roles" }: { serverId: Id<"servers">; defaultTab?: "roles" | "members" | "channels" | "bans" }) {
   const details = useQuery(api.communities.details, { serverId });
   const createRole = useMutation(api.communities.createRole);
   const updateRole = useMutation(api.communities.updateRole);
@@ -85,7 +90,7 @@ export default function ServerPermissions({ serverId }: { serverId: Id<"servers"
   const updateOverrides = useMutation(api.communities.updateChannelOverrides);
   const bans = useQuery(api.communities.listBans, { serverId });
 
-  const [tab, setTab] = useState<"roles" | "members" | "channels" | "bans">("roles");
+  const [tab, setTab] = useState<"roles" | "members" | "channels" | "bans">(defaultTab);
   const [busy, setBusy] = useState(false);
   const [newRole, setNewRole] = useState<{ name: string; color: string; permissions: string[] }>({ name: "", color: NEW_COLORS[0], permissions: ["viewChannels", "sendMessages"] });
   const [editing, setEditing] = useState<null | { id: string; name: string; color: string; permissions: string[] }>(null);

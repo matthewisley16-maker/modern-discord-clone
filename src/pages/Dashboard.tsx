@@ -1003,7 +1003,7 @@ export default function Dashboard() {
                 {details.muted ? <BellOff size={16} /> : <Bell size={16} />}
               </button>
               {detailsPermissions.includes("manageCommunity") && (
-                <button aria-label="Community settings" title="Community settings" onClick={() => setCommunitySettingsOpen(true)}><Settings size={16} /></button>
+                <button aria-label="Edit group" title="Edit group — picture, settings, permissions and members" onClick={() => setCommunitySettingsOpen(true)}><Settings size={16} /></button>
               )}
               <button className="fc-close-mobile" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={17} /></button>
             </div>

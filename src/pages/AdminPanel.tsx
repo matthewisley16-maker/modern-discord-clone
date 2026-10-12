@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
@@ -7,6 +7,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { toSafeArray } from "@/lib/collection";
 import { DELETED_FOR_ME_TTL_MS, deletedForMeRemainingLabel } from "@/lib/deleted-messages";
 import { communityCategoryOptions } from "@/lib/community-categories";
+import { COMMUNITY_IMAGE_ACCEPT, COMMUNITY_IMAGE_MAX_BYTES, communityImageContentType, communityImageProblem } from "@/lib/community-cover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,7 +21,7 @@ import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { AdminPinGate, AdminPinSettings } from "@/components/admin/admin-pin";
 import { toast } from "sonner";
 import {
-  ArrowLeft, Ban, Check, Crown, Paperclip, Search, ShieldAlert, ShieldCheck, Trash2, UserCog, Users, Clock,
+  ArrowLeft, Ban, Check, Crown, ImagePlus, Paperclip, Search, ShieldAlert, ShieldCheck, Trash2, UserCog, Users, Clock,
 } from "lucide-react";
 
 /** Mirrors the backend ROLE_RANK so the UI reflects — never decides — authority. */
@@ -430,6 +431,7 @@ export default function AdminPanel() {
   const deleteUser = useMutation(api.admin.deleteUser);
   const deleteCommunity = useMutation(api.admin.deleteCommunity);
   const updateCommunity = useMutation(api.admin.updateCommunity);
+  const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
   const updatePlatformSettings = useMutation(api.admin.updatePlatformSettings);
   const permanentlyDeleteMine = useMutation(api.adminMessages.permanentlyDeleteMine);
   const permanentlyDeleteAllMine = useMutation(api.adminMessages.permanentlyDeleteAllMine);
@@ -440,7 +442,13 @@ export default function AdminPanel() {
   const [reason, setReason] = useState("");
   const [durationHours, setDurationHours] = useState("24");
   const [settingsDraft, setSettingsDraft] = useState<{ announcement: string; newCommunitiesEnabled: boolean; discoveryEnabled: boolean } | null>(null);
-  const [editCommunity, setEditCommunity] = useState<null | { serverId: string; name: string; description: string; isPublic: boolean; locked: boolean; category: string }>(null);
+  const [editCommunity, setEditCommunity] = useState<null | { serverId: string; name: string; description: string; isPublic: boolean; locked: boolean; category: string; iconUrl: string | null }>(null);
+  // The group picture an administrator picked but has NOT saved yet. Nothing is
+  // uploaded until Save, so a Cancel leaves no orphaned file in storage.
+  const [communityPicture, setCommunityPicture] = useState<File | null>(null);
+  const [communityPicturePreview, setCommunityPicturePreview] = useState<string | null>(null);
+  const [removeCommunityPicture, setRemoveCommunityPicture] = useState(false);
+  const communityPictureInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
   const actorRole = access?.role ?? "user";
@@ -453,6 +461,37 @@ export default function AdminPanel() {
     !u.isSelf &&
     actorRank > (RANK[u.role] ?? 0) &&
     (actorIsOwner || (RANK[u.role] ?? 0) < RANK.admin);
+
+  /** Drop a picked-but-unsaved picture (releases the local preview URL). */
+  function resetCommunityPicture() {
+    setCommunityPicturePreview((current) => { if (current) URL.revokeObjectURL(current); return null; });
+    setCommunityPicture(null);
+    setRemoveCommunityPicture(false);
+    if (communityPictureInput.current) communityPictureInput.current.value = "";
+  }
+
+  function chooseCommunityPicture(file: File | undefined) {
+    if (!file) return;
+    const problem = communityImageProblem(file);
+    if (problem) { toast.error(problem); return; }
+    setCommunityPicturePreview((current) => { if (current) URL.revokeObjectURL(current); return URL.createObjectURL(file); });
+    setCommunityPicture(file);
+    setRemoveCommunityPicture(false);
+  }
+
+  /** Upload the chosen image to storage; the backend re-validates the stored blob. */
+  async function uploadCommunityPicture(file: File): Promise<Id<"_storage">> {
+    const uploadUrl = await generateUploadUrl({});
+    const response = await fetch(uploadUrl, {
+      method: "POST",
+      // The same type the stored image will claim — never a raw guess from the file.
+      headers: { "Content-Type": communityImageContentType(file) ?? "image/png" },
+      body: file,
+    });
+    if (!response.ok) throw new Error("The picture upload failed — please try again.");
+    const { storageId } = (await response.json()) as { storageId: Id<"_storage"> };
+    return storageId;
+  }
 
   const assignableRoles = useMemo(() => {
     const base = ["user", "moderator"];
@@ -783,8 +822,19 @@ export default function AdminPanel() {
                       {communityList.map((c) => (
                         <TableRow key={c.serverId}>
                           <TableCell className="max-w-[16rem]">
-                            <div className="truncate font-medium">{c.name}</div>
-                            <div className="truncate text-xs text-muted-foreground">{c.description}</div>
+                            <div className="flex items-center gap-2">
+                              {/* The community's OWN stored picture — the same image the
+                                  rail, sidebar and Discover show. */}
+                              <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+                                {c.iconUrl
+                                  ? <img src={c.iconUrl} alt="" className="size-full object-cover" />
+                                  : <span className="text-xs font-semibold text-muted-foreground">{c.name.slice(0, 1).toUpperCase()}</span>}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="truncate font-medium">{c.name}</div>
+                                <div className="truncate text-xs text-muted-foreground">{c.description}</div>
+                              </div>
+                            </div>
                           </TableCell>
                           <TableCell className="text-sm">{c.ownerName}</TableCell>
                           <TableCell className="text-sm">{c.memberCount}</TableCell>
@@ -795,9 +845,9 @@ export default function AdminPanel() {
                             <div className="flex justify-end gap-2">
                               <Button
                                 size="sm" variant="outline"
-                                onClick={() => setEditCommunity({ serverId: c.serverId, name: c.name, description: c.description, isPublic: c.isPublic, locked: c.locked, category: c.category })}
+                                onClick={() => { resetCommunityPicture(); setEditCommunity({ serverId: c.serverId, name: c.name, description: c.description, isPublic: c.isPublic, locked: c.locked, category: c.category, iconUrl: c.iconUrl ?? null }); }}
                               >
-                                Edit
+                                Edit group
                               </Button>
                               {actorIsOwner ? (
                                 <Button
@@ -1038,14 +1088,45 @@ export default function AdminPanel() {
       </div>
 
       {/* Community edit dialog */}
-      <Dialog open={editCommunity !== null} onOpenChange={(open) => { if (!open) setEditCommunity(null); }}>
+      <Dialog open={editCommunity !== null} onOpenChange={(open) => { if (!open) { resetCommunityPicture(); setEditCommunity(null); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit community</DialogTitle>
-            <DialogDescription>Update this community&apos;s settings. Changes apply immediately for all members.</DialogDescription>
+            <DialogTitle>Edit group</DialogTitle>
+            <DialogDescription>Update this group&apos;s picture and settings. Changes apply immediately for all members.</DialogDescription>
           </DialogHeader>
           {editCommunity && (
             <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Group picture</label>
+                <div className="flex items-center gap-3">
+                  <span className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+                    {(communityPicturePreview ?? (removeCommunityPicture ? null : editCommunity.iconUrl))
+                      ? <img src={communityPicturePreview ?? editCommunity.iconUrl ?? ""} alt="Group picture preview" className="size-full object-cover" />
+                      : <span className="text-lg font-semibold text-muted-foreground">{editCommunity.name.slice(0, 1).toUpperCase() || "?"}</span>}
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={communityPictureInput}
+                      type="file"
+                      accept={COMMUNITY_IMAGE_ACCEPT}
+                      hidden
+                      onChange={(e) => { chooseCommunityPicture(e.target.files?.[0]); e.target.value = ""; }}
+                    />
+                    <Button size="sm" variant="outline" type="button" disabled={busy} onClick={() => communityPictureInput.current?.click()}>
+                      <ImagePlus className="mr-1 size-4" /> {communityPicturePreview ? "Choose another" : "Upload picture"}
+                    </Button>
+                    {(editCommunity.iconUrl || communityPicturePreview) && !removeCommunityPicture && (
+                      <Button size="sm" variant="ghost" type="button" disabled={busy} onClick={() => { resetCommunityPicture(); setRemoveCommunityPicture(true); }}>
+                        <Trash2 className="mr-1 size-4" /> Remove
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Shown beside this group everywhere in Freecord. PNG, JPG, GIF, WebP or AVIF · up to{" "}
+                  {Math.round(COMMUNITY_IMAGE_MAX_BYTES / (1024 * 1024))} MB. Saved with “Save” — Cancel discards it.
+                </p>
+              </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Name</label>
                 <Input value={editCommunity.name} onChange={(e) => setEditCommunity({ ...editCommunity, name: e.target.value })} />
@@ -1088,23 +1169,32 @@ export default function AdminPanel() {
             </div>
           )}
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setEditCommunity(null)}>Cancel</Button>
-            <Button
+            <Button variant="ghost" onClick={() => setEditCommunity(null)}>Cancel</Button>              <Button
               disabled={busy}
               onClick={async () => {
                 if (!editCommunity) return;
                 const target = editCommunity;
+                const picture = communityPicture;
+                const clearing = removeCommunityPicture;
                 await run(
-                  () => updateCommunity({
-                    serverId: target.serverId as Id<"servers">,
-                    name: target.name,
-                    description: target.description,
-                    isPublic: target.isPublic,
-                    locked: target.locked,
-                    category: target.category,
-                  }),
-                  "Community updated.",
+                  async () => {
+                    // The upload happens here (not when the file is picked), so a
+                    // cancelled dialog stores nothing.
+                    const iconStorageId = picture ? await uploadCommunityPicture(picture) : undefined;
+                    await updateCommunity({
+                      serverId: target.serverId as Id<"servers">,
+                      name: target.name,
+                      description: target.description,
+                      isPublic: target.isPublic,
+                      locked: target.locked,
+                      category: target.category,
+                      ...(iconStorageId ? { iconStorageId } : {}),
+                      ...(clearing ? { clearIcon: true } : {}),
+                    });
+                  },
+                  clearing ? "Group picture removed." : picture ? "Group picture updated." : "Community updated.",
                 );
+                resetCommunityPicture();
                 setEditCommunity(null);
               }}
             >

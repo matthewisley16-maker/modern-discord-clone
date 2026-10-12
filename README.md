@@ -578,6 +578,62 @@ field, one upload, one URL:
   WebP/AVIF, ≤5 MB) and deletes the blob it replaces (or clears), so old covers neither linger in
   file storage nor can be referenced by a non-image upload.
 
+## Editing a group's picture and settings
+
+An administrator opens a group, clicks **Edit group** (the gear in the community sidebar header, or
+**Edit** on the Admin Panel → Communities row) and gets the same stored group picture and the same
+permission-gated writes from either surface:
+
+| Step | Where |
+| --- | --- |
+| Sections (General · Appearance · Permissions · Members · Channels · Danger) | `src/components/dashboard/CommunitySettings.tsx` |
+| Group picture (owner / community admin) | `communities.updateSettings { iconStorageId \| clearIcon }` → `servers.iconStorageId` |
+| Group picture (platform administrator) | `admin.updateCommunity { iconStorageId \| clearIcon }` → the same column |
+| The one image rule (existence, type, ≤5 MB, cleanup) | `assertUsableCover` in `src/convex/communities.ts` |
+| Client picker rule (accept list, size, stored content type) | `src/lib/community-cover.ts` (`communityImageProblem`, `communityImageContentType`) |
+| Roles / who may post, invite, moderate or edit info | `ServerPermissions.tsx` → `communities.createRole`/`updateRole`/`assignRole`/`kickMember`/`banMember`/`timeoutMember` |
+| Group chat photo (a group DM) | `GroupPhotoEditor.tsx` → `dms.setGroupPhoto` → `dmConversations.iconStorageId` |
+
+- **Real sections, not one long scroll.** The panel is a tabbed layout (`.fc-settings-body` +
+  `.fc-settings-tabs`, the same shell as account settings, which collapses to a horizontally
+  scrollable row on mobile): *General* (name, description, tags, slow mode, Discover/privacy,
+  subcategory, invite code), *Appearance* (the group picture, with upload, preview, remove and its
+  own Save/Cancel), *Permissions* (roles and channel overrides), *Members* (roles, timeout, kick,
+  ban), *Channels* (text and voice) and *Danger* (leave). Every change still goes through the
+  mutation it always did — nothing was reimplemented, only regrouped.
+- **The picture is previewed before it is stored.** A picked file is only a local preview until
+  **Save picture** is pressed; Cancel (or closing the dialog) revokes it and attempts no upload, so
+  no orphaned blob is created and no `blob:` URL can ever become the group's saved picture. The same
+  is true in the Admin Panel dialog, where the upload happens inside Save.
+- **Removing restores the default avatar.** `clearIcon: true` un-sets `servers.iconStorageId` and
+  deletes the blob; every surface then falls back to the community initial.
+- **Permissions are enforced on the backend.** `communities.updateSettings` requires
+  `manageCommunity` (owner/admins); `admin.updateCommunity` requires `requirePanelAccess`. Members
+  and moderators are refused server-side even if the client is tampered with, and the panel hides
+  the controls from them rather than letting them fail. Kick/Ban/Timeout keep their confirmation
+  dialogs and their role-hierarchy guard (`assertCanModerateMember`).
+- **Validation on both sides, one source of truth.** The picker refuses SVG/BMP/TIFF/PDF/executables
+  and >5 MB, and records the stored content type from the allowed list (or the file extension when
+  the browser declares none) — the server then re-inspects the STORED object, so a mislabelled
+  upload cannot become a group picture. No key or secret is read in the client; uploads use
+  short-lived `uploads.generateUploadUrl` URLs.
+- **Persistence and real time.** The picture and settings live on the `servers` row (and the group
+  chat photo on `dmConversations`), so they survive refreshes; every surface reads them through
+  reactive `useQuery` subscriptions (`communities.listMine`/`details`/`discover`, `dms.*`, the
+  rail, sidebar, header, search) and a storage id changes the file URL, so a replaced picture shows
+  immediately and is never served from cache.
+- **Verification.** `bun group-settings-test.mjs` (102 assertions) covers the picker rules, asserts
+  in the real source that both editors validate with the same shared rule, persist to the database,
+  delete replaced blobs, defer the upload to Save, confirm before removing a member, and render the
+  four required sections. It then talks to the live deployment with NO session: the deployment's own
+  refusal reproduces its argument schema, which is checked to declare
+  `iconStorageId: v.optional(v.id("_storage"))` and `clearIcon: v.optional(v.boolean())` on both
+  write paths, and — using a real, discoverable community id so validation passes — asserts that
+  renaming, changing privacy, clearing a picture and editing as a member are all refused by the
+  **authorization gate** (`Please sign in first.`), never by a validator, plus that a signed-out
+  caller cannot mint an upload URL. `bun group-photo-test.mjs` covers the group-chat photo framing,
+  and `bun community-cover-test.mjs` the cover fallbacks.
+
 ## Administrator message moderation (delete anyone's message for everyone)
 
 The existing global-deletion mechanism is reused, not reimplemented: `deletion.deleteForEveryone`

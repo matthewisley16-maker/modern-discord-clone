@@ -17,6 +17,11 @@ import {
   ROLE_RANK,
 } from "./lib";
 import { communityCategoryOf, communityCategoryProblem, normalizeCommunityCategory } from "../lib/community-categories";
+// The group-picture rule and the blob cleanup are shared with the owner-facing
+// community editor, so an administrator can never store an image that the
+// community itself would reject (and old pictures never pile up in storage).
+import { assertUsableCover } from "./communities";
+import { deleteStoredFile } from "./maintenance";
 
 /**
  * ---------------------------------------------------------------------------
@@ -607,6 +612,11 @@ export const listCommunities = query({
         // text when it is one we no longer offer) so an administrator can see and
         // re-file it from here without loading the community itself.
         category: communityCategoryOf(server.category),
+        // The community's CURRENT group picture (`servers.iconStorageId` → URL),
+        // so the edit dialog can preview, replace or remove exactly what members
+        // see on every surface. Null means "default avatar".
+        iconUrl: server.iconStorageId ? await ctx.storage.getUrl(server.iconStorageId) : null,
+        hasIcon: Boolean(server.iconStorageId),
         memberCount: members.length,
         ownerName: await displayNameOf(ctx, server.ownerId),
         ownerId: server.ownerId,
@@ -630,6 +640,14 @@ export const updateCommunity = mutation({
      * list as the owner-facing editor, and never accepted as a client guess.
      */
     category: v.optional(v.string()),
+    /**
+     * The community's group picture. Administrators change any group's picture
+     * from here; the uploaded storage object is validated with the same rule the
+     * owner-facing editor uses before it is referenced, and `clearIcon` restores
+     * the default avatar.
+     */
+    iconStorageId: v.optional(v.id("_storage")),
+    clearIcon: v.optional(v.boolean()),
   },
   handler: async (ctx, { serverId, ...patch }) => {
     const userId = await currentUserId(ctx);
@@ -651,9 +669,27 @@ export const updateCommunity = mutation({
       if (problem) throw new ConvexError(problem);
       update.category = normalizeCommunityCategory(patch.category) ?? communityCategoryOf(server.category);
     }
+    // Group picture: a real, image-typed, sane-size storage object or nothing.
+    // The picture being replaced (or cleared) is deleted afterwards, so a
+    // community can never accumulate orphaned images.
+    const replaced: Id<"_storage">[] = [];
+    if (patch.iconStorageId !== undefined) {
+      await assertUsableCover(ctx, patch.iconStorageId);
+      update.iconStorageId = patch.iconStorageId;
+      if (server.iconStorageId) replaced.push(server.iconStorageId);
+    }
+    if (patch.clearIcon) {
+      update.iconStorageId = undefined;
+      if (server.iconStorageId) replaced.push(server.iconStorageId);
+    }
     if (Object.keys(update).length === 0) return { updated: false };
 
     await ctx.db.patch(serverId, update);
+    for (const blob of replaced) {
+      // Re-selecting the same picture (or clearing an already-default one) is a no-op.
+      if (blob === patch.iconStorageId) continue;
+      await deleteStoredFile(ctx, blob);
+    }
     const actor = await actorCard(ctx, userId);
     await auditAdmin(ctx, {
       action: "community.update",

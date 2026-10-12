@@ -41,8 +41,13 @@ const COVER_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "imag
  * and really be an image of a sane size before a community can reference it as
  * its cover art. A blob of the wrong kind would otherwise show as a broken
  * image on every surface that reads `iconStorageId` (rail, sidebar, Discover).
+ *
+ * Exported because it is the ONE rule for a group picture: the owner-facing
+ * editor (`updateSettings`), the platform Admin Panel
+ * (`admin.updateCommunity`) and every admin-authorized path all call this, so no
+ * surface can accept an image the others would reject.
  */
-async function assertUsableCover(ctx: MutationCtx, storageId: Id<"_storage">) {
+export async function assertUsableCover(ctx: MutationCtx, storageId: Id<"_storage">) {
   const meta = await ctx.db.system.get("_storage", storageId);
   if (!meta) throw new ConvexError("That image is no longer available — please choose it again.");
   if (!COVER_TYPES.includes(meta.contentType ?? "")) {
