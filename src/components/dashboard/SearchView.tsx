@@ -2,8 +2,30 @@ import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { toSafeArray } from "@/lib/collection";
+import { communityCoverUrl, communityInitial } from "@/lib/community-cover";
 import { Avatar, EmptyState, SectionHeader } from "./ui";
 import { Hash, Search, Users } from "lucide-react";
+
+/**
+ * A community's avatar in the search results — the same uploaded cover the
+ * Discover card, rail and sidebar show, with the gradient initial as fallback.
+ */
+function CommunityResultIcon({ name, iconUrl }: { name: string; iconUrl?: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const cover = communityCoverUrl({ iconUrl, failed });
+  if (!cover) {
+    return (
+      <span className="fc-community-icon" style={{ background: "linear-gradient(135deg,#7c5cf6,#4c1d95)" }}>
+        {communityInitial(name)}
+      </span>
+    );
+  }
+  return (
+    <span className="fc-community-icon">
+      <img src={cover} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />
+    </span>
+  );
+}
 
 export default function SearchView({
   query,
@@ -69,7 +91,7 @@ export default function SearchView({
           <SectionHeader title={`COMMUNITIES — ${communityResults.length}`} />
           {communityResults.map((c) => (
             <button key={c.serverId} className="fc-row fc-row-main" onClick={() => onOpenCommunity(c.serverId)}>
-              <span className="fc-community-icon" style={{ background: "linear-gradient(135deg,#7c5cf6,#4c1d95)" }}>{c.name.slice(0, 1).toUpperCase()}</span>
+              <CommunityResultIcon name={c.name} iconUrl={c.iconUrl} />
               <span><strong>{c.name}</strong><small>{c.description || "No description"} · {c.memberCount} members</small></span>
             </button>
           ))}

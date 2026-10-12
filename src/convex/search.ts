@@ -23,7 +23,7 @@ export const global = query({
     const want = filter ?? "all";
     const out: {
       people: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null; decorationId: string | null }[];
-      communities: { serverId: string; name: string; description: string; iconColor: string; memberCount: number }[];
+      communities: { serverId: string; name: string; description: string; iconColor: string; iconUrl: string | null; memberCount: number }[];
       messages: { messageId: string; body: string; author: string; channelName: string; communityName: string; createdAt: number }[];
       channels: { channelId: string; name: string; communityName: string }[];
     } = { people: [], communities: [], messages: [], channels: [] };
@@ -65,6 +65,9 @@ export const global = query({
           name: server.name,
           description: server.description,
           iconColor: server.iconColor ?? "violet",
+          // The community's own uploaded cover, exactly as Discover/rail/sidebar
+          // resolve it, so a community looks the same everywhere it appears.
+          iconUrl: server.iconStorageId ? await ctx.storage.getUrl(server.iconStorageId) : null,
           memberCount: members.length,
         });
         if (out.communities.length >= 10) break;
