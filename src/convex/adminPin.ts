@@ -8,8 +8,10 @@ import { internal } from "./_generated/api";
 import { auditAdmin, currentUserId, displayNameOf, rankOf, requirePanelAccess, roleOfUser, ROLE_RANK } from "./lib";
 import { enforceRateLimit } from "./authHelpers";
 import {
+  ADMIN_PIN_LOCKOUT_DECAY_MS,
   ADMIN_PIN_MAX_DIGITS,
   ADMIN_PIN_UNLOCK_MINUTES,
+  adminPinLockoutFor,
   adminPinLockoutSeconds,
   adminPinProblem,
   adminPinsMatch,
@@ -51,11 +53,6 @@ import {
  *   - Ordinary members have no access to any of this: it lives only in the Admin
  *     Panel, and the panel itself is closed to them by role.
  */
-
-/** Failed attempts before the temporary lockout kicks in. */
-const MAX_ATTEMPTS = 5;
-/** How long that lockout lasts. */
-const LOCKOUT_MS = 5 * 60 * 1000;
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -160,25 +157,48 @@ export const enforceLimit = internalMutation({
   },
 });
 
-/** Count a PIN attempt, applying the temporary lockout after repeated failures. */
+/**
+ * Count a PIN attempt and apply the PROGRESSIVE delay after repeated failures.
+ *
+ * The first couple of typos cost nothing; from the third consecutive failure the
+ * wait doubles each time (5s → 10s → 20s … capped at 15 minutes) and keeps
+ * growing while the guessing continues, so a wrong-PIN loop slows down instead of
+ * running at a constant rate. The count is cleared by a correct PIN, and it also
+ * starts over after `ADMIN_PIN_LOCKOUT_DECAY_MS` of quiet, so an honest
+ * administrator is never punished hours later for an old mistype.
+ *
+ * Returns the delay that now applies (ms, 0 when none) so the caller can tell the
+ * user exactly how long to wait.
+ */
 export const registerAttempt = internalMutation({
   args: { success: v.boolean() },
-  handler: async (ctx, { success }) => {
+  handler: async (ctx, { success }): Promise<{ delayMs: number; failedAttempts: number }> => {
     const userId = await currentUserId(ctx);
     await enforceRateLimit(ctx, `adminpin:attempt:${userId}`, 20, 60_000);
     const row = await settingsRow(ctx, userId);
-    if (!row) return;
+    if (!row) return { delayMs: 0, failedAttempts: 0 };
+    const now = Date.now();
     if (success) {
-      await ctx.db.patch(row._id, { failedAttempts: 0, lockedUntil: undefined, updatedAt: Date.now() });
-      return;
+      await ctx.db.patch(row._id, {
+        failedAttempts: 0,
+        lockedUntil: undefined,
+        lastFailedAt: undefined,
+        updatedAt: now,
+      });
+      return { delayMs: 0, failedAttempts: 0 };
     }
-    const failed = (row.failedAttempts ?? 0) + 1;
-    const lockedOut = failed >= MAX_ATTEMPTS;
+    // A stale run of failures does not carry over: the streak restarts after an
+    // hour of quiet.
+    const stale = row.lastFailedAt !== undefined && now - row.lastFailedAt > ADMIN_PIN_LOCKOUT_DECAY_MS;
+    const failed = (stale ? 0 : row.failedAttempts ?? 0) + 1;
+    const delayMs = adminPinLockoutFor(failed);
     await ctx.db.patch(row._id, {
-      failedAttempts: lockedOut ? 0 : failed,
-      lockedUntil: lockedOut ? Date.now() + LOCKOUT_MS : undefined,
-      updatedAt: Date.now(),
+      failedAttempts: failed,
+      lockedUntil: delayMs > 0 ? now + delayMs : undefined,
+      lastFailedAt: now,
+      updatedAt: now,
     });
+    return { delayMs, failedAttempts: failed };
   },
 });
 
@@ -347,15 +367,25 @@ export const status = query({
 async function verifyPinOrThrow(ctx: ActionCtx, rec: PinRecord, pin: string): Promise<void> {
   const lockout = adminPinLockoutSeconds(rec.lockedUntil, Date.now());
   if (lockout > 0) {
-    throw new ConvexError(`Too many attempts. Please try again in ${lockout}s.`);
+    throw new ConvexError(`Too many incorrect attempts. Please try again in ${lockout}s.`);
   }
   if (!rec.pinHash || adminPinProblem(pin) !== null) {
-    await ctx.runMutation(internal.adminPin.registerAttempt, { success: false });
-    throw new ConvexError("That PIN is not correct.");
+    const recorded = (await ctx.runMutation(internal.adminPin.registerAttempt, { success: false })) as {
+      delayMs: number;
+    } | null;
+    throw new ConvexError(incorrectPinMessage(recorded?.delayMs ?? 0));
   }
   const ok = await new Scrypt().verify(rec.pinHash, pin);
-  await ctx.runMutation(internal.adminPin.registerAttempt, { success: ok });
-  if (!ok) throw new ConvexError("That PIN is not correct.");
+  const recorded = (await ctx.runMutation(internal.adminPin.registerAttempt, { success: ok })) as {
+    delayMs: number;
+  } | null;
+  if (!ok) throw new ConvexError(incorrectPinMessage(recorded?.delayMs ?? 0));
+}
+
+/** The generic wrong-PIN error, plus the progressive wait when one now applies. */
+function incorrectPinMessage(delayMs: number): string {
+  if (delayMs <= 0) return "That PIN is not correct.";
+  return `That PIN is not correct. Please wait ${Math.ceil(delayMs / 1000)}s before trying again.`;
 }
 
 /**
@@ -441,6 +471,8 @@ export const disable = action({
       await ctx.runMutation(internal.adminPin.enforceLimit, { scope: "disable", limit: 8, windowMs: 60_000 });
       proved = await new Scrypt().verify(credential.secret, password);
       reason = "identity confirmed with the account password";
+      // A wrong account password is rate limited like a wrong PIN: it is the
+      // other proof of identity for this account.
     } else if (!credential.hasPassword) {
       proved = true;
       reason = "account has no password credential; identity confirmed by the signed-in administrator session";

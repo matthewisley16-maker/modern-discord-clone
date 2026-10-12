@@ -67,6 +67,12 @@ function CommunityCard({
           <h3>{community.name}</h3>
           <p className="fc-muted"><Users size={12} /> {community.memberCount} members</p>
         </div>
+        {/* The subcategory comes from the community's CURRENT stored value, so an
+            owner's change moves this card out of its old filter and into the new
+            one on the next read — nothing here is cached client-side. */}
+        <span className="fc-community-cat" title={`Subcategory: ${community.category}`}>
+          {community.category}
+        </span>
       </div>
       <p className="fc-community-desc">{community.description || "No description yet."}</p>
       {tags.length > 0 && (

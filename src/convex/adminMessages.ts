@@ -9,7 +9,6 @@ import {
   deletedForMeExpiresAt,
   deletedMessagePreview,
   isRetainedHiddenMessage,
-  isRetainedOwnDeletion,
   matchesDeletedMessageSearch,
 } from "../lib/deleted-messages";
 
@@ -25,13 +24,24 @@ import {
  * This module is that missing view, in two deliberately separate lists, both
  * reachable only by callers with panel access (`requirePanelAccess`, rank >=
  * admin):
- *   - `listMineDeletedMessages` — the caller's OWN messages they hid;
- *   - `listMineHiddenMessages` — the moderation list: any message the caller hid
- *     themselves (an administrator may moderate another member's message without
- *     restoring it to their own history first). It never becomes a way to browse
- *     arbitrary private conversations: a row exists only because the caller
- *     already saw that message and hid it, and the global delete
- *     (`deletion.deleteHiddenForEveryone`) re-checks the role on the server.
+ *   - `listMineDeletedMessages` — "My Deleted Messages": the caller's OWN
+ *     messages they deleted for themselves;
+ *   - `listMineHiddenMessages` — "Hidden Messages": the moderation list of any
+ *     retained message the caller hid (an administrator may moderate another
+ *     member's message without restoring it to their own history first). It
+ *     never becomes a way to browse arbitrary private conversations: a row
+ *     exists only because the caller already saw that message and hid it.
+ *
+ * HIDDEN vs DELETED
+ * -----------------
+ * "Hidden" is the delete-for-me marker: your own view only, nobody else's copy
+ * is touched by hiding. "Deleted" means the message itself is removed — every
+ * delete in this module PURGES the message for every participant (content, GIF,
+ * attachment records and orphaned files, reactions, and all visibility markers),
+ * leaving no "this message was deleted" placeholder behind. Whichever list an
+ * administrator deletes from, the row disappears from everyone's history; the
+ * only difference between the two tabs is which sender's messages the caller is
+ * allowed to reach (own vs anyone they had hidden).
  *
  * Neither list ever shows a message deleted for everyone — its content is gone.
  *
@@ -371,8 +381,10 @@ export const listMineHiddenMessages = query({
 });
 
 /**
- * Permanently remove ONE of my own retained messages (the content, its
- * attachment records and any file that no other message still references).
+ * Permanently remove ONE of my own retained messages COMPLETELY — the message
+ * row itself, its attachment records and any file no other message still
+ * references — so it is gone for every participant, not replaced by a
+ * placeholder.
  *
  * Server-enforced: panel access, the visibility row must be mine, and the
  * message must actually be mine. A message that was deleted for everyone is
@@ -443,16 +455,21 @@ export const permanentlyDeleteMine = mutation({
 });
 
 /**
- * The facts the shared eligibility rule needs about one of MY OWN markers, read
- * with indexed point lookups only (no scans). Used by the bulk purge, which must
- * decide "is this still listed and still mine to remove?" before touching a
- * message — the same rule the list itself uses, so the two can never disagree.
+ * The facts the shared eligibility rule needs about one of MY markers, read with
+ * indexed point lookups only (no scans). Used by the bulk purges, which must
+ * decide "is this still listed and may I remove it?" before touching a message —
+ * the same rule the list itself uses, so the two can never disagree.
+ *
+ * `ownSenderOnly` is the difference between the two tabs, exactly as in the
+ * lists: "My Deleted Messages" only purges messages I wrote, the moderation list
+ * purges any retained message I hid.
  */
-async function loadRetainedOwnTarget(
+async function loadRetainedTarget(
   ctx: MutationCtx,
   viewerId: Id<"users">,
   vis: Doc<"messageVisibility">,
   now: number,
+  ownSenderOnly: boolean,
 ): Promise<{ kind: "channel"; message: Doc<"messages"> } | { kind: "dm"; message: Doc<"dmMessages"> } | null> {
   const channelMessageId = ctx.db.normalizeId("messages", vis.messageId);
   const dmMessageId = channelMessageId ? null : ctx.db.normalizeId("dmMessages", vis.messageId);
@@ -465,7 +482,7 @@ async function loadRetainedOwnTarget(
       .query("attachments")
       .withIndex("by_message", (q) => q.eq("messageId", channelMessageId))
       .take(1);
-    const eligible = isRetainedOwnDeletion({
+    const eligible = isRetainedHiddenMessage({
       viewerId,
       hiddenByUserId: vis.userId,
       messageExists: true,
@@ -476,6 +493,7 @@ async function loadRetainedOwnTarget(
       hasGif: Boolean(message.gif),
       hiddenAt: vis.hiddenAt,
       entryExpiredAt: vis.entryExpiredAt,
+      requireOwnSender: ownSenderOnly,
       now,
     });
     return eligible ? { kind: "channel", message } : null;
@@ -487,7 +505,7 @@ async function loadRetainedOwnTarget(
     .query("attachments")
     .withIndex("by_dm_message", (q) => q.eq("dmMessageId", dmMessageId!))
     .take(1);
-  const eligible = isRetainedOwnDeletion({
+  const eligible = isRetainedHiddenMessage({
     viewerId,
     hiddenByUserId: vis.userId,
     messageExists: true,
@@ -498,9 +516,72 @@ async function loadRetainedOwnTarget(
     hasGif: Boolean(message.gif),
     hiddenAt: vis.hiddenAt,
     entryExpiredAt: vis.entryExpiredAt,
+    requireOwnSender: ownSenderOnly,
     now,
   });
   return eligible ? { kind: "dm", message } : null;
+}
+
+/**
+ * Permanently delete up to one bounded batch of the caller's retained entries,
+ * newest first, newest marker window only.
+ *
+ * A COMPLETE delete: the message row goes with the purge — for every
+ * participant — along with its attachment records (and any file no other message
+ * still references), its reactions and every visibility marker pointing at it.
+ * That is what "delete from the Admin Panel" means here: the message is removed,
+ * not replaced with a "this message was deleted" placeholder.
+ *
+ * Bounded by design: it examines at most `PURGE_ALL_WINDOW` indexed markers and
+ * removes at most `PURGE_ALL_BATCH` of them per call, reporting what is left so
+ * the caller can run it again. Never an unbounded transaction.
+ */
+async function purgeRetainedBatch(
+  ctx: MutationCtx,
+  viewerId: Id<"users">,
+  ownSenderOnly: boolean,
+  audit: { action: string; detail: (deleted: number) => string },
+): Promise<{ deleted: number; remaining: number; hasMore: boolean }> {
+  const markers = await ctx.db
+    .query("messageVisibility")
+    .withIndex("by_user", (q) => q.eq("userId", viewerId))
+    .order("desc")
+    .take(PURGE_ALL_WINDOW);
+
+  const now = Date.now();
+  let deleted = 0;
+  let remaining = 0;
+  for (const vis of markers) {
+    const target = await loadRetainedTarget(ctx, viewerId, vis, now, ownSenderOnly);
+    if (!target) continue; // expired, already gone, deleted for everyone, or not listable here
+    if (deleted >= PURGE_ALL_BATCH) {
+      remaining++;
+      continue;
+    }
+    if (target.kind === "channel") await deleteChannelMessage(ctx, target.message);
+    else await deleteDmMessage(ctx, target.message);
+    deleted++;
+  }
+
+  if (deleted > 0) {
+    const name = await displayNameOf(ctx, viewerId);
+    await auditAdmin(ctx, {
+      action: audit.action,
+      actorId: viewerId,
+      actorName: name,
+      targetType: "user",
+      targetId: viewerId,
+      targetName: name,
+      detail: audit.detail(deleted),
+    });
+  }
+
+  return {
+    deleted,
+    remaining,
+    // The window was full, so there may be more entries beyond it.
+    hasMore: markers.length === PURGE_ALL_WINDOW,
+  };
 }
 
 /**
@@ -520,46 +601,33 @@ export const permanentlyDeleteAllMine = mutation({
   handler: async (ctx) => {
     const viewerId = await currentUserId(ctx);
     await requirePanelAccess(ctx, viewerId);
+    return await purgeRetainedBatch(ctx, viewerId, true, {
+      action: "message.delete_permanent_all",
+      detail: (deleted) =>
+        `Permanently deleted ${deleted} of their own retained "delete for me" message${deleted === 1 ? "" : "s"} (deleted completely, for everyone)`,
+    });
+  },
+});
 
-    const markers = await ctx.db
-      .query("messageVisibility")
-      .withIndex("by_user", (q) => q.eq("userId", viewerId))
-      .order("desc")
-      .take(PURGE_ALL_WINDOW);
-
-    const now = Date.now();
-    let deleted = 0;
-    let remaining = 0;
-    for (const vis of markers) {
-      const target = await loadRetainedOwnTarget(ctx, viewerId, vis, now);
-      if (!target) continue; // expired, already gone, deleted for everyone, or not mine
-      if (deleted >= PURGE_ALL_BATCH) {
-        remaining++;
-        continue;
-      }
-      if (target.kind === "channel") await deleteChannelMessage(ctx, target.message);
-      else await deleteDmMessage(ctx, target.message);
-      deleted++;
-    }
-
-    if (deleted > 0) {
-      await auditAdmin(ctx, {
-        action: "message.delete_permanent_all",
-        actorId: viewerId,
-        actorName: await displayNameOf(ctx, viewerId),
-        targetType: "user",
-        targetId: viewerId,
-        targetName: await displayNameOf(ctx, viewerId),
-        detail: `Permanently deleted ${deleted} of their own retained "delete for me" message${deleted === 1 ? "" : "s"}`,
-      });
-    }
-
-    return {
-      deleted,
-      remaining,
-      // The window was full, so there may be more entries beyond it.
-      hasMore: markers.length === PURGE_ALL_WINDOW,
-    };
+/**
+ * The moderation list's bulk action: permanently delete every retained message
+ * the administrator hid themselves, whoever wrote it.
+ *
+ * Same bounds, same eligibility rule and same complete deletion as
+ * `permanentlyDeleteAllMine`; it only relaxes the own-sender requirement, which
+ * is exactly what "Hidden Messages" lists. It can never reach a message the
+ * caller had not already hidden (every row it reads is their own marker).
+ */
+export const permanentlyDeleteAllHidden = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const viewerId = await currentUserId(ctx);
+    await requirePanelAccess(ctx, viewerId);
+    return await purgeRetainedBatch(ctx, viewerId, false, {
+      action: "message.delete_permanent_all_hidden",
+      detail: (deleted) =>
+        `Permanently deleted ${deleted} hidden message${deleted === 1 ? "" : "s"} they had hidden (deleted completely, for everyone)`,
+    });
   },
 });
 

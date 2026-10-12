@@ -41,6 +41,34 @@ export const ADMIN_PIN_UNLOCK_MINUTES = 30;
 
 const DIGITS_ONLY = new RegExp(`^\\d{${ADMIN_PIN_MIN_DIGITS},${ADMIN_PIN_MAX_DIGITS}}$`);
 
+/**
+ * Wrong-PIN delays.
+ *
+ * A few genuine typos cost nothing, but from the third consecutive failure the
+ * wait DOUBLES each time (5s, 10s, 20s, 40s… ) up to a 15-minute ceiling, so
+ * guessing gets progressively more expensive instead of being a constant-speed
+ * grind. The count only resets when the correct PIN is entered, or after a long
+ * quiet period (`ADMIN_PIN_LOCKOUT_DECAY_MS`), so an abandoned guessing run does
+ * not penalise an honest administrator hours later.
+ */
+export const ADMIN_PIN_LOCKOUT_AFTER = 3;
+export const ADMIN_PIN_LOCKOUT_BASE_MS = 5_000;
+export const ADMIN_PIN_LOCKOUT_MAX_MS = 15 * 60 * 1000;
+/** Quiet period after which the consecutive-failure count starts over. */
+export const ADMIN_PIN_LOCKOUT_DECAY_MS = 60 * 60 * 1000;
+
+/**
+ * How long to wait after `failedAttempts` CONSECUTIVE failures (0 = no wait).
+ * Monotonically non-decreasing, capped, and never longer than the ceiling.
+ */
+export function adminPinLockoutFor(failedAttempts: number): number {
+  if (!Number.isFinite(failedAttempts) || failedAttempts < ADMIN_PIN_LOCKOUT_AFTER) return 0;
+  const step = Math.floor(failedAttempts) - ADMIN_PIN_LOCKOUT_AFTER; // 0 → the first delay
+  // Doubling on integers; Math.min keeps the ceiling exact even when 2 ** step
+  // would overflow into Infinity for a huge attempt count.
+  return Math.min(ADMIN_PIN_LOCKOUT_BASE_MS * 2 ** step, ADMIN_PIN_LOCKOUT_MAX_MS);
+}
+
 /** True when `pin` is a string of 1–10 digits (leading zeros kept). */
 export function isAdminPinValid(pin: unknown): pin is string {
   return typeof pin === "string" && DIGITS_ONLY.test(pin);

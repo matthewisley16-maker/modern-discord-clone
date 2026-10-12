@@ -92,7 +92,7 @@ export default function SearchView({
           {communityResults.map((c) => (
             <button key={c.serverId} className="fc-row fc-row-main" onClick={() => onOpenCommunity(c.serverId)}>
               <CommunityResultIcon name={c.name} iconUrl={c.iconUrl} />
-              <span><strong>{c.name}</strong><small>{c.description || "No description"} · {c.memberCount} members</small></span>
+              <span><strong>{c.name}</strong><small>{c.description || "No description"} · {c.category} · {c.memberCount} members</small></span>
             </button>
           ))}
         </section>

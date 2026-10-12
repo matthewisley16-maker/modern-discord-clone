@@ -15,6 +15,7 @@ import {
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { isDeletedForMeExpired } from "../lib/deleted-messages";
+import { deleteChannelMessage, deleteDmMessage } from "./storage";
 
 /** Hide a message for the current user only. Never touches the message itself. */
 async function hideForMe(
@@ -218,17 +219,26 @@ export const deleteDmForEveryone = mutation({
 });
 
 /**
- * Globally delete a message the caller had ALREADY hidden with "Delete for me".
+ * COMPLETELY delete a message the caller had ALREADY hidden with "Delete for
+ * me" — the Admin Panel route for retained messages.
  *
- * This is the Admin Panel route for retained messages: an administrator does not
- * have to restore a hidden message to their normal history (the hide is left in
- * place — the message stays out of their view) and does not have to find it in
- * the conversation again. The caller's own `messageVisibility` row is the proof
- * they could see the message in the first place, and platform-administrator
- * access is re-verified here on the server.
+ * "Delete from the Admin Panel" means the message is REMOVED, for everyone: the
+ * row itself, its GIF, its attachment records (and any stored file no other
+ * message still references), its reactions and every visibility marker pointing
+ * at it. Nothing is left behind for other participants to see — no "this message
+ * was deleted" placeholder — which is exactly what distinguishes deleting here
+ * from hiding a message for yourself. (The in-conversation "Delete for everyone"
+ * is unchanged: it redacts the row and keeps the placeholder, so a conversation's
+ * history still reads coherently. Only this admin route removes it outright.)
  *
- * If the stored content is already gone (deleted for everyone earlier, or swept
- * by retention) nothing is invented: the caller is told it is already deleted.
+ * An administrator does not have to restore a hidden message to their normal
+ * history first (the hide is left in place — the message stays out of their view)
+ * and does not have to find it in the conversation again: their own
+ * `messageVisibility` row is the proof they could see it, and platform-
+ * administrator access is re-verified here on the server.
+ *
+ * If the content is already gone (deleted for everyone earlier, or swept by
+ * retention) nothing is invented: the caller is told it is already deleted.
  */
 export const deleteHiddenForEveryone = mutation({
   args: { visibilityId: v.id("messageVisibility") },
@@ -264,14 +274,17 @@ export const deleteHiddenForEveryone = mutation({
       if (!message) throw new ConvexError("That message no longer exists — its content is already gone.");
       if (message.deletedForEveryone) return { alreadyDeleted: true };
       const isAuthor = message.userId === userId;
-      await redactChannelMessage(ctx, message, userId, !isAuthor);
       const channel = await ctx.db.get(message.channelId);
       const label = channel ? `#${channel.name}` : "a removed channel";
+      // Complete removal: the message, its attachments (and orphaned files),
+      // reactions and every visibility marker go with it — for everyone, with no
+      // placeholder left in anyone's history.
+      await deleteChannelMessage(ctx, message);
       await audit(
         ctx,
         "message.delete_admin",
         userId,
-        `Deleted ${isAuthor ? "own" : `${await displayNameOf(ctx, message.userId)}'s`} hidden message in ${label}`,
+        `Completely deleted ${isAuthor ? "own" : `${await displayNameOf(ctx, message.userId)}'s`} hidden message in ${label}`,  
         "message",
         message._id,
       );
@@ -282,14 +295,14 @@ export const deleteHiddenForEveryone = mutation({
     if (!message) throw new ConvexError("That message no longer exists — its content is already gone.");
     if (message.deletedForEveryone) return { alreadyDeleted: true };
     const isAuthor = message.userId === userId;
-    await redactDmMessage(ctx, message, userId);
     const conversation = await ctx.db.get(message.conversationId);
     const label = conversation?.name?.trim() || (conversation?.type === "group" ? "a group chat" : "a direct message");
+    await deleteDmMessage(ctx, message);
     await audit(
       ctx,
       "dm.delete_admin",
       userId,
-      `Deleted ${isAuthor ? "own" : `${await displayNameOf(ctx, message.userId)}'s`} hidden message in ${label}`,
+      `Completely deleted ${isAuthor ? "own" : `${await displayNameOf(ctx, message.userId)}'s`} hidden message in ${label}`,
       "dmMessage",
       message._id,
     );

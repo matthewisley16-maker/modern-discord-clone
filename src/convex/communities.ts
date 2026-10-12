@@ -23,6 +23,14 @@ import {
 } from "./lib";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import {
+  COMMUNITY_CATEGORIES,
+  communityCategoryMatches,
+  communityCategoryOf,
+  communityCategoryProblem,
+  DEFAULT_COMMUNITY_CATEGORY,
+  normalizeCommunityCategory,
+} from "../lib/community-categories";
 
 /** Community cover art / banner limits (mirrors the client-side picker). */
 const COVER_MAX_BYTES = 5 * 1024 * 1024;
@@ -117,6 +125,10 @@ export const create = mutation({
     }
     const name = args.name.trim();
     if (name.length < 2 || name.length > 50) throw new Error("Community name must be 2-50 characters.");
+    // The subcategory is validated against the ONE supported list, so a new
+    // community can never start life in a category Discover's filters can't reach.
+    const categoryProblem = args.category === undefined ? null : communityCategoryProblem(args.category);
+    if (categoryProblem) throw new Error(categoryProblem);
     const serverId = await ctx.db.insert("servers", {
       name,
       description: args.description.trim().slice(0, 200),
@@ -124,7 +136,7 @@ export const create = mutation({
       inviteCode: inviteCode(),
       isPublic: args.isPublic ?? false,
       tags: (args.tags ?? []).slice(0, 6).map((t) => t.trim().slice(0, 20)).filter(Boolean),
-      category: args.category?.slice(0, 30),
+      category: normalizeCommunityCategory(args.category) ?? DEFAULT_COMMUNITY_CATEGORY,
       iconColor: "violet",
     });
     await ctx.db.insert("memberships", { serverId, userId, role: "owner" });
@@ -144,6 +156,52 @@ export const create = mutation({
     }
     await audit(ctx, "community.create", userId, `Created community "${name}"`, "community", serverId);
     return serverId;
+  },
+});
+
+/**
+ * Change ONE community's subcategory, at any time after creation.
+ *
+ * The official way to edit a subcategory: it touches only `servers.category`
+ * (one field, one indexed patch — nothing else about the community is read,
+ * rewritten or reset), it is permission-gated on the server, and the value is
+ * validated against the supported list before anything is written.
+ *
+ * PERMISSIONS: the owner, or a member whose stored role/permissions include
+ * `manageCommunity` (community admins) — an ordinary member can never change it,
+ * whatever the client sends. Freecord platform administrators manage communities
+ * through the Admin Panel (`admin.updateCommunity`), which uses the same rule.
+ *
+ * OUTDATED VALUES: a community whose stored value is no longer offered can keep
+ * it (submitting it unchanged) or switch to a supported one; any NEW value must
+ * be supported.
+ */
+export const setCategory = mutation({
+  args: { serverId: v.id("servers"), category: v.string() },
+  handler: async (ctx, { serverId, category }) => {
+    const userId = await currentUserId(ctx);
+    await requirePermission(ctx, serverId, userId, "manageCommunity");
+    const server = await ctx.db.get(serverId);
+    if (!server) throw new ConvexError("Community not found.");
+
+    const problem = communityCategoryProblem(category, server.category);
+    if (problem) throw new ConvexError(problem);
+
+    const previous = communityCategoryOf(server.category);
+    // Either the canonical supported spelling, or the unchanged stored value.
+    const next = normalizeCommunityCategory(category) ?? previous;
+    if (next === previous) return { category: next, changed: false };
+
+    await ctx.db.patch(serverId, { category: next });
+    await audit(
+      ctx,
+      "community.category.update",
+      userId,
+      `Changed the subcategory of "${server.name}" from ${previous} to ${next}`,
+      "community",
+      serverId,
+    );
+    return { category: next, changed: true };
   },
 });
 
@@ -252,6 +310,8 @@ export const updateSettings = mutation({
   handler: async (ctx, { serverId, ...patch }) => {
     const userId = await currentUserId(ctx);
     await requirePermission(ctx, serverId, userId, "manageCommunity");
+    const previous = await ctx.db.get(serverId);
+    if (!previous) throw new ConvexError("Community not found.");
     const clean: Record<string, unknown> = {};
     if (patch.name !== undefined) {
       const name = patch.name.trim();
@@ -263,12 +323,19 @@ export const updateSettings = mutation({
     if (patch.bannerColor !== undefined) clean.bannerColor = patch.bannerColor;
     if (patch.iconColor !== undefined) clean.iconColor = patch.iconColor;
     if (patch.tags !== undefined) clean.tags = patch.tags.slice(0, 6);
-    if (patch.category !== undefined) clean.category = patch.category;
+    // The subcategory is validated here too, against the same supported list the
+    // dedicated editor uses: a settings save can never file a community into an
+    // unsupported category, and an OUTDATED stored value passes when it is
+    // submitted unchanged, so saving other settings never rewrites it.
+    if (patch.category !== undefined) {
+      const problem = communityCategoryProblem(patch.category, previous.category);
+      if (problem) throw new ConvexError(problem);
+      clean.category = normalizeCommunityCategory(patch.category) ?? communityCategoryOf(previous.category);
+    }
     if (patch.slowModeSeconds !== undefined) clean.slowModeSeconds = Math.max(0, Math.min(300, patch.slowModeSeconds));
     // Cover art: the uploaded object is validated server-side before it is
     // referenced, and the blob it replaces (or the one being cleared) is dropped
     // so old covers never accumulate in file storage.
-    const previous = await ctx.db.get(serverId);
     const replaced: Id<"_storage">[] = [];
     if (patch.iconStorageId !== undefined) {
       await assertUsableCover(ctx, patch.iconStorageId);
@@ -358,8 +425,11 @@ export const discover = query({
     const term = q?.trim().toLowerCase();
     const out = [];
     for (const server of all) {
-      // Communities without an explicit category belong to "General".
-      if (category && (server.category ?? "General") !== category) continue;
+      // The filter runs against the community's CURRENT stored value (canonical
+      // for a supported subcategory, the stored text for an outdated one), so a
+      // change moves a community out of its old filter and into its new one on
+      // the next read — there is no cached copy to go stale.
+      if (category && !communityCategoryMatches(server.category, category)) continue;
       if (term && !`${server.name} ${server.description} ${(server.tags ?? []).join(" ")}`.toLowerCase().includes(term)) continue;
       const members = await ctx.db.query("memberships").withIndex("by_server", (x) => x.eq("serverId", server._id)).collect();
       out.push({
@@ -371,7 +441,7 @@ export const discover = query({
         iconUrl: server.iconStorageId ? await ctx.storage.getUrl(server.iconStorageId) : null,
         memberCount: members.length,
         tags: server.tags ?? [],
-        category: server.category ?? "General",
+        category: communityCategoryOf(server.category),
       });
     }
     return out.sort((a, b) => b.memberCount - a.memberCount).slice(0, 40);
@@ -381,9 +451,14 @@ export const discover = query({
 export const categories = query({
   args: {},
   handler: async (ctx) => {
+    // Every supported subcategory is offered (so the filter row matches the list
+    // an owner can actually choose from), plus any OUTDATED value still stored on
+    // a public community — those communities would otherwise become unreachable
+    // from Discover even though they exist. Bounded read, same as before.
     const all = await ctx.db.query("servers").withIndex("by_public", (q) => q.eq("isPublic", true)).take(200);
-    const set = new Set(all.map((s) => s.category ?? "General"));
-    return [...set].sort();
+    const set = new Set<string>([...COMMUNITY_CATEGORIES]);
+    for (const s of all) set.add(communityCategoryOf(s.category));
+    return [...set].sort((a, b) => a.localeCompare(b));
   },
 });
 

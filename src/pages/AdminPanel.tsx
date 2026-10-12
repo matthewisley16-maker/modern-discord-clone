@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toSafeArray } from "@/lib/collection";
 import { DELETED_FOR_ME_TTL_MS, deletedForMeRemainingLabel } from "@/lib/deleted-messages";
+import { communityCategoryOptions } from "@/lib/community-categories";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -101,23 +102,25 @@ function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMor
         : "rounded-lg border border-sky-400/25 bg-sky-400/[0.06] p-3 text-xs text-muted-foreground"}>
         {mine ? (
           <>
-            Every entry below is a <span className="text-amber-200">local delete only</span> — the message stays hidden
-            from your normal chat history (nothing here restores it) and its content is still in storage. Messages
-            deleted for <em>everyone</em> are not listed: their content was already removed and cannot be recovered.
+            <span className="text-amber-200">Deleting here deletes for real.</span> Each entry is one of your own
+            messages that you removed from your view with “Delete for me” — its content is still in storage. Pressing
+            delete removes the message <em>completely, for every participant</em> (content, attachments and files, no
+            “message deleted” placeholder). Messages already deleted for everyone are not listed: there is nothing
+            left to recover.
             <br />
             Each entry expires on its own <span className="text-amber-200">{RETENTION_DAYS} days</span> after you deleted
-            the message for yourself: it then disappears from this list without any action from you. Expiring an entry
-            removes the entry only — the message stays hidden for you, and everyone else keeps their own copy and
-            attachments.
+            the message for yourself and then disappears from this list without any action — expiring only drops the
+            entry, so the message stays hidden for you and everyone else keeps their copy.
           </>
         ) : (
           <>
-            This list only contains messages <span className="text-sky-200">you</span> hid, so it never becomes a window
-            into other people&apos;s private conversations. Deleting for everyone removes the content and its
-            attachments for all participants — it cannot be restored, and a message already deleted for everyone is
-            not listed. Entries you hid are listable for <span className="text-sky-200">{RETENTION_DAYS} days</span>;
-            after that they expire on their own and can no longer be deleted from here (everyone keeps their own copy
-            either way).
+            <span className="text-sky-200">Hiding is per person; deleting is for everyone.</span> This list only contains
+            messages <span className="text-sky-200">you</span> hid with “Delete for me” — hiding never changed anyone
+            else&apos;s view, and the list never becomes a window into other people&apos;s private conversations. Deleting
+            from here removes the message <em>completely for all participants</em> — content, attachments and files,
+            with no placeholder left — and cannot be restored. Entries are listable for{" "}
+            <span className="text-sky-200">{RETENTION_DAYS} days</span>; after that they expire on their own and can no
+            longer be deleted from here.
           </>
         )}
       </p>
@@ -135,7 +138,7 @@ function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMor
             {searching
               ? "Try a different word, conversation or file name."
               : mine
-                ? "When you delete one of your own messages with “Delete for me”, it appears here."
+                ? "When you remove one of your own messages with “Delete for me”, it appears here until you delete it completely or it expires."
                 : "Messages you hide with “Delete for me” show up here while their content is still retained."}
           </p>
         </div>
@@ -160,7 +163,7 @@ function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMor
           <div key={item.visibilityId} className="rounded-lg border border-white/8 bg-white/[0.02] p-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className={mine ? "border-amber-400/40 text-amber-300" : "border-sky-400/40 text-sky-200"}>
-                {mine ? "Deleted for me — retained in storage" : "Hidden by you — retained in storage"}
+                {mine ? "Hidden for me — still in storage, deletable" : "Hidden by you — deletable for everyone"}
               </Badge>
               <Badge variant="secondary">
                 {item.conversationType === "channel"
@@ -225,7 +228,7 @@ function RetainedRows({ mode, rows, status, searching, busy, onDelete, onLoadMor
                 disabled={busy}
                 onClick={() => onDelete(item)}
               >
-                <Trash2 className="mr-1 size-4" /> {mine ? "Permanently Delete" : "Delete for everyone"}
+                <Trash2 className="mr-1 size-4" /> {mine ? "Delete completely" : "Delete for everyone"}
               </Button>
             </div>
           </div>
@@ -382,6 +385,7 @@ export default function AdminPanel() {
   const [deletedSearch, setDeletedSearch] = useState("");
   const [pendingPurge, setPendingPurge] = useState<RetainedRow | null>(null);
   const [purgeAllOpen, setPurgeAllOpen] = useState(false);
+  const [purgeAllHiddenOpen, setPurgeAllHiddenOpen] = useState(false);
   // Moderation list: messages I hid (any sender) that can still be deleted for everyone.
   const [moderationQuery, setModerationQuery] = useState("");
   const [moderationSearch, setModerationSearch] = useState("");
@@ -429,13 +433,14 @@ export default function AdminPanel() {
   const updatePlatformSettings = useMutation(api.admin.updatePlatformSettings);
   const permanentlyDeleteMine = useMutation(api.adminMessages.permanentlyDeleteMine);
   const permanentlyDeleteAllMine = useMutation(api.adminMessages.permanentlyDeleteAllMine);
+  const permanentlyDeleteAllHidden = useMutation(api.adminMessages.permanentlyDeleteAllHidden);
   const deleteHiddenForEveryone = useMutation(api.deletion.deleteHiddenForEveryone);
 
   const [pending, setPending] = useState<PendingAction>(null);
   const [reason, setReason] = useState("");
   const [durationHours, setDurationHours] = useState("24");
   const [settingsDraft, setSettingsDraft] = useState<{ announcement: string; newCommunitiesEnabled: boolean; discoveryEnabled: boolean } | null>(null);
-  const [editCommunity, setEditCommunity] = useState<null | { serverId: string; name: string; description: string; isPublic: boolean; locked: boolean }>(null);
+  const [editCommunity, setEditCommunity] = useState<null | { serverId: string; name: string; description: string; isPublic: boolean; locked: boolean; category: string }>(null);
   const [busy, setBusy] = useState(false);
 
   const actorRole = access?.role ?? "user";
@@ -496,6 +501,38 @@ export default function AdminPanel() {
       setReason("");
     } catch (err) {
       toast.error(friendly(err, "Action failed."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * One bounded batch of a "delete everything in this tab" action. The backend
+   * removes at most 10 entries per call and says what is left, so the click is
+   * never an unbounded transaction: the button stays available to continue, and
+   * the dialog closes as soon as nothing remains.
+   */
+  const runBulkPurge = async (
+    purge: () => Promise<{ deleted: number; remaining: number; hasMore: boolean }>,
+    close: () => void,
+  ) => {
+    setBusy(true);
+    try {
+      const result = await purge();
+      if (result.deleted === 0) {
+        toast.success("Nothing left to remove — the list is already empty.");
+        close();
+        return;
+      }
+      const plural = result.deleted === 1 ? "" : "s";
+      if (result.remaining > 0 || result.hasMore) {
+        toast.success(`Removed ${result.deleted} message${plural}, completely. More are still listed — run the action again to continue.`);
+      } else {
+        toast.success(`Removed ${result.deleted} message${plural} completely, for everyone.`);
+        close();
+      }
+    } catch (err) {
+      toast.error(friendly(err, "Could not delete the messages."));
     } finally {
       setBusy(false);
     }
@@ -609,8 +646,11 @@ export default function AdminPanel() {
           <TabsList className="bg-white/5">
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="communities">Communities</TabsTrigger>
-            <TabsTrigger value="deleted">My Deleted Messages</TabsTrigger>
-            <TabsTrigger value="moderation">Hidden Messages</TabsTrigger>
+            {/* The two lists are deliberately named for what they mean: "Hidden"
+                is per-person (delete for me), "Deleted" removes the message for
+                everyone. */}
+            <TabsTrigger value="deleted">Deleted Messages</TabsTrigger>
+            <TabsTrigger value="moderation">Hidden (only for you)</TabsTrigger>
             <TabsTrigger value="audit">Audit Log</TabsTrigger>
             <TabsTrigger value="settings">Platform Settings</TabsTrigger>
           </TabsList>
@@ -755,7 +795,7 @@ export default function AdminPanel() {
                             <div className="flex justify-end gap-2">
                               <Button
                                 size="sm" variant="outline"
-                                onClick={() => setEditCommunity({ serverId: c.serverId, name: c.name, description: c.description, isPublic: c.isPublic, locked: c.locked })}
+                                onClick={() => setEditCommunity({ serverId: c.serverId, name: c.name, description: c.description, isPublic: c.isPublic, locked: c.locked, category: c.category })}
                               >
                                 Edit
                               </Button>
@@ -789,7 +829,7 @@ export default function AdminPanel() {
             <Card className="border-white/10 bg-card/40">
               <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <CardTitle className="text-base">My deleted messages</CardTitle>
+                  <CardTitle className="text-base">Deleted messages — deleting here deletes for everyone</CardTitle>
                   <CardDescription>
                     Messages you sent and then deleted for yourself. Their content is retained in storage — and listed
                     here — for {RETENTION_DAYS} days after you deleted it, then the entry expires by itself.
@@ -835,20 +875,32 @@ export default function AdminPanel() {
             <Card className="border-white/10 bg-card/40">
               <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <CardTitle className="text-base">Messages you hid — moderation</CardTitle>
+                  <CardTitle className="text-base">Hidden messages — hidden from you, deletable for everyone</CardTitle>
                   <CardDescription>
-                    Every retained message you deleted for yourself, whoever wrote it. Delete one for everyone here
-                    without restoring it to your own history first.
+                    Messages you hid with “Delete for me”, whoever wrote them. Hiding changed nobody else&apos;s view;
+                    deleting one here removes it completely for all participants, without restoring it to your own
+                    history first.
                   </CardDescription>
                 </div>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={moderationQuery}
-                    onChange={(e) => setModerationQuery(e.target.value)}
-                    placeholder="Search text, conversation, file"
-                    className="w-full pl-8 sm:w-64"
-                  />
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={moderationQuery}
+                      onChange={(e) => setModerationQuery(e.target.value)}
+                      placeholder="Search text, conversation, file"
+                      className="w-full pl-8 sm:w-64"
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-destructive"
+                    disabled={busy}
+                    onClick={() => setPurgeAllHiddenOpen(true)}
+                  >
+                    <Trash2 className="mr-1 size-4" /> Delete all hidden messages
+                  </Button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -1007,6 +1059,24 @@ export default function AdminPanel() {
                   className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring"
                 />
               </div>
+              {/* Administrators may re-file a community while managing it, using
+                  the same supported list the owner-facing editor offers. */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Subcategory</label>
+                <Select
+                  value={editCommunity.category}
+                  onValueChange={(value) => setEditCommunity({ ...editCommunity, category: value })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {communityCategoryOptions(editCommunity.category).map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.legacy ? `${o.value} (no longer offered)` : o.value}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="flex items-center justify-between gap-4">
                 <span className="text-sm">Public (discoverable)</span>
                 <Switch checked={editCommunity.isPublic} onCheckedChange={(v) => setEditCommunity({ ...editCommunity, isPublic: v })} />
@@ -1031,6 +1101,7 @@ export default function AdminPanel() {
                     description: target.description,
                     isPublic: target.isPublic,
                     locked: target.locked,
+                    category: target.category,
                   }),
                   "Community updated.",
                 );
@@ -1047,7 +1118,7 @@ export default function AdminPanel() {
       <Dialog open={pendingModerate !== null} onOpenChange={(open) => { if (!open) setPendingModerate(null); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete this message for everyone?</DialogTitle>
+            <DialogTitle>Delete this message completely?</DialogTitle>
             <DialogDescription>
               {pendingModerate
                 ? `“${pendingModerate.preview}” — sent by ${pendingModerate.senderName} in ${pendingModerate.conversationName}`
@@ -1055,8 +1126,9 @@ export default function AdminPanel() {
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            The message is removed for <strong>all participants</strong>, and its attachments are deleted. This cannot
-            be undone. It stays hidden from your own view either way.
+            The message is removed <strong>completely, for all participants</strong> — its content, its attachments and
+            any file no other message still uses, with no “message deleted” placeholder left behind. This cannot be
+            undone. It stays hidden from your own view either way.
           </p>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setPendingModerate(null)}>Cancel</Button>
@@ -1072,7 +1144,7 @@ export default function AdminPanel() {
                   toast.success(
                     result.alreadyDeleted
                       ? "That message had already been deleted for everyone."
-                      : "Message deleted for everyone.",
+                      : "Message deleted completely, for everyone.",
                   );
                   setPendingModerate(null);
                 } catch (err) {
@@ -1082,7 +1154,7 @@ export default function AdminPanel() {
                 }
               }}
             >
-              Delete for everyone
+              Delete completely
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1094,42 +1166,49 @@ export default function AdminPanel() {
           <DialogHeader>
             <DialogTitle>Delete all deleted messages?</DialogTitle>
             <DialogDescription>
-              Permanently removes every retained message listed under “My deleted messages” — the content, its
-              attachments and any file no other message still uses.
+              Completely removes every message listed under “My deleted messages” — the message itself, its content,
+              its attachments and any file no other message still uses.
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm text-destructive">
-            This is permanent and cannot be undone. Other participants keep their own messages and attachments, and
-            entries that have already expired are not affected (they are cleaned up automatically). Up to 10 entries
-            are removed per action — run it again to continue while entries remain.
+            This is permanent and cannot be undone: the messages are gone for <strong>every participant</strong>.
+            Entries that have already expired are not affected (they are cleaned up automatically). Up to 10 are
+            removed per action — run it again to continue while entries remain.
           </p>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setPurgeAllOpen(false)}>Cancel</Button>
             <Button
               variant="destructive"
               disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  const result = await permanentlyDeleteAllMine({});
-                  if (result.deleted === 0) {
-                    toast.success("Nothing left to remove — the list is already empty.");
-                    setPurgeAllOpen(false);
-                  } else if (result.remaining > 0 || result.hasMore) {
-                    toast.success(
-                      `Removed ${result.deleted} retained message${result.deleted === 1 ? "" : "s"}. ` +
-                        "More are still listed — run “Delete all deleted messages” again to continue.",
-                    );
-                  } else {
-                    toast.success(`Removed ${result.deleted} retained message${result.deleted === 1 ? "" : "s"}.`);
-                    setPurgeAllOpen(false);
-                  }
-                } catch (err) {
-                  toast.error(friendly(err, "Could not delete the messages."));
-                } finally {
-                  setBusy(false);
-                }
-              }}
+              onClick={() => runBulkPurge(() => permanentlyDeleteAllMine({}), () => setPurgeAllOpen(false))}
+            >
+              Delete all
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* "Delete All Hidden Messages" — the moderation list's bulk cleanup */}
+      <Dialog open={purgeAllHiddenOpen} onOpenChange={(open) => { if (!open) setPurgeAllHiddenOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete all hidden messages?</DialogTitle>
+            <DialogDescription>
+              Completely removes every message listed under “Hidden Messages” — whoever wrote them — including their
+              content, attachments and any file no other message still uses.
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-destructive">
+            This is permanent and cannot be undone: the messages disappear from <strong>everyone&apos;s</strong> history
+            with no “message deleted” placeholder left behind. Only messages you had already hidden are affected. Up
+            to 10 are removed per action — run it again to continue while entries remain.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPurgeAllHiddenOpen(false)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={() => runBulkPurge(() => permanentlyDeleteAllHidden({}), () => setPurgeAllHiddenOpen(false))}
             >
               Delete all
             </Button>

@@ -16,6 +16,7 @@ import {
   requirePanelAccess,
   ROLE_RANK,
 } from "./lib";
+import { communityCategoryOf, communityCategoryProblem, normalizeCommunityCategory } from "../lib/community-categories";
 
 /**
  * ---------------------------------------------------------------------------
@@ -602,6 +603,10 @@ export const listCommunities = query({
         description: server.description,
         isPublic: server.isPublic ?? false,
         locked: server.locked ?? false,
+        // The community's current subcategory (canonical spelling, or the stored
+        // text when it is one we no longer offer) so an administrator can see and
+        // re-file it from here without loading the community itself.
+        category: communityCategoryOf(server.category),
         memberCount: members.length,
         ownerName: await displayNameOf(ctx, server.ownerId),
         ownerId: server.ownerId,
@@ -619,6 +624,12 @@ export const updateCommunity = mutation({
     description: v.optional(v.string()),
     isPublic: v.optional(v.boolean()),
     locked: v.optional(v.boolean()),
+    /**
+     * The community's subcategory. Freecord administrators manage communities
+     * here, so they can re-file one too — validated against the same supported
+     * list as the owner-facing editor, and never accepted as a client guess.
+     */
+    category: v.optional(v.string()),
   },
   handler: async (ctx, { serverId, ...patch }) => {
     const userId = await currentUserId(ctx);
@@ -635,6 +646,11 @@ export const updateCommunity = mutation({
     if (patch.description !== undefined) update.description = patch.description.trim().slice(0, 200);
     if (patch.isPublic !== undefined) update.isPublic = patch.isPublic;
     if (patch.locked !== undefined) update.locked = patch.locked;
+    if (patch.category !== undefined) {
+      const problem = communityCategoryProblem(patch.category, server.category);
+      if (problem) throw new ConvexError(problem);
+      update.category = normalizeCommunityCategory(patch.category) ?? communityCategoryOf(server.category);
+    }
     if (Object.keys(update).length === 0) return { updated: false };
 
     await ctx.db.patch(serverId, update);

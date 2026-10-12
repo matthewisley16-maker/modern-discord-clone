@@ -328,6 +328,18 @@ A group with no photo (or a deleted one) renders the shared default group icon
 
 ## Admin Panel: my own messages I deleted for myself
 
+The two retention tabs are deliberately named for what they MEAN, and they are not the same thing:
+
+- **Hidden (only for you)** — a per-person delete (`deleteForMe` / `deleteDmForMe`): ONE
+  `messageVisibility` row for the caller, the message untouched and still visible to everyone else.
+  From here an administrator may moderate it for everyone (`deleteHiddenForEveryone`), which is a
+  COMPLETE removal — the row, its attachments and every marker, with no "this message was deleted"
+  placeholder left in anyone's history.
+- **Deleted Messages** — the caller's own retained entries, where deleting means deleting for
+  everyone: `permanentlyDeleteMine` / `permanentlyDeleteAllMine` also remove the message row itself.
+
+Both tabs auto-empty after seven days (see the section below) and both have a confirmed bulk action.
+
 "Delete for me" never deleted anything. `deletion.deleteForMe` (channels) and
 `deletion.deleteDmForMe` (DMs) insert ONE `messageVisibility` row and the history queries
 (`chat.messages`, `dms.messages`, `search`) filter that id out — the body, the GIF and the
@@ -339,10 +351,10 @@ deletion metadata, and it is indexed `by_user`, so the section reads only the ca
 
 | Surface | Where |
 | --- | --- |
-| Section (tab "My Deleted Messages") | `src/pages/AdminPanel.tsx` |
+| Section (tab "Deleted Messages") | `src/pages/AdminPanel.tsx` |
 | Query `adminMessages.listMineDeletedMessages` | `src/convex/adminMessages.ts` |
 | Purge one `adminMessages.permanentlyDeleteMine` | `src/convex/adminMessages.ts` |
-| Purge all `adminMessages.permanentlyDeleteAllMine` ("Delete all deleted messages") | `src/convex/adminMessages.ts` |
+| Purge all `adminMessages.permanentlyDeleteAllMine` ("Delete All Deleted Messages") | `src/convex/adminMessages.ts` |
 | Eligibility / preview / search / seven-day window rules | `src/lib/deleted-messages.ts` (`bun deleted-messages-test.mjs`) |
 | Seven-day expiry sweep | `src/convex/deleteForMeRetention.ts` (cron in `src/convex/crons.ts`) |
 
@@ -467,15 +479,77 @@ administrator authority.
   the same with the PIN on or off.
 - **Storage and abuse.** The PIN is only ever a one-way Scrypt hash (`pinHash`), never returned by
   a query, never logged and never echoed in an error; crypto runs in actions, not queries. Failed
-  entries are rate limited (`enforceLimit`) and after 5 failures the account is locked out for 5
-  minutes (`lockedUntil`), which the UI counts down. 1–10 digits are accepted and kept as a STRING
-  throughout, so leading zeros are significant (`007` differs from `7`) — the input field
-  sanitises to digits only and never parses the value as a number.
+  entries are rate limited (`enforceLimit`) and the wait grows PROGRESSIVELY (`adminPinLockoutFor`):
+  the first two typos are free, and from the third consecutive failure the delay doubles each time
+  — 5s, 10s, 20s, 40s … capped at 15 minutes — so guessing slows down instead of running at a
+  constant rate. The streak resets on a correct PIN and also decays after an hour of quiet
+  (`ADMIN_PIN_LOCKOUT_DECAY_MS`), so an honest administrator is never punished for an old mistype.
+  `lockedUntil` is stored server-side and the UI counts the wait down. 1–10 digits are accepted and
+  kept as a STRING throughout, so leading zeros are significant (`007` differs from `7`) — the input
+  field sanitises to digits only and never parses the value as a number.
 - **Verification.** `bun admin-pin-test.mjs` covers the rules offline (fixed inputs, leading
-  zeros, sanitising, lockout countdown) AND the live boundary with no session: the status read
-  returns safe defaults, and setPin / unlock / disable / skip / lock are all refused by the
-  server-side sign-in gate (44 assertions). A real administrator clicking through the gate needs a
-  live admin session, which cannot be automated against this deployment.
+  zeros, sanitising, progressive-delay maths, lockout countdown) AND the live boundary with no
+  session: the status read returns safe defaults, and setPin / unlock / disable / skip / lock are
+  all refused by the server-side sign-in gate (57 assertions). A real administrator clicking
+  through the gate needs a live admin session, which cannot be automated against this deployment.
+
+## Editing a community's subcategory after creation
+
+A community's subcategory is ONE field on its existing `servers` row (`servers.category`), so it can
+be changed at any time without recreating anything:
+
+| Step | Where |
+| --- | --- |
+| The supported list + every rule (normalise, legacy, validate, match) | `src/lib/community-categories.ts` |
+| Change it (owner / community admin) | `communities.setCategory` in `src/convex/communities.ts` |
+| Change it (platform administrator) | `admin.updateCommunity { category }` in `src/convex/admin.ts` |
+| Owner-facing editor ("Edit Subcategory", Save / Cancel) | `src/components/dashboard/CommunitySettings.tsx` |
+| Admin Panel community dialog | `src/pages/AdminPanel.tsx` |
+| Everywhere it is shown/filtered | `communities.discover`, `communities.categories`, `search.global`, `DiscoverView.tsx`, `SearchView.tsx` |
+
+- **One field, one indexed patch.** `setCategory` patches `servers.category` and nothing else: it
+  never touches members, messages, channels, roles, permissions, invites, icons or covers, so no
+  data is reset and no community is duplicated. It also short-circuits when the value is unchanged
+  (`{ changed: false }`), so re-saving the same subcategory is not even a write.
+- **Permissions are server-side.** `requirePermission(ctx, serverId, userId, "manageCommunity")`
+  runs first: the owner and community admins pass, an ordinary member is refused no matter what
+  the client sends. The Admin Panel route (`admin.updateCommunity`) requires `requirePanelAccess`
+  (rank >= admin). Nothing here is a client-side check.
+- **Validation against the one list.** Both routes validate with `communityCategoryProblem`
+  (case-insensitive, canonical spelling stored: "gaming" → "Gaming"). A value the server refuses
+  is a value no picker offers, because the pickers use the same module.
+- **Outdated values are handled gracefully.** A community whose stored value is no longer offered is
+  still displayed, searched and filterable under that text (`communityCategoryOf`), the editor shows
+  it as "no longer offered" so the owner can keep it or switch, and `communities.categories` keeps
+  offering the value while any public community still uses it — an outdated community never becomes
+  unreachable in Discover.
+- **Immediate everywhere, no stale cache.** `discover`, `categories` and `search.global` all read
+  the current stored value on every query, and the Discover card, filter row, search result and
+  settings panel are reactive `useQuery` subscriptions — so a save moves the community out of its
+  old filter and into its new one on the next read, with nothing cached client-side.
+
+## Sidebar and message-row layout stability
+
+Two layout bugs were pure CSS and are now pinned by tests instead of by memory:
+`bun layout-stability-test.mjs` parses `src/index.css` and asserts the invariants below.
+
+- **A folder opening can only change vertical height.** The far-left rail is a literal width
+  (`width` + matching `min-width`/`max-width`, `flex-shrink: 0`), it clips horizontally
+  (`overflow-x: hidden`) and scrolls vertically (`overflow-y: auto`), and it reserves a stable
+  scrollbar gutter (`scrollbar-gutter: stable`) so becoming scrollable cannot shift anything.
+  Every row inside is width-bounded (`.fc-rail-servers`/`.fc-rail-item` are `min-width: 0;
+  max-width: 100%`) and nested servers are narrower than the rail at every breakpoint.
+- **The community sidebar is a literal width too.** `.fc-sidebar` now pins `min-width`/`max-width`
+  as well as `width`: a flex item's automatic minimum size is its CONTENT's min-content width, so a
+  long channel name (or extra rows) could otherwise widen the sidebar and resize the whole layout.
+  The intentional collapse (`@media (min-width: 761px) .fc-sidebar.collapsed { width: 0; min-width:
+  0; max-width: 0 }`) and the mobile drawer keep their behaviour; the main panel stays
+  `flex: 1; min-width: 0` so it absorbs the space instead of squeezing the panes.
+- **Hovering a message lights the WHOLE tile.** The highlight is the row's own `background-color`
+  (`.fc-message:hover`, full border box), not an inner element's or a partial overlay's — the avatar,
+  the body and the action buttons are all covered at full width and height, in every theme
+  (`fc-light`, `fc-contrast`, `fc-midnight`), and `background-color` is the only property animated so
+  hovering cannot cause a layout shift. `.fc-message.menu-open` keeps its violet tint.
 
 ## Community cover art in Discover
 

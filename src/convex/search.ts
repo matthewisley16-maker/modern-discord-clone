@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { avatarUrlOf, displayNameOf, profileOf, settingsOf } from "./lib";
+import { communityCategoryOf } from "../lib/community-categories";
 import type { QueryCtx } from "./_generated/server";
 
 async function presenceOf(ctx: QueryCtx, userId: string) {
@@ -23,7 +24,7 @@ export const global = query({
     const want = filter ?? "all";
     const out: {
       people: { userId: string; username: string; displayName: string; avatarColor: string; avatarUrl: string | null; decorationId: string | null }[];
-      communities: { serverId: string; name: string; description: string; iconColor: string; iconUrl: string | null; memberCount: number }[];
+      communities: { serverId: string; name: string; description: string; iconColor: string; iconUrl: string | null; memberCount: number; category: string }[];
       messages: { messageId: string; body: string; author: string; channelName: string; communityName: string; createdAt: number }[];
       channels: { channelId: string; name: string; communityName: string }[];
     } = { people: [], communities: [], messages: [], channels: [] };
@@ -64,6 +65,9 @@ export const global = query({
           serverId: server._id,
           name: server.name,
           description: server.description,
+          // Read from the community's CURRENT stored value on every query, so a
+          // saved subcategory change shows up here without any client cache.
+          category: communityCategoryOf(server.category),
           iconColor: server.iconColor ?? "violet",
           // The community's own uploaded cover, exactly as Discover/rail/sidebar
           // resolve it, so a community looks the same everywhere it appears.

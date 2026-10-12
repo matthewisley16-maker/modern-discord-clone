@@ -345,7 +345,9 @@ const schema = defineSchema(
       /** One-way Scrypt hash of the 1–10 digit PIN. Never returned to a client. */
       pinHash: v.optional(v.string()),
       failedAttempts: v.number(),
-      lockedUntil: v.optional(v.number()), // temporary lockout after repeated failures
+      lockedUntil: v.optional(v.number()), // progressive delay after repeated failures
+      /** When the last wrong PIN was entered (drives the delay escalation). */
+      lastFailedAt: v.optional(v.number()),
       /**
        * Short-lived elevation for ONE auth session, granted by a correct PIN.
        * Scoped to `unlockedSessionId` so signing out or opening another device

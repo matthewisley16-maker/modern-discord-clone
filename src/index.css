@@ -217,7 +217,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 @media (max-width: 600px) { .landing-nav { padding: 20px; gap: 10px; }.freecord-mark { font-size: 26px; }.freecord-mark svg { width: 26px; }.nav-actions { gap: 16px; }.nav-cta { display: none; }.mobile-menu { display: block; color: #a78bfa; }.nav-links.mobile-open { position: absolute; top: 72px; left: 20px; right: 20px; padding: 20px; border: 1px solid rgba(255, 255, 255, .09); border-radius: 12px; display: flex; flex-direction: column; align-items: flex-start; background: #14141b; z-index: 20; box-shadow: 0 18px 40px rgba(0, 0, 0, .6); }.landing-hero { margin: 0 23px; display: block; padding: 38px 0 35px; }.hero-copy h1 { font-size: 68px; margin-top: 20px; }.hero-copy > p { font-size: 13px; }.hero-aside { display: none; }.hero-actions { gap: 19px; }.hero-secondary { font-size: 11px; }.hero-footnote { margin-top: 25px; }.hero-footnote > span:last-child { font-size: 9px; }.experience-section { margin: 0 15px; }.preview-caption { padding: 0 8px 15px; }.preview-caption > span:first-child { font-size: 8px; letter-spacing: 1px; }.chat-preview { height: 535px; border-radius: 12px; }.chat-preview .server-rail { width: 48px; padding-top: 15px; }.chat-preview .server-bubble { width: 33px; height: 33px; border-radius: 11px; }.chat-preview .server-bubble.selected::before { left: -7px; }.chat-preview .channel-sidebar { display: none; }.preview-messages { padding: 20px 14px 0; }.channel-welcome h3 { font-size: 18px; }.chat-preview .conversation-header { height: 49px; padding: 0 14px; gap: 6px; }.conversation-tools { gap: 11px; }.preview-search input { width: 50px; }.preview-message { gap: 8px; }.message-content > p { font-size: 9px; }.art-card { height: 132px; }.art-headline { font-size: 26px; }.preview-composer { margin-left: 13px; margin-right: 13px; }.under-preview { gap: 16px; padding: 18px 0; font-size: 8px; }.under-preview svg { width: 11px; }.features-section { margin: 43px 23px 35px; }.feature-grid { grid-template-columns: 1fr; gap: 12px; }.feature-card { padding: 23px; }.feature-top { margin-bottom: 18px; }.feature-card h3 { font-size: 16px; }.feature-card p { font-size: 12px; }.section-heading h2 { font-size: 27px; }.section-heading .eyebrow { font-size: 8px; }.section-heading > p { font-size: 11px; }.community-cta { margin: 0 23px 35px; padding: 29px 24px; display: block; }.cta-flower { position: absolute; right: -8px; top: 8px; font-size: 85px; opacity: .5; }.community-cta > div:nth-child(2) { position: relative; }.community-cta h2 { font-size: 26px; max-width: 230px; }.community-cta p { font-size: 11px; max-width: 210px; line-height: 1.7; }.community-cta .button-dark { margin-top: 20px; padding: 13px 18px; }.landing-footer { padding: 22px; flex-wrap: wrap; gap: 10px; }.landing-footer > span:last-child { font-size: 8px; }.workspace-rail { width: 55px; padding-top: 17px; }.workspace-rail .server-bubble { width: 36px; height: 36px; border-radius: 12px; font-size: 11px; }.workspace-rail .server-bubble.selected::before { left: -9px; }.workspace-sidebar { display: none; }.workspace-sidebar.is-open { display: flex; position: absolute; left: 55px; top: 0; bottom: 0; z-index: 30; width: 240px; box-shadow: 12px 0 34px rgba(0, 0, 0, .65); }.mobile-close { display: block; margin-left: auto; }.workspace-sidebar.is-open .server-title > svg { display: none; }.workspace-main .conversation-header { height: 58px; padding: 0 12px; gap: 7px; }.workspace-main .conversation-header > strong { font-size: 12px; max-width: 95px; overflow: hidden; text-overflow: ellipsis; }.workspace-main .conversation-header > svg { width: 17px; }.workspace-main .header-divider { display: none; }.workspace-main .conversation-tools { gap: 9px; }.workspace-main .preview-search { padding: 5px; }.workspace-main .preview-search input { width: 50px; font-size: 9px; }.workspace-main .conversation-tools > button { display: none; }.workspace-messages { padding: 23px 14px 10px; }.workspace-messages .channel-welcome h3 { font-size: 23px; overflow-wrap: anywhere; }.workspace-messages .channel-welcome p { font-size: 11px; }.real-message { gap: 8px; }.real-message .avatar { width: 30px; height: 30px; font-size: 9px; }.real-message .message-byline strong { font-size: 11px; }.real-message .message-byline > span { font-size: 8px; }.real-message .real-message-body { font-size: 12px; }.message-actions { opacity: 1; position: absolute; right: 0; top: -7px; padding: 2px 5px; background: #1e1d28; border: 1px solid rgba(255, 255, 255, .08); border-radius: 7px; }.message-actions button { padding: 1px; font-size: 11px; }.message-actions svg { width: 12px; }.workspace-composer-wrap { padding: 0 0 11px; }.workspace-composer-wrap .preview-composer { margin-left: 11px; margin-right: 11px; padding: 12px 9px; gap: 8px; }.workspace-composer-wrap .preview-composer input { font-size: 11px; }.composer-note { margin: 8px 14px 0; font-size: 8px; }.composer-note > span { display: none; }.workspace-empty { padding: 25px 17px; }.workspace-empty h1 { font-size: 43px; }.workspace-empty p { font-size: 11px; }.workspace-empty .hero-actions { flex-direction: column; gap: 15px; }.workspace-empty .eyebrow { font-size: 7px; }.empty-flower { font-size: 85px; }.emoji-picker { left: 11px; right: 11px; gap: 8px; flex-wrap: wrap; }.emoji-picker button { font-size: 19px; }.no-messages { padding: 35px 8px; } }
 /* ============ Freecord dashboard ============ */
 .fc-shell { display: flex; height: 100dvh; min-height: 420px; background: #0b0b10; color: #eeecf6; overflow: hidden; }
-.fc-rail { width: 72px; flex-shrink: 0; background: #0d0d12; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px 0 14px; overflow-y: auto; }
+/* The far-left rail has a LITERAL fixed width, and its scrollbar gutter is
+   always reserved (`scrollbar-gutter: stable`). That is what keeps the layout
+   still when a folder is opened: expanding one only adds vertical content, the
+   rail scrolls inside itself, and the gutter means even a scrollbar appearing or
+   disappearing cannot narrow the icons or shove the neighbouring columns. The
+   min/max pair makes the width independent of its content, and `overflow-x:
+   hidden` stops any wide child from creating a horizontal scrollbar. */
+.fc-rail { width: 72px; min-width: 72px; max-width: 72px; flex-shrink: 0; background: #0d0d12; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px 0 14px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; }
+.fc-rail::-webkit-scrollbar { width: 8px; }
+.fc-rail::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 4px; }
+.fc-rail::-webkit-scrollbar-track { background: transparent; }
 .fc-rail-logo { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; }
 .fc-rail-rule { width: 30px; height: 1px; background: rgba(255,255,255,.09); }
 .fc-rail-btn { position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: #1c1a26; color: #b7b1cc; }
@@ -226,11 +236,15 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-rail-btn.selected::before { content: ""; position: absolute; left: -14px; width: 3px; height: 22px; border-radius: 2px; background: #a78bfa; }
 .fc-rail-btn.bottom { margin-top: auto; }
 .fc-rail-badge { position: absolute; top: -3px; right: -3px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: #f0616d; color: #fff; font-size: 10px; font-style: normal; font-weight: 700; display: grid; place-items: center; }
-.fc-rail-server { width: 44px; height: 44px; border-radius: 14px; background: #1c1a26; color: #cfc7e6; font-size: 13px; font-weight: 700; display: grid; place-items: center; }
+.fc-rail-server { width: 44px; min-width: 44px; height: 44px; flex-shrink: 0; border-radius: 14px; background: #1c1a26; color: #cfc7e6; font-size: 13px; font-weight: 700; display: grid; place-items: center; }
 .fc-rail-server:hover { background: #262335; transform: translateY(-2px); }
 .fc-rail-server.selected { background: linear-gradient(135deg,#8b5cf6,#6d3ff5); color: #fff; }
 .fc-rail-server.add { background: #1c1a26; color: #a78bfa; }
-.fc-sidebar { width: 244px; flex-shrink: 0; background: #121218; display: flex; flex-direction: column; }
+/* A flex item's automatic minimum size is its CONTENT'S min-content width, so a
+   long channel/conversation name (or the extra rows a folder expands into) could
+   otherwise push the sidebar wider and resize the whole layout. min/max pin the
+   community sidebar to one literal width, exactly like the rail. */
+.fc-sidebar { width: 244px; min-width: 244px; max-width: 244px; flex-shrink: 0; background: #121218; display: flex; flex-direction: column; }
 .fc-sidebar-head { height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid rgba(255,255,255,.06); }
 .fc-sidebar-title { font-size: 13px; font-weight: 650; }
 .fc-close-mobile { display: none; }
@@ -338,6 +352,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-tag-row { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 16px; }
 .fc-tag { font-size: 10px; padding: 2px 7px; border-radius: 999px; background: rgba(139,92,246,.15); color: #c4b5f7; }
 .fc-community-card-actions { display: flex; justify-content: flex-end; padding: 0 16px; }
+/* The community's subcategory, straight from its stored value — so editing it
+   moves the card into the right filter chip immediately. */
+.fc-community-cat { margin-left: auto; flex-shrink: 0; font-size: 10px; padding: 3px 9px; border-radius: 999px; background: rgba(139,92,246,.16); color: #c4b5f7; border: 1px solid rgba(139,92,246,.3); white-space: nowrap; }
+html.fc-light .fc-community-cat { background: rgba(124,92,246,.14); color: #5b3fd6; border-color: rgba(124,92,246,.35); }
 .fc-conversation { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #17171f; position: relative; }
 .fc-conversation-head { height: 58px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid rgba(255,255,255,.06); }
 .fc-head-icon { color: #7c7890; }
@@ -379,8 +397,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-welcome-hash { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; background: rgba(139,92,246,.14); color: #a78bfa; }
 .fc-channel-welcome h2 { font-size: 24px; font-weight: 650; margin: 12px 0 6px; }
 .fc-channel-welcome p { font-size: 12px; color: #8b87a0; }
-.fc-message { position: relative; display: flex; gap: 11px; padding: 9px 8px; margin: 0 -8px 4px; border-radius: 8px; }
-.fc-message:hover, .fc-message:focus-within { background: rgba(255,255,255,.04); }
+/* A message row is ONE rectangle. The hover highlight is painted as the row's
+   OWN background (never on an inner element), so it always covers the full
+   rectangle — avatar, body AND action buttons, full width and full height —
+   and can never light up only part of the tile. Children paint above their
+   parent's background which is what the menu/pinned tint below relies on. */
+.fc-message { position: relative; display: flex; align-items: flex-start; gap: 11px; padding: 9px 10px; margin: 0 -10px 4px; border-radius: 10px; background-color: transparent; transition: background-color .12s ease; }
+.fc-message:hover, .fc-message:focus-within { background-color: rgba(255,255,255,.075); }
 .fc-message-body { flex: 1; min-width: 0; }
 .fc-message-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .fc-author { font-size: 13px; font-weight: 650; color: #eeecf6; }
@@ -531,6 +554,21 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-icon-preview img { width: 100%; height: 100%; object-fit: cover; }
 .fc-icon-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .fc-select { background: #1e1d28; color: #eeecf6; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+
+/* ---------------------------------------------------------------------------
+   "Edit Subcategory" (community settings)
+--------------------------------------------------------------------------- */
+.fc-subcat { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.02); }
+.fc-subcat-current { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.fc-subcat-label { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #7c7890; }
+.fc-subcat-value { font-size: 14px; color: #e5e0ff; }
+.fc-subcat-legacy { font-size: 10px; padding: 2px 8px; border-radius: 999px; background: rgba(250,166,26,.16); color: #faa61a; border: 1px solid rgba(250,166,26,.3); }
+.fc-subcat-picker { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; color: #a79fd0; }
+.fc-subcat-actions { display: flex; gap: 8px; }
+.fc-subcat-hint { font-size: 11px; color: #8b87a0; }
+.fc-subcat-error { font-size: 12px; color: #f0616d; }
+html.fc-light .fc-subcat { border-color: rgba(0,0,0,.1); background: rgba(0,0,0,.015); }
+html.fc-light .fc-subcat-value { color: #2a2836; }
 .fc-visibility-note { font-size: 12px; line-height: 1.7; padding: 11px 13px; border-radius: 10px; }
 .fc-visibility-note.public { background: rgba(61,220,151,.1); border: 1px solid rgba(61,220,151,.3); color: #9fe8c4; }
 .fc-visibility-note.private { background: rgba(245,196,81,.1); border: 1px solid rgba(245,196,81,.3); color: #f0d79a; }
@@ -547,7 +585,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-confirm-quote strong { color: #fff; }
 .fc-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .fc-reply-quote.deleted { color: #6f6b82; font-style: italic; border-left-color: rgba(240,97,109,.5); }
-.fc-message.menu-open { background: rgba(139,92,246,.08); }
+.fc-message.menu-open { background-color: rgba(139,92,246,.1); }
 
 /* ===== Voice channels ===== */
 .vc-sidebar { display: flex; flex-direction: column; }
@@ -1005,7 +1043,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-voice-manage-del:hover { color: #f0616d; }
 
 /* ---------- Appearance: compact density ---------- */
-.fc-shell.density-compact .fc-message { padding: 5px 12px; }
+/* Compact density keeps the horizontal padding and the negative margin in step,
+   so a row stays flush with the list at every density. */
+.fc-shell.density-compact .fc-message { padding: 5px 10px; }
 .fc-shell.density-compact .fc-messages { padding-top: 12px; }
 
 /* ---------- Appearance themes (applied on <html>) ---------- */
@@ -1018,7 +1058,8 @@ html.fc-light .fc-members { background: #eeeef6; border-left-color: rgba(0,0,0,.
 html.fc-light .fc-channel, html.fc-light .fc-sidebar-action { color: #4b4a58; }
 html.fc-light .fc-channel:hover, html.fc-light .fc-sidebar-action:hover { background: rgba(0,0,0,.05); color: #1c1b22; }
 html.fc-light .fc-channel.active, html.fc-light .fc-sidebar-action.active { background: rgba(124,92,246,.16); color: #5b3fd6; }
-html.fc-light .fc-message:hover { background: rgba(0,0,0,.035); }
+html.fc-light .fc-message:hover, html.fc-light .fc-message:focus-within { background-color: rgba(15,17,28,.07); }
+html.fc-light .fc-message.menu-open { background-color: rgba(109,63,245,.1); }
 html.fc-light .fc-text, html.fc-light .fc-conversation-head strong, html.fc-light .fc-author { color: #1c1b22; }
 html.fc-light .fc-time, html.fc-light .fc-muted { color: #6b6880; }
 html.fc-light .fc-composer { background: #e6e5ef; }
@@ -1034,7 +1075,8 @@ html.fc-light .fc-floating-menu button { color: #34323f; }
 html.fc-light .fc-floating-menu button:hover, html.fc-light .fc-floating-menu button:focus-visible { background: rgba(124,92,246,.12); color: #1c1b22; }
 html.fc-light .fc-floating-menu .fc-floating-sep { background: rgba(0,0,0,.09); }
 /* High contrast */
-html.fc-contrast .fc-message:hover { background: rgba(255,255,255,.1); }
+html.fc-contrast .fc-message:hover, html.fc-contrast .fc-message:focus-within { background-color: rgba(255,255,255,.14); }
+html.fc-midnight .fc-message:hover, html.fc-midnight .fc-message:focus-within { background-color: rgba(255,255,255,.075); }
 html.fc-contrast .fc-text, html.fc-contrast .fc-channel, html.fc-contrast .fc-sidebar-action { color: #ffffff; }
 html.fc-contrast .fc-muted, html.fc-contrast .fc-time { color: #cfcbdd; }
 /* Midnight (deeper than the default dark) */
@@ -1126,17 +1168,19 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
   /* Smooth expand/collapse: animate the width and clip the content. */
   .fc-sidebar { transition: width .24s ease, opacity .2s ease; overflow: hidden; }
   .fc-sidebar > * { min-width: 210px; }
-  .fc-sidebar.collapsed { width: 0; min-width: 0; opacity: 0; pointer-events: none; }
+  .fc-sidebar.collapsed { width: 0; min-width: 0; max-width: 0; opacity: 0; pointer-events: none; }
 }
 
-@media (max-width: 1000px) { .fc-members { display: none; } .fc-sidebar { width: 210px; } }
+@media (max-width: 1000px) { .fc-members { display: none; } .fc-sidebar { width: 210px; min-width: 210px; max-width: 210px; } }
 @media (max-width: 760px) {
   .fc-rail.hide-mobile { display: none; }
-  .fc-rail { width: 58px; }
+  /* Narrow viewports get a narrower rail — still a LITERAL width, so the
+     folder expansion behaves exactly as it does on desktop. */
+  .fc-rail { width: 58px; min-width: 58px; max-width: 58px; }
   .fc-rail-btn, .fc-rail-server { width: 38px; height: 38px; border-radius: 12px; font-size: 11px; }
   .fc-rail-btn.selected::before { left: -10px; }
   .fc-sidebar { display: none; }
-  .fc-sidebar.open { display: flex; position: absolute; left: 58px; top: 0; bottom: 0; z-index: 50; width: 250px; box-shadow: 12px 0 34px rgba(0,0,0,.65); }
+  .fc-sidebar.open { display: flex; position: absolute; left: 58px; top: 0; bottom: 0; z-index: 50; width: 250px; min-width: 250px; max-width: 250px; box-shadow: 12px 0 34px rgba(0,0,0,.65); }
   .fc-close-mobile { display: block; color: #8b87a0; }
   .fc-menu-btn { display: block; }
   .fc-search input { width: 64px; }
@@ -1197,8 +1241,11 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
    Server rail: drag-and-drop ordering, folders/groups and the overflow
    switcher. Purely additive — it does not change any existing rail styling.
 --------------------------------------------------------------------------- */
-.fc-rail-servers { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
-.fc-rail-item { position: relative; display: grid; place-items: center; touch-action: none; -webkit-user-select: none; user-select: none; }
+/* `min-width: 0` + `max-width: 100%` keep every rail row inside the fixed rail
+   width: nested servers, long initials or a wide glyph can never widen the
+   column (or the sidebar next to it) horizontally. */
+.fc-rail-servers { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; min-width: 0; max-width: 100%; }
+.fc-rail-item { position: relative; display: grid; place-items: center; min-width: 0; max-width: 100%; flex-shrink: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
 .fc-rail-item.drag-over::before { content: ""; position: absolute; left: -7px; right: -7px; top: -7px; bottom: -7px; border: 2px dashed #a78bfa; border-radius: 16px; pointer-events: none; }
 .fc-rail-item-menu { position: absolute; top: -6px; right: -8px; width: 18px; height: 18px; border-radius: 9px; background: #2a2836; color: #cfc7e6; font-size: 12px; line-height: 1; display: grid; place-items: center; opacity: 0; transition: opacity .12s; border: 1px solid rgba(255,255,255,.12); z-index: 6; }
 .fc-rail-item:hover .fc-rail-item-menu, .fc-rail-item:focus-within .fc-rail-item-menu { opacity: 1; }
@@ -1208,7 +1255,7 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
 .fc-rail-menu-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; }
 .fc-rail-item-nested { margin-top: -7px; }
 .fc-rail-item-nested .fc-rail-server { width: 38px; height: 38px; border-radius: 12px; font-size: 12px; }
-.fc-rail-folder { position: relative; width: 44px; height: 44px; border-radius: 14px; background: #1c1a26; border: 2px solid transparent; display: grid; place-items: center; cursor: pointer; }
+.fc-rail-folder { position: relative; width: 44px; min-width: 44px; height: 44px; flex-shrink: 0; border-radius: 14px; background: #1c1a26; border: 2px solid transparent; display: grid; place-items: center; cursor: pointer; }
 .fc-rail-folder:hover { background: #262335; }
 .fc-rail-folder.open { border-color: rgba(167,139,250,.55); }
 .fc-rail-folder.contains-active { box-shadow: 0 0 0 2px rgba(167,139,250,.45); }
@@ -1244,7 +1291,8 @@ html.fc-light .fc-servers-overflow-search input { color: #1c1b22; }
 html.fc-light .fc-servers-overflow-row { color: #4b4a58; }
 html.fc-light .fc-servers-overflow-row:hover { background: rgba(0,0,0,.05); color: #1c1b22; }
 @media (max-width: 768px) {
-  .fc-rail-folder, .fc-rail-folder-grid { width: 38px; height: 38px; }
+  .fc-rail-folder, .fc-rail-folder-grid { width: 38px; min-width: 38px; height: 38px; }
+  .fc-rail-item-nested .fc-rail-server { min-width: 34px; }
   .fc-rail-item-nested .fc-rail-server { width: 34px; height: 34px; }
   .fc-servers-overflow-panel { left: 62px; width: min(300px, calc(100vw - 70px)); }
 }

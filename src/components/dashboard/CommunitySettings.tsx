@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toSafeArray } from "@/lib/collection";
+import { communityCategoryOf, communityCategoryOptions } from "@/lib/community-categories";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -10,7 +11,6 @@ import { Compass, ImagePlus, LayoutList, LogOut, Mic, Plus, Shield, Trash2, Volu
 import ChannelManager from "./ChannelManager";
 import ServerPermissions from "./ServerPermissions";
 
-const CATEGORIES = ["General", "Gaming", "Music", "Art", "Tech", "Study", "Sports", "Community"];
 const MAX_ICON_BYTES = 5 * 1024 * 1024;
 
 export default function CommunitySettings({
@@ -24,6 +24,7 @@ export default function CommunitySettings({
 }) {
   const details = useQuery(api.communities.details, { serverId });
   const update = useMutation(api.communities.updateSettings);
+  const setSubcategory = useMutation(api.communities.setCategory);
   const leave = useMutation(api.communities.leave);
   const generateUploadUrl = useMutation(api.uploads.generateUploadUrl);
   const channelTree = useQuery(api.voice.channelTree, { serverId });
@@ -47,7 +48,6 @@ export default function CommunitySettings({
   const [name, setName] = useState(server?.name ?? "");
   const [description, setDescription] = useState(server?.description ?? "");
   const [isPublic, setIsPublic] = useState(server?.isPublic ?? false);
-  const [category, setCategory] = useState(server?.category ?? "General");
   const [tags, setTags] = useState((server?.tags ?? []).join(", "));
   const [slowMode, setSlowMode] = useState(server?.slowModeSeconds ?? 0);
   const [iconStorageId, setIconStorageId] = useState<Id<"_storage"> | null>(null);
@@ -55,6 +55,39 @@ export default function CommunitySettings({
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  /**
+   * "Edit Subcategory" state. The draft is `null` while the editor simply
+   * follows the stored value; picking a value makes it dirty, Save writes ONLY
+   * the subcategory, and Cancel throws the draft away. After a successful save
+   * the draft holds the value the SERVER returned, so the panel shows the new
+   * subcategory immediately while the reactive query catches up.
+   */
+  const [subcatDraft, setSubcatDraft] = useState<string | null>(null);
+  const [subcatBusy, setSubcatBusy] = useState(false);
+  const [subcatError, setSubcatError] = useState("");
+  const currentCategory = communityCategoryOf(server?.category);
+  const subcatOptions = useMemo(() => communityCategoryOptions(server?.category), [server?.category]);
+  const subcatValue = subcatDraft ?? currentCategory;
+  const subcatDirty = subcatDraft !== null && subcatDraft !== currentCategory;
+
+  async function saveSubcategory() {
+    if (!subcatDraft) return;
+    setSubcatBusy(true);
+    setSubcatError("");
+    try {
+      const result = await setSubcategory({ serverId, category: subcatDraft });
+      setSubcatDraft(result.category);
+      toast.success(
+        result.changed ? `Subcategory updated to ${result.category}.` : `This community is already filed under ${result.category}.`,
+      );
+    } catch (e) {
+      // The chosen value is kept so a failed save can be retried with one click.
+      setSubcatError(e instanceof Error ? e.message : "Could not save the subcategory. Please try again.");
+    } finally {
+      setSubcatBusy(false);
+    }
+  }
 
   /** Upload an icon image with progress; validated server-side too. */
   async function uploadIcon(file: File) {
@@ -93,7 +126,9 @@ export default function CommunitySettings({
         name,
         description,
         isPublic,
-        category,
+        // The subcategory is deliberately NOT part of this form: it has its own
+        // editor with Save/Cancel, so it can never be changed as a side effect of
+        // saving the name or the icon.
         tags: tags.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 6),
         slowModeSeconds: slowMode,
         ...(iconStorageId ? { iconStorageId } : {}),
@@ -153,6 +188,9 @@ export default function CommunitySettings({
               You're a member of <strong>{details.server.name}</strong>. Only owners and admins can change
               its settings.
             </p>
+            <p className="fc-muted">
+              Subcategory: <strong>{communityCategoryOf(details.server.category)}</strong>
+            </p>
             <h3><LogOut size={16} /> Leave community</h3>
             <p className="fc-muted">You'll need an invite to rejoin this community later.</p>
             <Button variant="destructive" onClick={leaveCommunity} disabled={busy}>
@@ -201,11 +239,55 @@ export default function CommunitySettings({
                 : "This community is private. It is hidden from Discover and only people with an invite can join."}
             </p>
 
-            <label>Category
-              <select className="fc-select" value={category} onChange={(e) => setCategory(e.target.value)}>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </label>
+            {/* Subcategory lives in its own labelled editor with explicit cache-free
+                semantics: one field, one save, instant feedback. */}
+            <h3><Compass size={16} /> Subcategory</h3>
+            <p className="fc-muted">
+              Where this community is listed in Discover. You can change it whenever you like — members,
+              messages, channels, roles, permissions, images and invites all stay exactly as they are.
+            </p>
+            <div className="fc-subcat" role="group" aria-label="Edit subcategory">
+              <div className="fc-subcat-current">
+                <span className="fc-subcat-label">Current subcategory</span>
+                <strong className="fc-subcat-value">{currentCategory}</strong>
+                {subcatOptions.some((o) => o.legacy) && <span className="fc-subcat-legacy">no longer offered</span>}
+              </div>
+              <label className="fc-subcat-picker">
+                Change to
+                <select
+                  className="fc-select"
+                  value={subcatValue}
+                  aria-label="Community subcategory"
+                  onChange={(e) => { setSubcatDraft(e.target.value); setSubcatError(""); }}
+                >
+                  {subcatOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.legacy ? `${o.value} (no longer offered)` : o.value}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {subcatError && <p role="alert" className="fc-subcat-error">{subcatError}</p>}
+              <div className="fc-subcat-actions">
+                <Button size="sm" disabled={subcatBusy || !subcatDirty} onClick={saveSubcategory}>
+                  {subcatBusy ? "Saving…" : "Save subcategory"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={subcatBusy || !subcatDirty}
+                  onClick={() => { setSubcatDraft(null); setSubcatError(""); }}
+                >
+                  Cancel
+                </Button>
+              </div>
+              <p className="fc-subcat-hint">
+                {subcatDirty
+                  ? "Not saved yet — the change appears in Discover after you save."
+                  : "Saved. Discover, its category filters and its search use this value."}
+              </p>
+            </div>
+
             <label>Tags (comma separated, up to 6)
               <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="art, design, feedback" />
             </label>

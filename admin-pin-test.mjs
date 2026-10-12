@@ -13,9 +13,14 @@
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "./src/convex/_generated/api.js";
 import {
+  ADMIN_PIN_LOCKOUT_AFTER,
+  ADMIN_PIN_LOCKOUT_BASE_MS,
+  ADMIN_PIN_LOCKOUT_DECAY_MS,
+  ADMIN_PIN_LOCKOUT_MAX_MS,
   ADMIN_PIN_MAX_DIGITS,
   ADMIN_PIN_MIN_DIGITS,
   ADMIN_PIN_UNLOCK_MINUTES,
+  adminPinLockoutFor,
   adminPinLockoutSeconds,
   adminPinProblem,
   adminPinsMatch,
@@ -71,6 +76,24 @@ is("an already-clean PIN is unchanged", sanitizeAdminPinInput("4321"), "4321");
 
 // The unlock grant outlives one PIN entry (it is what "open for N minutes" means).
 is("an unlock grant lasts a bounded time", ADMIN_PIN_UNLOCK_MINUTES > 0 && ADMIN_PIN_UNLOCK_MINUTES <= 240, true);
+
+// ---------------------------------------------------------------------------
+// Progressive delays for wrong PINs (the rule the server applies)
+// ---------------------------------------------------------------------------
+is("a couple of typos cost nothing", adminPinLockoutFor(1), 0);
+is("the second failure still costs nothing", adminPinLockoutFor(2), 0);
+is("the first delay starts at the threshold", ADMIN_PIN_LOCKOUT_AFTER, 3);
+is("the third consecutive failure waits the base delay", adminPinLockoutFor(3), ADMIN_PIN_LOCKOUT_BASE_MS);
+is("the fourth failure waits twice as long", adminPinLockoutFor(4), ADMIN_PIN_LOCKOUT_BASE_MS * 2);
+is("the fifth failure waits four times as long", adminPinLockoutFor(5), ADMIN_PIN_LOCKOUT_BASE_MS * 4);
+is("the delay keeps growing", adminPinLockoutFor(8) > adminPinLockoutFor(7), true);
+is("the delay is capped", adminPinLockoutFor(40), ADMIN_PIN_LOCKOUT_MAX_MS);
+is("the cap is a real wait, not forever", ADMIN_PIN_LOCKOUT_MAX_MS <= 15 * 60 * 1000, true);
+is("the delay never decreases as guessing continues",
+  Array.from({ length: 30 }, (_, i) => adminPinLockoutFor(i + 1)).every((v, i, arr) => i === 0 || v >= arr[i - 1]), true);
+is("a huge attempt count cannot overflow into Infinity", Number.isFinite(adminPinLockoutFor(100_000)), true);
+is("nonsense attempt counts are treated as no wait", adminPinLockoutFor(Number.NaN), 0);
+is("an abandoned guessing run decays", ADMIN_PIN_LOCKOUT_DECAY_MS > ADMIN_PIN_LOCKOUT_MAX_MS, true);
 
 // ---------------------------------------------------------------------------
 // Lockout countdown
