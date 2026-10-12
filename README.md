@@ -326,6 +326,50 @@ A group with no photo (or a deleted one) renders the shared default group icon
 - **Freshness:** a new photo is a new storage object with a new URL, so browsers cannot show
   a cached previous image; `null` clears back to the default icon.
 
+## Admin Panel: my own messages I deleted for myself
+
+"Delete for me" never deleted anything. `deletion.deleteForMe` (channels) and
+`deletion.deleteDmForMe` (DMs) insert ONE `messageVisibility` row and the history queries
+(`chat.messages`, `dms.messages`, `search`) filter that id out — the body, the GIF and the
+attachment records all stayed in storage, unreachable by anyone. The Admin Panel now exposes
+that retention and lets the original author purge it.
+
+No schema change was needed: `messageVisibility` (`userId`, `messageId`, `channelId` |
+`conversationId`, `hiddenAt`) already IS the deletion metadata, and it is indexed `by_user`,
+so the section reads only the caller's own rows.
+
+| Surface | Where |
+| --- | --- |
+| Section (tab "My Deleted Messages") | `src/pages/AdminPanel.tsx` |
+| Query `adminMessages.listMineDeletedMessages` | `src/convex/adminMessages.ts` |
+| Purge `adminMessages.permanentlyDeleteMine` | `src/convex/adminMessages.ts` |
+| Eligibility / preview / search rules | `src/lib/deleted-messages.ts` (`bun deleted-messages-test.mjs`) |
+
+- **Scope, enforced server-side.** Both functions call `requirePanelAccess` (rank >= admin) and
+  then require the visibility row AND the message to belong to the caller. Another member's
+  local delete can never appear in someone else's panel — not even an administrator's.
+- **"Deleted for everyone" is excluded, never faked.** Those messages have no retained content,
+  so they are not listed and the purge refuses them (removing their tombstone would change what
+  other members see). A message deleted for me keeps its behaviour exactly as before; opening
+  the panel never restores it into normal chat history.
+- **One deletion implementation.** The purge calls the retention sweep's own
+  `storage.deleteChannelMessage` / `deleteDmMessage`, which delete the attachment rows and only
+  remove a storage object when no other attachment row still references it (`by_storage`
+  orphan check), plus reactions and every `messageVisibility` marker for that message.
+- **Efficiency.** `messageVisibility.by_user`, newest-first, paginated (<= 50 rows/page, <= 4
+  index pages per request while rows are filtered out by search), and the tab query is only
+  subscribed while the tab is active (`"skip"` otherwise). Display names are resolved once per
+  request; no polling and no duplicate subscription.
+- **Audited.** A successful purge writes `message.delete_permanent` to `auditLogs` and the
+  legacy moderation feed.
+- **Verification.** `bun deleted-messages-test.mjs` covers the eligibility/preview/search rules
+  offline (29 assertions); `bun deleted-messages-authz-test.mjs` calls both functions with NO
+  session and asserts the deployment refuses them with no data and no effect (it creates
+  nothing, so it is safe against the real deployment).
+- **Limitations.** The message row must still exist: a message already removed by the retention
+  sweep (past `STORAGE_RETENTION_MS`) or by "delete for everyone" cannot be recovered, and the
+  panel says so instead of pretending otherwise.
+
 ## Deployment safety (read this before deploys and before debugging a black screen)
 
 The app reads and writes ONE pinned Convex deployment (`src/main.tsx` → `CONVEX_URL`).

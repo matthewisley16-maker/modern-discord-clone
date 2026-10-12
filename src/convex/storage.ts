@@ -303,8 +303,12 @@ async function selectEligible(ctx: MutationCtx, cfg: StorageConfig, size: number
  * Delete one channel message and its disposable related data.
  * An attachment's storage object is removed ONLY when no other attachment row
  * still references it (orphan check) so a file shared by another message stays.
+ *
+ * Exported so the Admin Panel's permanent "delete my retained message" action
+ * (`adminMessages.permanentlyDeleteMine`) removes a message exactly the way
+ * retention does — one implementation, one set of safety checks.
  */
-async function deleteChannelMessage(ctx: MutationCtx, message: Doc<"messages">): Promise<void> {
+export async function deleteChannelMessage(ctx: MutationCtx, message: Doc<"messages">): Promise<void> {
   const files = await ctx.db
     .query("attachments")
     .withIndex("by_message", (q) => q.eq("messageId", message._id))
@@ -326,7 +330,8 @@ async function deleteChannelMessage(ctx: MutationCtx, message: Doc<"messages">):
   await ctx.db.delete(message._id);
 }
 
-async function deleteDmMessage(ctx: MutationCtx, message: Doc<"dmMessages">): Promise<void> {
+/** Delete one DM message and its disposable related data (orphan-safe). */
+export async function deleteDmMessage(ctx: MutationCtx, message: Doc<"dmMessages">): Promise<void> {
   const files = await ctx.db
     .query("attachments")
     .withIndex("by_dm_message", (q) => q.eq("dmMessageId", message._id))

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toSafeArray } from "@/lib/collection";
@@ -15,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import {
-  ArrowLeft, Ban, Check, Crown, Search, ShieldAlert, ShieldCheck, Trash2, UserCog, Users, Clock,
+  ArrowLeft, Ban, Check, Crown, Paperclip, Search, ShieldAlert, ShieldCheck, Trash2, UserCog, Users, Clock,
 } from "lucide-react";
 
 /** Mirrors the backend ROLE_RANK so the UI reflects — never decides — authority. */
@@ -89,6 +90,9 @@ type PendingAction =
   | { type: "delete"; user: AdminUser }
   | null;
 
+/** One row of `api.adminMessages.listMineDeletedMessages` (type taken from the query itself). */
+type DeletedMessageRow = FunctionReturnType<typeof api.adminMessages.listMineDeletedMessages>["page"][number];
+
 export default function AdminPanel() {
   const navigate = useNavigate();
   const access = useQuery(api.admin.panelAccess, {});
@@ -112,11 +116,25 @@ export default function AdminPanel() {
   // tabs genuinely need `stats` and the synthetic-data audit, but the tab lists
   // do not: nothing is fetched for a tab the admin is not looking at (`"skip"`).
   const [tab, setTab] = useState("users");
+  // "My deleted messages": only the ACTIVE tab is subscribed (see the note above).
+  const [deletedQuery, setDeletedQuery] = useState("");
+  const [deletedSearch, setDeletedSearch] = useState("");
+  const [pendingPurge, setPendingPurge] = useState<DeletedMessageRow | null>(null);
   const users = useQuery(
     api.admin.listUsers,
     tab === "users"
       ? { q: userQuery.trim() || undefined, role: roleFilter === "all" ? undefined : roleFilter }
       : "skip",
+  );
+  // Debounced so typing in the search box does not re-run the query per key.
+  useEffect(() => {
+    const timer = setTimeout(() => setDeletedSearch(deletedQuery), 300);
+    return () => clearTimeout(timer);
+  }, [deletedQuery]);
+  const deletedMessages = usePaginatedQuery(
+    api.adminMessages.listMineDeletedMessages,
+    tab === "deleted" ? { search: deletedSearch.trim() || undefined } : "skip",
+    { initialNumItems: 20 },
   );
   const communities = useQuery(api.admin.listCommunities, tab === "communities" ? {} : "skip");
   const auditLogs = useQuery(api.admin.listAuditLogs, tab === "audit" ? { limit: 150 } : "skip");
@@ -134,6 +152,10 @@ export default function AdminPanel() {
   const userList = useMemo(() => toSafeArray<NonNullable<typeof users>[number]>(users, { label: "Admin users", source: "api.admin.listUsers" }), [users]);
   const communityList = useMemo(() => toSafeArray<NonNullable<typeof communities>[number]>(communities, { label: "Admin communities", source: "api.admin.listCommunities" }), [communities]);
   const auditLogList = useMemo(() => toSafeArray<NonNullable<typeof auditLogs>[number]>(auditLogs, { label: "Admin audit log", source: "api.admin.listAuditLogs" }), [auditLogs]);
+  const deletedList = useMemo(
+    () => toSafeArray<DeletedMessageRow>(deletedMessages.results, { label: "My deleted messages", source: "api.adminMessages.listMineDeletedMessages" }),
+    [deletedMessages.results],
+  );
 
   const setUserRole = useMutation(api.admin.setUserRole);
   const banUser = useMutation(api.admin.banUser);
@@ -144,6 +166,7 @@ export default function AdminPanel() {
   const deleteCommunity = useMutation(api.admin.deleteCommunity);
   const updateCommunity = useMutation(api.admin.updateCommunity);
   const updatePlatformSettings = useMutation(api.admin.updatePlatformSettings);
+  const permanentlyDeleteMine = useMutation(api.adminMessages.permanentlyDeleteMine);
 
   const [pending, setPending] = useState<PendingAction>(null);
   const [reason, setReason] = useState("");
@@ -316,6 +339,7 @@ export default function AdminPanel() {
           <TabsList className="bg-white/5">
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="communities">Communities</TabsTrigger>
+            <TabsTrigger value="deleted">My Deleted Messages</TabsTrigger>
             <TabsTrigger value="audit">Audit Log</TabsTrigger>
             <TabsTrigger value="settings">Platform Settings</TabsTrigger>
           </TabsList>
@@ -489,6 +513,138 @@ export default function AdminPanel() {
             </Card>
           </TabsContent>
 
+          {/* ---------------- My deleted messages ---------------- */}
+          <TabsContent value="deleted" className="mt-4">
+            <Card className="border-white/10 bg-card/40">
+              <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle className="text-base">My deleted messages</CardTitle>
+                  <CardDescription>
+                    Messages you sent and then deleted for yourself. Their content is still retained in storage until
+                    you remove it here.
+                  </CardDescription>
+                </div>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={deletedQuery}
+                    onChange={(e) => setDeletedQuery(e.target.value)}
+                    placeholder="Search text, conversation, file"
+                    className="w-full pl-8 sm:w-64"
+                  />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="rounded-lg border border-amber-400/25 bg-amber-400/[0.06] p-3 text-xs text-muted-foreground">
+                  Every entry below is a <span className="text-amber-200">local delete only</span> — the message stays
+                  hidden from your normal chat history (nothing here restores it) and its content is still in storage.
+                  Messages deleted for <em>everyone</em> are not listed: their content was already removed and cannot
+                  be recovered.
+                </p>
+
+                {deletedMessages.status === "LoadingFirstPage" && (
+                  <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+                )}
+
+                {deletedMessages.status === "Exhausted" && deletedList.length === 0 && (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground">
+                      {deletedSearch.trim() ? "No deleted messages match your search." : "No deleted messages."}
+                    </p>
+                    <p className="mt-1 text-xs">
+                      {deletedSearch.trim()
+                        ? "Try a different word, conversation or file name."
+                        : "When you delete one of your own messages with “Delete for me”, it appears here."}
+                    </p>
+                  </div>
+                )}
+
+                {deletedList.map((item) => (
+                  <div key={item.visibilityId} className="rounded-lg border border-white/8 bg-white/[0.02] p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="border-amber-400/40 text-amber-300">
+                        Deleted for me — retained in storage
+                      </Badge>
+                      <Badge variant="secondary">
+                        {item.conversationType === "channel"
+                          ? "Channel"
+                          : item.conversationType === "group"
+                            ? "Group DM"
+                            : "Direct message"}
+                      </Badge>
+                      <span className="truncate text-sm font-medium">{item.conversationName}</span>
+                      {item.communityName && (
+                        <span className="text-xs text-muted-foreground">in {item.communityName}</span>
+                      )}
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {new Date(item.sentAt).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm text-foreground/90">
+                      {item.body.trim() ? item.body : item.preview}
+                    </p>
+
+                    {(item.attachments.length > 0 || item.gifUrl) && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {item.attachments.map((file, index) =>
+                          file.isImage && file.url ? (
+                            <img
+                              key={`${item.visibilityId}-att-${index}`}
+                              src={file.url}
+                              alt={file.name}
+                              className="h-20 w-20 rounded-md border border-white/10 object-cover"
+                            />
+                          ) : (
+                            <span
+                              key={`${item.visibilityId}-att-${index}`}
+                              className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-muted-foreground"
+                            >
+                              <Paperclip className="size-3" /> {file.name}
+                            </span>
+                          ),
+                        )}
+                        {item.gifUrl && (
+                          <img
+                            src={item.gifUrl}
+                            alt="GIF"
+                            className="h-20 rounded-md border border-white/10 object-cover"
+                          />
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      <span>Sent by {item.senderName}</span>
+                      <span aria-hidden>·</span>
+                      <span>Deleted for you {new Date(item.hiddenAt).toLocaleString()}</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="ml-auto text-destructive"
+                        disabled={busy}
+                        onClick={() => setPendingPurge(item)}
+                      >
+                        <Trash2 className="mr-1 size-4" /> Permanently Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+
+                {deletedMessages.status === "CanLoadMore" && (
+                  <div className="flex justify-center pt-1">
+                    <Button variant="secondary" size="sm" onClick={() => deletedMessages.loadMore(20)}>
+                      Load older deleted messages
+                    </Button>
+                  </div>
+                )}
+                {deletedMessages.status === "LoadingMore" && (
+                  <p className="py-2 text-center text-xs text-muted-foreground">Loading…</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* ---------------- Audit log ---------------- */}
           <TabsContent value="audit" className="mt-4">
             <Card className="border-white/10 bg-card/40">
@@ -658,6 +814,49 @@ export default function AdminPanel() {
               }}
             >
               Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Permanent delete confirmation (My Deleted Messages) */}
+      <Dialog open={pendingPurge !== null} onOpenChange={(open) => { if (!open) setPendingPurge(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Permanently delete this message?</DialogTitle>
+            <DialogDescription>
+              {pendingPurge ? `“${pendingPurge.preview}” in ${pendingPurge.conversationName}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-destructive">
+            The retained message content, its attachments and any file no other message still uses will be removed
+            from storage. This is permanent and cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingPurge(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={async () => {
+                if (!pendingPurge) return;
+                const target = pendingPurge;
+                setBusy(true);
+                try {
+                  const result = await permanentlyDeleteMine({ visibilityId: target.visibilityId });
+                  toast.success(
+                    result.alreadyGone
+                      ? "The stored message was already gone — the entry was removed."
+                      : "Message and its attachments permanently deleted.",
+                  );
+                  setPendingPurge(null);
+                } catch (err) {
+                  toast.error(friendly(err, "Could not permanently delete the message."));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Delete permanently
             </Button>
           </DialogFooter>
         </DialogContent>
