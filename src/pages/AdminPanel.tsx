@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { AdminPinGate, AdminPinSettings } from "@/components/admin/admin-pin";
+import CleanupMaintenance from "@/components/admin/CleanupMaintenance";
 import { toast } from "sonner";
 import {
   ArrowLeft, Ban, Check, Crown, ImagePlus, Paperclip, Search, ShieldAlert, ShieldCheck, Trash2, UserCog, Users, Clock,
@@ -691,6 +692,10 @@ export default function AdminPanel() {
             <TabsTrigger value="deleted">Deleted Messages</TabsTrigger>
             <TabsTrigger value="moderation">Hidden (only for you)</TabsTrigger>
             <TabsTrigger value="audit">Audit Log</TabsTrigger>
+            {/* Destructive maintenance lives in its own category, deliberately
+                away from the everyday tabs, and every action inside it is
+                re-authorized server-side. */}
+            <TabsTrigger value="cleanup">Cleanup &amp; Maintenance</TabsTrigger>
             <TabsTrigger value="settings">Platform Settings</TabsTrigger>
           </TabsList>
 
@@ -1083,6 +1088,14 @@ export default function AdminPanel() {
               </CardContent>
             </Card>
             </div>
+          </TabsContent>
+
+          {/* ---------------- Cleanup & Maintenance ---------------- */}
+          <TabsContent value="cleanup" className="mt-4">
+            {/* Mounted only for this tab, and only when the optional Admin PIN has
+                been entered — so a locked panel never even asks for the cleanup
+                permissions. */}
+            {panelOpen && <CleanupMaintenance panelOpen={panelOpen} />}
           </TabsContent>
         </Tabs>
       </div>

@@ -305,16 +305,27 @@ async function selectEligible(ctx: MutationCtx, cfg: StorageConfig, size: number
  * still references it (orphan check) so a file shared by another message stays.
  *
  * Exported so the Admin Panel's permanent "delete my retained message" action
- * (`adminMessages.permanentlyDeleteMine`) removes a message exactly the way
- * retention does — one implementation, one set of safety checks.
+ * (`adminMessages.permanentlyDeleteMine`), the Admin Panel's Cleanup &
+ * Maintenance tool and retention itself all remove a message exactly the same
+ * way — one implementation, one set of safety checks.
+ *
+ * Returns how many attachment rows (and how many bytes) went with it, so a
+ * cleanup job can report what it freed. Callers that do not care can ignore it.
  */
-export async function deleteChannelMessage(ctx: MutationCtx, message: Doc<"messages">): Promise<void> {
+export async function deleteChannelMessage(
+  ctx: MutationCtx,
+  message: Doc<"messages">,
+): Promise<{ attachments: number; bytes: number }> {
   const files = await ctx.db
     .query("attachments")
     .withIndex("by_message", (q) => q.eq("messageId", message._id))
     .collect();
+  let attachments = 0;
+  let bytes = 0;
   for (const file of files) {
     await ctx.db.delete(file._id);
+    attachments += 1;
+    bytes += file.size ?? 0;
     const stillReferenced = await ctx.db
       .query("attachments")
       .withIndex("by_storage", (q) => q.eq("storageId", file.storageId))
@@ -328,16 +339,24 @@ export async function deleteChannelMessage(ctx: MutationCtx, message: Doc<"messa
     await ctx.db.delete(vis._id);
   }
   await ctx.db.delete(message._id);
+  return { attachments, bytes };
 }
 
 /** Delete one DM message and its disposable related data (orphan-safe). */
-export async function deleteDmMessage(ctx: MutationCtx, message: Doc<"dmMessages">): Promise<void> {
+export async function deleteDmMessage(
+  ctx: MutationCtx,
+  message: Doc<"dmMessages">,
+): Promise<{ attachments: number; bytes: number }> {
   const files = await ctx.db
     .query("attachments")
     .withIndex("by_dm_message", (q) => q.eq("dmMessageId", message._id))
     .collect();
+  let attachments = 0;
+  let bytes = 0;
   for (const file of files) {
     await ctx.db.delete(file._id);
+    attachments += 1;
+    bytes += file.size ?? 0;
     const stillReferenced = await ctx.db
       .query("attachments")
       .withIndex("by_storage", (q) => q.eq("storageId", file.storageId))
@@ -351,6 +370,7 @@ export async function deleteDmMessage(ctx: MutationCtx, message: Doc<"dmMessages
     await ctx.db.delete(vis._id);
   }
   await ctx.db.delete(message._id);
+  return { attachments, bytes };
 }
 
 /** Delete up to `size` eligible messages, re-verifying eligibility per record. */

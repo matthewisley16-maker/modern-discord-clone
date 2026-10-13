@@ -304,7 +304,10 @@ const schema = defineSchema(
       deletedForEveryone: v.optional(v.boolean()),
       deletedAt: v.optional(v.number()),
       deletedBy: v.optional(v.id("users")),
-    }).index("by_conversation", ["conversationId"]),
+    })
+      // Same implicit send-time ordering as `messages.by_channel`, for direct
+      // conversations.
+      .index("by_conversation", ["conversationId"]),
 
     dmReactions: defineTable({
       messageId: v.id("dmMessages"),
@@ -613,7 +616,12 @@ const schema = defineSchema(
       deletedAt: v.optional(v.number()),
       deletedBy: v.optional(v.id("users")),
       deletedByModerator: v.optional(v.boolean()),
-    }).index("by_channel", ["channelId"]),
+    })
+      // `_creationTime` is appended to every index automatically, so `by_channel`
+      // already yields one channel's messages in send-time order — which is what
+      // Admin Panel → Cleanup & Maintenance pages through when deleting a
+      // channel's messages by date.
+      .index("by_channel", ["channelId"]),
 
     reactions: defineTable({
       messageId: v.id("messages"),
@@ -783,6 +791,80 @@ const schema = defineSchema(
     // cleanup. Values are optional overrides on top of the code defaults and
     // the STORAGE_* environment variables, so they can be tuned later without
     // changing (or rewriting) the application.
+    /**
+     * Admin Panel → Cleanup & Maintenance jobs.
+     *
+     * One row per cleanup RUN (message deletion by time/scope, or a general
+     * system cleanup). The row is the durable history entry AND the progress
+     * record the UI polls: it is written only by the server, and it is what lets
+     * a large cleanup run in bounded batches without ever holding one long
+     * transaction or timing out.
+     *
+     * SAFETY: this table deliberately keeps NO message content and is never
+     * deleted by cleanup, so the record of who deleted what, when and with which
+     * filters survives the messages themselves. Authorization is re-checked on
+     * every batch (see `runJobBatch`), not just when the job was created.
+     */
+    cleanupJobs: defineTable({
+      /** Which tool ran. */
+      kind: v.union(v.literal("messages"), v.literal("general")),
+      status: v.union(
+        v.literal("running"),
+        v.literal("completed"),
+        v.literal("failed"),
+        v.literal("cancelled"),
+      ),
+      /** What the job is scoped to: all messages, one community, channel or conversation. */
+      scopeKind: v.union(v.literal("all"), v.literal("community"), v.literal("channel"), v.literal("conversation")),
+      /** The community/channel/conversation id for a scoped job (absent for `all`). */
+      scopeId: v.optional(v.string()),
+      /** Human-readable scope, e.g. "Community: Design Club" — kept in history. */
+      scopeLabel: v.string(),
+      /** Human-readable time range, including the time zone that was applied. */
+      rangeLabel: v.string(),
+      /** The range actually used (ms since epoch, server time). */
+      from: v.optional(v.number()),
+      to: v.optional(v.number()),
+      /** General jobs: which categories were selected. */
+      categories: v.optional(v.array(v.string())),
+      /** Who ran it — never a credential, only the display identity. */
+      actorId: v.id("users"),
+      actorName: v.string(),
+      startedAt: v.number(),
+      /** Last time this job made progress (drives stale-job recovery). */
+      updatedAt: v.optional(v.number()),
+      finishedAt: v.optional(v.number()),
+      /** Progress + outcome counters. */
+      batches: v.number(),
+      channelMessagesDeleted: v.number(),
+      dmMessagesDeleted: v.number(),
+      attachmentsDeleted: v.number(),
+      recordsDeleted: v.number(),
+      bytesFreed: v.number(),
+      errors: v.number(),
+      /** A short, secret-free sample of the last failure. */
+      lastError: v.optional(v.string()),
+      /**
+       * Resume point for message jobs together with `doneScopes`.
+       *
+       * Message cleanup walks the channels and conversations one by one (each an
+       * INDEXED, time-bounded scan, so a window in the middle of a long history
+       * is reached without reading everything before it). `doneScopes` holds the
+       * ids whose window is already fully swept, so a large job resumes exactly
+       * where it stopped even when it spans many batches — and `cursorCreatedAt`
+       * records how far this batch got through that list, so progress is visible.
+       */
+      doneScopes: v.optional(v.array(v.string())),
+      cursorCreatedAt: v.optional(v.number()),
+      /** True once a batch came back short (nothing left to delete). */
+      drained: v.optional(v.boolean()),
+      /** Short human summary lines shown in the history table. */
+      summary: v.optional(v.array(v.string())),
+    })
+      .index("by_started", ["startedAt"])
+      // Lets the panel find the active job (at most one may run) and the lock.
+      .index("by_status", ["status"]),
+
     storageConfig: defineTable({
       key: v.string(), // singleton: "config"
       retentionMs: v.optional(v.number()), // recent messages protected this long

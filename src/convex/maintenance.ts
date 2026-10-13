@@ -369,6 +369,32 @@ export const cancelLegacyChannelCallInvites = internalMutation({
 });
 
 /**
+ * READ-ONLY orphan report: the same identification rules as
+ * `purgeOrphanedData` (below), but it changes nothing.
+ *
+ * Used by the Admin Panel's Cleanup & Maintenance preview, which runs before an
+ * administrator confirms anything. Exposing the counts through a shared helper
+ * keeps the preview and the purge in lockstep: whatever the preview counts is
+ * exactly what the purge is allowed to remove.
+ */
+export const orphanAudit = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const o = await collectOrphans(ctx);
+    return {
+      records: countOrphans(o),
+      bytes: o.orphanAttachments.reduce((total, row) => total + (row.size ?? 0), 0),
+      categories: o.orphanCategories.length,
+      channels: o.orphanChannels.length,
+      messages: o.orphanMessages.length,
+      dmMessages: o.orphanDmMessages.length,
+      attachments: o.orphanAttachments.length,
+      emptyConversations: o.emptyConversations.length,
+    };
+  },
+});
+
+/**
  * Removes ONLY rows whose parent no longer exists (see `collectOrphans`). This
  * never targets a row that still resolves to a live user, community, channel or
  * conversation, so legitimate data is never affected. `dryRun` reports what
@@ -379,6 +405,9 @@ export const purgeOrphanedData = internalMutation({
   handler: async (ctx, { dryRun }) => {
     const o = await collectOrphans(ctx);
     const summary = {
+      // Bytes recovered from the orphaned attachments' own recorded sizes (no
+      // extra storage reads, and never an invented figure).
+      bytes: o.orphanAttachments.reduce((total, row) => total + (row.size ?? 0), 0),
       categories: o.orphanCategories.length,
       channels: o.orphanChannels.length,
       messages: o.orphanMessages.length,
