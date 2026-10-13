@@ -181,7 +181,10 @@ check("a friend who was never online says so", read("src", "components", "dashbo
     const end = css.indexOf("}", start);
     return end < 0 ? "" : css.slice(start + selector.length, end);
   };
-  check("the friend row's text block may shrink", rule(".fc-row-main > span {").includes("min-width: 0"), "a long name could widen the row");
+  // The text block may shrink — and the selector must exclude the avatar, which
+  // is a <span> too (see the Friends-avatar section in layout-stability-test.mjs).
+  check("the friend row's text block may shrink", rule(".fc-row-main > span:not(.fc-avatar) {").includes("min-width: 0"), "a long name could widen the row");
+  check("the row's text rule never matches the avatar", rule(".fc-row-main > span:not(.fc-avatar) {") !== "" && !rule(".fc-row-main > span {"), "an unscoped rule would stretch a friend's picture");
   check("a long friend name truncates", rule(".fc-row-main strong {").includes("text-overflow: ellipsis"), "the friend name has no ellipsis");
   check("the friend's status line truncates too", rule(".fc-row-main small {").includes("text-overflow: ellipsis"), "the status line has no ellipsis");
   check("the row has no fixed width", !/\.fc-row \{[^}]*width: \d+px/.test(css), "a fixed row width would break small screens");

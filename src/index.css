@@ -325,15 +325,26 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; }
 .fc-row:hover { background: rgba(255,255,255,.04); }
 .fc-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; text-align: left; }
-/* A friend's name/picture/status stay on one bounded row: the text block may
+/* A friend's name/picture/status stay on one bounded row: the TEXT block may
    shrink (min-width: 0 — a flex item's automatic minimum is its content width),
    so a very long display name or username truncates instead of pushing the row's
-   action buttons off a narrow screen. */
-.fc-row-main > span { flex: 1; min-width: 0; }
+   action buttons off a narrow screen.
+
+   Scoped with :not(.fc-avatar) ON PURPOSE. The shared <Avatar> is a <span> too,
+   so an unscoped `flex: 1` here (specificity 0-1-1) also matched every friend's
+   picture and overrode `.fc-avatar`'s own `flex-shrink: 0` (0-1-0). That set the
+   avatar's flex-basis to 0%, which replaces its inline width, so the picture GREW
+   to share the row with the text — huge ellipse-shaped avatars that pushed the
+   name into an ellipsis. Only the text flexes; the avatar keeps its own box. */
+.fc-row-main > span:not(.fc-avatar) { flex: 1; min-width: 0; }
 .fc-row-main strong { display: block; font-size: 13px; color: #eeecf6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fc-row-main small { display: block; font-size: 11px; color: #8b87a0; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fc-row-actions { display: flex; gap: 6px; }
-.fc-avatar { position: relative; display: grid; place-items: center; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; flex-shrink: 0; overflow: visible; isolation: isolate; }
+/* The shared avatar box. `flex: 0 0 auto` = never grow, never shrink, size taken
+   from the element's own width/height (the `size` prop, 36px by default), so a
+   picture can never be stretched to its natural dimensions or flexed by the row
+   around it. The <img> is clipped to that box and cropped, keeping it circular. */
+.fc-avatar { position: relative; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; overflow: visible; isolation: isolate; }
 .fc-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .fc-avatar i { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #121218; z-index: 3; }
 /* Friends / DM list variant: the status dot sits to the LEFT of the avatar.
