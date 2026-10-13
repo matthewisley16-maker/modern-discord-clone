@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, GroupIcon } from "./ui";
 import { toSafeArray } from "@/lib/collection";
+import { groupDisplayName } from "@/lib/group-name";
 import { toast } from "sonner";
 import { Eye, EyeOff, Lock, LockOpen, KeyRound, ShieldCheck, X } from "lucide-react";
 
@@ -532,40 +533,46 @@ export default function SecretChatsDialog({
                   No protected conversations yet. Use the lock action on any conversation to lock it or hide it.
                 </p>
               )}
-              {rows.map((row) => (
-                <div key={row.conversationId} className="fc-secret-row">
-                  {/* A group shows its own photo (or the default group icon) —
-                      the same field as the Conversations list and the header. */}
-                  <Avatar
-                    name={row.name}
-                    size={30}
-                    color={row.type === "group" ? "violet" : undefined}
-                    url={row.avatarUrl ?? undefined}
-                    decorationId={row.type === "group" ? null : row.decorationId}
-                    fallback={row.type === "group" ? <GroupIcon avatarSize={30} /> : undefined}
-                  />
-                  <div className="fc-secret-row-main">
-                    <span className="fc-secret-row-name">
-                      <Lock size={12} /> {row.name}
-                      {row.hidden && <em className="fc-secret-flag">Hidden</em>}
-                    </span>
-                    <small>{row.lastMessage || "No preview"}</small>
+              {rows.map((row) => {
+                // Same shared rule as the Chats list and the header, applied again
+                // here so a legacy payload can never show a bare lock icon with no
+                // group name beside a group's picture.
+                const name = row.type === "group" ? groupDisplayName(row.name) : row.name;
+                return (
+                  <div key={row.conversationId} className="fc-secret-row">
+                    {/* A group shows its own photo (or the default group icon) —
+                        the same field as the Conversations list and the header. */}
+                    <Avatar
+                      name={name}
+                      size={30}
+                      color={row.type === "group" ? "violet" : undefined}
+                      url={row.avatarUrl ?? undefined}
+                      decorationId={row.type === "group" ? null : row.decorationId}
+                      fallback={row.type === "group" ? <GroupIcon avatarSize={30} /> : undefined}
+                    />
+                    <div className="fc-secret-row-main">
+                      <span className="fc-secret-row-name" title={name}>
+                        <Lock size={12} /> {name}
+                        {row.hidden && <em className="fc-secret-flag">Hidden</em>}
+                      </span>
+                      <small>{row.lastMessage || "No preview"}</small>
+                    </div>
+                    <div className="fc-secret-row-tools">
+                      <button onClick={() => unlockRow(row)} disabled={busy} title="Unlock for this session">Unlock</button>
+                      <button
+                        onClick={() => void guard(() => relock({ conversationId: row.conversationId }), "Could not lock that conversation.")}
+                        disabled={busy}
+                        title="Lock again now"
+                      >Lock</button>
+                      <button onClick={() => toggleHidden(row)} disabled={busy} title={row.hidden ? "Show in Chats" : "Hide from Chats"}>
+                        {row.hidden ? "Unhide" : "Hide"}
+                      </button>
+                      <button onClick={() => releaseRow(row)} disabled={busy} title="Remove protection">Remove</button>
+                      <button onClick={() => deleteRow(row)} disabled={busy} className="danger" title="Delete this chat and its lock">Delete</button>
+                    </div>
                   </div>
-                  <div className="fc-secret-row-tools">
-                    <button onClick={() => unlockRow(row)} disabled={busy} title="Unlock for this session">Unlock</button>
-                    <button
-                      onClick={() => void guard(() => relock({ conversationId: row.conversationId }), "Could not lock that conversation.")}
-                      disabled={busy}
-                      title="Lock again now"
-                    >Lock</button>
-                    <button onClick={() => toggleHidden(row)} disabled={busy} title={row.hidden ? "Show in Chats" : "Hide from Chats"}>
-                      {row.hidden ? "Unhide" : "Hide"}
-                    </button>
-                    <button onClick={() => releaseRow(row)} disabled={busy} title="Remove protection">Remove</button>
-                    <button onClick={() => deleteRow(row)} disabled={busy} className="danger" title="Delete this chat and its lock">Delete</button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
 
               <span className="fc-secret-section-title">Security</span>
 

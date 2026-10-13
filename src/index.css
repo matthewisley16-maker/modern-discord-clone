@@ -271,10 +271,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-dm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 1px 8px; padding: 7px 9px; border-radius: 8px; color: #b7b1cc; font-size: 13px; text-align: left; }
 .fc-dm:hover { background: rgba(255,255,255,.05); color: #e5e0ff; }
 .fc-dm.active { background: rgba(139,92,246,.18); color: #cfbeff; }
-/* Two lines: name + time, then the latest message preview. */
+/* Two lines: name (+ member count + time), then the latest message preview.
+   The picture and this text block are centered against each other by .fc-dm and
+   .fc-convo-item (align-items: center), and the NAME is the only part allowed to
+   shrink: it truncates with an ellipsis instead of widening the sidebar. */
 .fc-dm-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.fc-dm-title-row { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.fc-dm-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .fc-dm-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A group's member count is its own chip, so a long group name truncates as the
+   name rather than swallowing the count (or vice versa). */
+.fc-dm-count { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: 10px; font-style: normal; padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,.06); color: #9d99ad; }
+.fc-dm.active .fc-dm-count, .fc-convo-item.active .fc-dm-count { background: rgba(139,92,246,.28); color: #d6c9ff; }
 .fc-dm-time { font-style: normal; font-size: 10px; color: #7f7a95; flex-shrink: 0; }
 .fc-dm-preview { font-size: 11px; color: #8b86a3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fc-dm-flag { font-size: 10px; }
@@ -1564,6 +1571,22 @@ html.fc-light .fc-pin-field { color: #4b4a58; }
 }
 /* The DM/conversation list takes the space that is left and scrolls there. */
 .fc-dm-list { flex: 1 1 auto; }
+/* ---- The Conversations page (Direct Messages, no chat open) ----
+   The same row as the sidebar list: picture, then the name immediately beside
+   it. Nothing here hardcodes a width, so the name truncates on any viewport. */
+.fc-convo-list { display: flex; flex-direction: column; gap: 2px; padding: 0 12px 12px; }
+.fc-convo-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; color: #b7b1cc; font-size: 13px; text-align: left; }
+.fc-convo-item:hover { background: rgba(255,255,255,.05); color: #e5e0ff; }
+.fc-convo-item.active { background: rgba(139,92,246,.18); color: #cfbeff; }
+.fc-convo-item .fc-dm-name { flex: 1; }
+/* The sidebar section heading doubles as the entry point to that page. */
+.fc-sidebar-section .fc-sidebar-section-label { color: inherit; font: inherit; letter-spacing: inherit; text-align: left; }
+.fc-sidebar-section .fc-sidebar-section-label:hover { color: #c4b5f7; }
+html.fc-light .fc-convo-item { color: #4b4a58; }
+html.fc-light .fc-convo-item:hover { background: rgba(0,0,0,.05); color: #1c1b22; }
+html.fc-light .fc-convo-item.active { background: rgba(124,92,246,.16); color: #5b3fd6; }
+html.fc-light .fc-dm-count { background: rgba(0,0,0,.06); color: #5c5a6b; }
+html.fc-light .fc-dm.active .fc-dm-count, html.fc-light .fc-convo-item.active .fc-dm-count { background: rgba(124,92,246,.22); color: #4c2fc0; }
 /* Home for long lists that should not dominate the sidebar. */
 .fc-community-scroll { max-height: min(38vh, 320px); }
 /* Narrow, theme-coloured scrollbar (visible when — and only when — needed). */

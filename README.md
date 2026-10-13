@@ -703,13 +703,59 @@ frontend and backend target the same deployment).
   **genuinely empty** (the only case that shows the “Start a conversation” CTA, with the Friends
   shortcut kept as an option). The sidebar says “Loading conversations…” until the query answers and
   only then “No conversations yet”.
-- Each row shows the conversation name (group rows include the member count), the **latest message
-  preview and its timestamp** — both already returned by `dms.listConversations`, so no extra query
-  or read — plus the unread badge, lock/pin/mute flags and the other member's live avatar. A
-  protected chat that has not been unlocked reads “🔒 Locked”, never its content.
+- Each row shows the conversation name (group rows carry the member count as their own chip), the
+  **latest message preview and its timestamp** — both already returned by `dms.listConversations`, so
+  no extra query or read — plus the unread badge, lock/pin/mute flags and the other member's live
+  avatar. A protected chat that has not been unlocked reads “🔒 Locked”, never its content.
 - The conversation list is wrapped in a `FeatureBoundary`, so a malformed row cannot blank the
   sidebar; a failing query throws (Convex semantics) into the enclosing boundary's error + “Try
   again”, never a bogus empty state. No extra subscriptions, polling or full-table reads were added.
+
+## Group names beside the picture (sidebar + Conversations page)
+
+A group's name is ONE optional column (`dmConversations.name`) and ONE display rule
+(`src/lib/group-name.ts`), so the sidebar list, the Conversations page, the chat header and the
+Locked & Hidden Conversations screen can never print different text for the same group:
+
+| Step | Where |
+| --- | --- |
+| The rule (`groupDisplayName`, `UNNAMED_GROUP`, `isUnnamedGroup`) | `src/lib/group-name.ts` |
+| Name loaded from the database | `dms.listConversations`, `dms.groupDetails` (`src/convex/dms.ts`) |
+| Secret Chats list | `conversationPrivacy.secretChats` |
+| Sidebar row (picture, then the name) | `ConversationIcon` + `DmRowLabel` in `src/pages/Dashboard.tsx` |
+| Conversations page (the same rows, full width) | `ConversationsPage` in the same file |
+| Chat header | `src/components/dashboard/DmView.tsx` |
+| Layout invariants | `.fc-dm`, `.fc-dm-name`, `.fc-dm-title`, `.fc-dm-count`, `.fc-convo-item` in `src/index.css` |
+
+- **Picture first, name immediately beside it.** A row is `<ConversationIcon>` (a group's own photo
+  — `dmConversations.iconStorageId` — or its default group icon) followed by `DmRowLabel` (the name,
+  the member-count chip, the timestamp, the preview). `.fc-dm`/`.fc-convo-item` are `align-items:
+  center`, and `.fc-dm-title-row` centers the name with that chip, so the name sits vertically
+  centered against the picture at any height.
+- **Names never break the layout.** `.fc-dm-name` is `flex: 1; min-width: 0` and the name itself is
+  `overflow: hidden; text-overflow: ellipsis; white-space: nowrap` with no fixed width, so a very long
+  name truncates inside the row instead of widening the sidebar. The member count is its own
+  `flex-shrink: 0` chip rather than “Name · 3”, so truncation never eats it and it never eats the
+  name. The full name stays available as the row's `title`/`aria-label`.
+- **The selected group is highlighted** in both lists (`.fc-dm.active` / `.fc-convo-item.active`) and
+  announced with `aria-current`, and clicking a row opens that conversation.
+- **The Conversations page.** The CONVERSATIONS heading in the sidebar opens it (and it is what the
+  Direct Messages pane shows when no chat is open, e.g. when every chat is archived); it lists open
+  and archived chats with the same rows. It is also what keeps names visible on a phone, where the
+  sidebar is a drawer (`.fc-sidebar { display: none }` → `.fc-sidebar.open`).
+- **Real names, and an honest fallback.** Names come from the database, never from a hardcoded list;
+  a group with no name (empty/whitespace, or the literal placeholder older versions stored) reads
+  **“Unnamed Group”**. New groups store the name as typed and store *nothing* when it is left blank,
+  so a placeholder can no longer masquerade as a real name.
+- **Live updates.** Every list reads the reactive `dms.listConversations` subscription, so an admin's
+  rename (`dms.renameGroup`) or new picture (`dms.setGroupPhoto`) appears in the sidebar, the page,
+  the header and Secret Chats without a reload, and it survives a refresh because it was stored.
+- **Verification.** `bun group-name-test.mjs` (62 assertions) covers the rule offline (stored names
+  preserved, whitespace trimmed, “Group Therapy” untouched, empty/legacy values → “Unnamed Group”),
+  asserts in the real source that both queries and all four surfaces use it, that the row renders the
+  picture then the name, that truncation/centering/no-fixed-width hold in the CSS, that the
+  Conversations page renders the same rows and highlights the selected chat, and that a signed-out
+  caller cannot rename a group.
 
 ## Deployment safety (read this before deploys and before debugging a black screen)
 

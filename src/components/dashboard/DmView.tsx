@@ -15,6 +15,7 @@ import MentionText from "./MentionText";
 import YouTubeEmbeds from "./YouTubeEmbed";
 import { useMessageScroll } from "@/hooks/use-message-scroll";
 import { gifUrlsIn } from "@/lib/message-links";
+import { groupDisplayName } from "@/lib/group-name";
 import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
 import { useMessageSound } from "@/hooks/use-message-sound";
@@ -244,7 +245,9 @@ export default function DmView({
     }),
     [convo],
   );
-  const title = convo?.type === "group" ? convo.name : convoMembers[0]?.displayName ?? "Conversation";
+  // A group's name comes from the same shared rule as the sidebar list, so the
+  // header of a nameless group reads "Unnamed Group" instead of blank text.
+  const title = convo?.type === "group" ? groupDisplayName(convo.name) : convoMembers[0]?.displayName ?? "Conversation";
   // The other person's live presence, straight from the same authoritative
   // presence data the DM list and every other surface use. An invisible user
   // arrives here as "offline", so nothing is leaked.

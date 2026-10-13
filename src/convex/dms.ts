@@ -6,6 +6,7 @@ import { gifValidator, requireGif } from "./gif";
 import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, memoizeAuthorCards, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import { lockStateOf } from "./conversationPrivacy";
 import { resolveMentions, type MentionCache } from "./mentions";
+import { groupDisplayName } from "../lib/group-name";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 
@@ -224,7 +225,10 @@ export const listConversations = query({
       out.push({
         conversationId: convo._id,
         type: convo.type,
-        name: convo.type === "group" ? convo.name ?? "Group" : otherCards[0]?.displayName ?? "Conversation",
+        // A group shows its OWN stored name (or "Unnamed Group" when it has
+        // none) — one shared rule, so the sidebar, the Conversations page, the
+        // header and Secret Chats can never print different text for one chat.
+        name: convo.type === "group" ? groupDisplayName(convo.name) : otherCards[0]?.displayName ?? "Conversation",
         iconColor: convo.iconColor ?? "violet",
         // The group's own photo (null → the UI draws its default group icon).
         // Never the first member's avatar: a group is not a person.
@@ -330,14 +334,18 @@ export const createGroup = mutation({
   args: { name: v.string(), memberIds: v.array(v.id("users")) },
   handler: async (ctx, { name, memberIds }) => {
     const me = await currentUserId(ctx);
-    const clean = name.trim().slice(0, 50) || "Group";
+    // The name is stored as typed; a blank one stores NO name at all rather than
+    // a placeholder, because a placeholder in the database is indistinguishable
+    // from a real name and would show up as one. Display falls back to
+    // "Unnamed Group" (src/lib/group-name.ts) instead.
+    const clean = name.trim().slice(0, 50);
     const unique = [...new Set(memberIds.filter((id) => id !== me))].slice(0, 24);
     if (unique.length === 0) throw new Error("Add at least one friend to the group.");
     for (const id of unique) {
       if (await isBlockedEitherWay(ctx, me, id)) throw new Error("One of those users is unavailable.");
     }
     const now = Date.now();
-    const conversationId = await ctx.db.insert("dmConversations", { type: "group", name: clean, ownerId: me, lastMessageAt: now });
+    const conversationId = await ctx.db.insert("dmConversations", { type: "group", ...(clean ? { name: clean } : {}), ownerId: me, lastMessageAt: now });
     await ctx.db.insert("dmMembers", { conversationId, userId: me, lastReadAt: now });
     for (const id of unique) await ctx.db.insert("dmMembers", { conversationId, userId: id, lastReadAt: 0 });
     return conversationId;
@@ -457,7 +465,7 @@ export const groupDetails = query({
     cards.sort((a, b) => Number(b.isOwner) - Number(a.isOwner) || Number(b.isAdmin) - Number(a.isAdmin));
     return {
       conversationId,
-      name: convo.name ?? "Group",
+      name: groupDisplayName(convo.name),
       iconColor: convo.iconColor ?? "violet",
       iconUrl: await groupPhotoUrl(ctx, convo),
       ownerId: convo.ownerId,

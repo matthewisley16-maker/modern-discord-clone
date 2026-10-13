@@ -23,9 +23,10 @@ import CommunitySettings from "@/components/dashboard/CommunitySettings";
 import ServerRail from "@/components/dashboard/ServerRail";
 import NewMessageDialog from "@/components/dashboard/NewMessageDialog";
 import SecretChatsDialog, { ProtectConversationDialog } from "@/components/dashboard/SecretChats";
-import { Avatar, GroupIcon, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
+import { Avatar, GroupIcon, SectionHeader, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { toSafeArray, toSafeArrayField } from "@/lib/collection";
+import { groupDisplayName } from "@/lib/group-name";
 import { trackOp } from "@/lib/usage-monitor";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
@@ -34,14 +35,22 @@ import {
 } from "lucide-react";
 
 /**
- * The text of one Conversations-list row: the conversation name, the latest
- * message preview, and when that message arrived.
+ * One conversation row's text: the name, the latest message preview, and when
+ * that message arrived.
+ *
+ * The name sits directly beside the picture (the row centers both) and is the
+ * conversation's OWN stored name: `dms.listConversations` already applied the
+ * shared `groupDisplayName` rule, and it is applied again here so a cached or
+ * legacy payload can never render as an empty title next to a picture. A group's
+ * member count is its own small chip rather than "name · 3", so a long name is
+ * truncated as the name itself instead of swallowing the count.
  *
  * `dms.listConversations` already returns `lastMessage` / `lastMessageAt` for
  * every conversation, so this adds no query and no extra read. The preview is
  * empty while a protected chat has not been unlocked (a locked chat must never
  * leak its content in the list) and for a conversation with no messages yet.
- * Shared by the active and archived lists, so both read the same way.
+ * Shared by the sidebar list, the Conversations page and the archived lists, so
+ * all of them read the same way.
  */
 function DmRowLabel({
   convo,
@@ -56,7 +65,9 @@ function DmRowLabel({
     unlocked?: boolean;
   };
 }) {
-  const title = convo.type === "group" ? `${convo.name} · ${convo.memberCount ?? 0}` : convo.name;
+  const isGroup = convo.type === "group";
+  const title = isGroup ? groupDisplayName(convo.name) : convo.name;
+  const memberCount = Math.max(0, convo.memberCount ?? 0);
   const lastMessage = typeof convo.lastMessage === "string" ? convo.lastMessage.trim() : "";
   const preview = convo.locked && !convo.unlocked ? "🔒 Locked" : lastMessage || "No messages yet";
   const when =
@@ -66,11 +77,92 @@ function DmRowLabel({
   return (
     <span className="fc-dm-name">
       <span className="fc-dm-title-row">
-        <span className="fc-dm-title">{title}</span>
+        <span className="fc-dm-title" title={title}>{title}</span>
+        {isGroup && (
+          <i className="fc-dm-count" title={`${memberCount} ${memberCount === 1 ? "member" : "members"}`}>
+            <Users size={10} aria-hidden="true" />
+            {memberCount}
+          </i>
+        )}
         {when && <em className="fc-dm-time">{when}</em>}
       </span>
       <small className="fc-dm-preview">{preview}</small>
     </span>
+  );
+}
+
+/** The fields the shared conversation row needs (a richer query row fits too). */
+type ConvoRow = {
+  conversationId: Id<"dmConversations">;
+  /** "group" or "direct" — decides the picture, the name rule and the count. */
+  type: string;
+  name: string;
+  iconUrl?: string | null;
+  memberCount?: number;
+  members?: ReadonlyArray<{
+    avatarUrl?: string | null;
+    decorationId?: string | null;
+    presence?: string;
+    lastSeen?: number | null;
+  }> | null;
+  lastMessage?: string;
+  lastMessageAt?: number;
+  locked?: boolean;
+  unlocked?: boolean;
+  unread?: number;
+};
+
+/**
+ * The Conversations page — the Direct Messages view when no chat is open.
+ *
+ * Every chat is a row here: the picture first, the name directly beside it, the
+ * member count as its own chip and the latest message underneath — the SAME
+ * `ConversationIcon` + `DmRowLabel` the sidebar list renders, so the two can
+ * never show a group differently. Clicking a row opens that conversation, and the
+ * open one is highlighted in both lists (`.active` + `aria-current`).
+ */
+function ConversationsPage({
+  open,
+  archived,
+  selectedId,
+  onOpen,
+}: {
+  open: ConvoRow[];
+  archived: ConvoRow[];
+  selectedId: Id<"dmConversations"> | null;
+  onOpen: (id: Id<"dmConversations">) => void;
+}) {
+  const renderRow = (c: ConvoRow) => {
+    const active = selectedId === c.conversationId;
+    return (
+      <button
+        key={c.conversationId}
+        className={`fc-convo-item ${active ? "active" : ""}`}
+        aria-current={active ? "true" : undefined}
+        onClick={() => onOpen(c.conversationId)}
+      >
+        <ConversationIcon convo={c} size={32} />
+        <DmRowLabel convo={c} />
+        {c.locked && <span className="fc-dm-lock" title="Locked — PIN required" aria-label="Locked conversation"><Lock size={12} /></span>}
+        {typeof c.unread === "number" && c.unread > 0 && <i className="fc-dm-badge">{c.unread}</i>}
+      </button>
+    );
+  };
+
+  return (
+    <div className="fc-scroll-view">
+      <div className="fc-view-head"><AtSign size={20} /><h2>Conversations</h2></div>
+      {open.length === 0 && (
+        <p className="fc-muted">No open conversations — pick one out of Archived below to bring it back.</p>
+      )}
+      <div className="fc-convo-list">{open.map(renderRow)}</div>
+      {archived.length > 0 && (
+        <section className="fc-block">
+          <SectionHeader title={`ARCHIVED — ${archived.length}`} />
+          <div className="fc-convo-list">{archived.map(renderRow)}</div>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -246,6 +338,8 @@ export default function Dashboard() {
   const [communityId, setCommunityId] = useState<Id<"servers"> | null>(null);
   const [channelId, setChannelId] = useState<Id<"channels"> | null>(null);
   const [conversationId, setConversationId] = useState<Id<"dmConversations"> | null>(null);
+  /** True while the Direct Messages pane shows the Conversations list itself. */
+  const [conversationsPage, setConversationsPage] = useState(false);
   /**
    * Which conversation the DM pane shows.
    *
@@ -256,9 +350,14 @@ export default function Dashboard() {
    * chats — which reads as "you have no conversations". The list is loaded from
    * `dms.listConversations` (already sorted by pinned then most recent), so this
    * stays reactive: a new conversation appears selected without a reload.
+   *
+   * `conversationsPage` is the one thing that deliberately suppresses that: the
+   * CONVERSATIONS heading in the sidebar opens the Conversations page (the full
+   * list of chats, picture + name), and while it is open nothing is highlighted
+   * because nothing is open. Picking a row clears it again.
    */
   const selectedConversationId: Id<"dmConversations"> | null =
-    conversationId ?? (section === "dms" ? activeConversations[0]?.conversationId ?? null : null);
+    conversationId ?? (!conversationsPage && section === "dms" ? activeConversations[0]?.conversationId ?? null : null);
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [fullProfileUserId, setFullProfileUserId] = useState<string | null>(null);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
@@ -547,6 +646,15 @@ export default function Dashboard() {
 
   function openConversation(id: Id<"dmConversations">) {
     setConversationId(id);
+    setConversationsPage(false);
+    setSection("dms");
+    setMobileNav(false);
+  }
+
+  /** Open the Conversations page (the list view of every chat). */
+  function showConversationsPage() {
+    setConversationsPage(true);
+    setConversationId(null);
     setSection("dms");
     setMobileNav(false);
   }
@@ -1145,7 +1253,15 @@ export default function Dashboard() {
             )}
 
             <div className="fc-sidebar-section">
-              <span>CONVERSATIONS</span>
+              {/* The heading opens the Conversations page — the same list, laid out
+                  full width, which is how you reach your chats on a narrow screen
+                  where this sidebar is a drawer. */}
+              <button
+                className="fc-sidebar-section-label"
+                title="Show the Conversations page"
+                aria-current={conversationsPage && section === "dms" ? "page" : undefined}
+                onClick={showConversationsPage}
+              >CONVERSATIONS</button>
               <button aria-label="New message" title="New message" onClick={() => setNewMessageOpen(true)}><Plus size={13} /></button>
             </div>
             <div className="fc-sidebar-scroll fc-dm-list" ref={dmListRef}>
@@ -1163,6 +1279,8 @@ export default function Dashboard() {
               <div key={c.conversationId} className="fc-dm-row">
                 <button
                   className={`fc-dm ${selectedConversationId === c.conversationId && section === "dms" ? "active" : ""}`}
+                  aria-current={selectedConversationId === c.conversationId && section === "dms" ? "true" : undefined}
+                  aria-label={`Open ${c.type === "group" ? "group chat" : "conversation"} ${c.type === "group" ? groupDisplayName(c.name) : c.name}`}
                   onClick={() => openConversation(c.conversationId)}
                 >
                   {/* Direct chat: the other person's real, live presence — the same
@@ -1393,16 +1511,16 @@ export default function Dashboard() {
                   </div>
                 </div>
               ) : (
-                // Conversations exist, but every one of them is archived.
-                <div className="fc-scroll-view">
-                  <div className="fc-view-head"><AtSign size={20} /><h2>Direct Messages</h2></div>
-                  <div className="fc-empty">
-                    <AtSign size={30} />
-                    <h3>Your conversations are archived.</h3>
-                    <p>Open “Archived” in the conversation list to pick one up again.</p>
-                    <Button className="mt-3" variant="outline" onClick={() => setArchivedOpen(true)}>Show archived</Button>
-                  </div>
-                </div>
+                // The Conversations page: every chat with its picture and its
+                // name, so there is always a way in — including when they are all
+                // archived, and on a narrow viewport where the sidebar list lives
+                // in the drawer. Same rows as the sidebar, so both agree.
+                <ConversationsPage
+                  open={activeConversations}
+                  archived={archivedConversations}
+                  selectedId={selectedConversationId}
+                  onOpen={openConversation}
+                />
               )
             )}
             {section === "community" && details && channel && (

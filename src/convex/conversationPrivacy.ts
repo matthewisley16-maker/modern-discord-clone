@@ -9,6 +9,7 @@ import { internal } from "./_generated/api";
 import { enforceRateLimit } from "./authHelpers";
 import { avatarUrlOf, currentUserId, displayNameOf, presenceInfoOf, profileOf } from "./lib";
 import { sendCodeEmail } from "./mailer";
+import { groupDisplayName } from "../lib/group-name";
 
 /**
  * ---------------------------------------------------------------------------
@@ -498,7 +499,8 @@ export const secretChats = query({
         type: convo.type,
         name:
           convo.type === "group"
-            ? convo.name ?? "Group"
+            // Same shared rule as the Chats list and the header.
+            ? groupDisplayName(convo.name)
             : otherProfile?.displayName ?? otherUser?.name ?? otherUser?.username ?? "Conversation",
         hidden: Boolean(membership.hidden),
         iconColor: convo.iconColor ?? "violet",
