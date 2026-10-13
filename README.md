@@ -750,6 +750,144 @@ orphan-safe attachments removed) and every view, search, preview and reply quote
   (phase 8b: an Admin deletes another member's channel + DM message, non-admins are refused with a
   real message id).
 
+## Admin Panel → Cleanup & Maintenance
+
+A new Admin Panel tab (between Communities/Moderation and the retention tabs) with **two
+administrator-only tools**: **Message Cleanup** (delete messages by when they were sent) and
+**General System Cleanup** (remove data the app regenerates, or that nothing references any more).
+Everything is enforced on the backend — the tab is a UI for server functions, not a client-side
+delete loop, and nothing here invents data or removes it only in the browser.
+
+| Piece | Where |
+| --- | --- |
+| Rules (scopes, ranges, batching, categories, time zones) | `src/lib/cleanup.ts` (`bun cleanup-maintenance-test.mjs`) |
+| Backend: authorization, previews, jobs, audit, categories | `src/convex/cleanup.ts` |
+| Panel UI (two tools, cards, dialogs, progress, history) | `src/components/admin/CleanupMaintenance.tsx` |
+| Tab wiring | `src/pages/AdminPanel.tsx` (`value="cleanup"`, only mounted while the panel is unlocked) |
+| Job + history rows | `cleanupJobs` table in `src/convex/schema.ts` (`by_started`, `by_status`) |
+| Deleting a message safely | the app's own `deleteChannelMessage` / `deleteDmMessage` in `src/convex/storage.ts` |
+
+### Message Cleanup — by send time, and by scope
+
+The range is always built from the message's **real `_creationTime`** (the stored send time), and the
+scope optionally limits the sweep to one community, channel or direct conversation:
+
+| Range / scope | Behaviour |
+| --- | --- |
+| All messages on the site | Every channel message and every DM, subject to the actor's role |
+| Messages older than a date | `createdAt < before` (exclusive) |
+| Messages within a range | `from <= createdAt <= to` (both ends inclusive) |
+| Limited to a community / channel / conversation | The same date rules, applied only inside that target (a community means all of its channels) |
+
+- **Date and time pickers**, and the time zone is always named (`timeZoneLabel`, e.g.
+  `Europe/Berlin (UTC+2)`). The picker's local value is converted to one absolute instant
+  (`fromLocalPicker`) and the LABEL that goes into history says which zone it was interpreted in, so
+  "older than 2026-01-01 10:00" means the same thing to the person clicking and to the database.
+- **Preview affected messages** first: `cleanup.previewMessages` counts what the current range and
+  scope would delete (per channel and per DM) *without writing anything*. Counts are exact while the
+  scan stays under `PREVIEW_SCAN_LIMIT` (5,000 rows / 200 targets) and are reported as a lower bound
+  above that, rather than pretending to be exact.
+- **Confirmation names the consequence**: the dialog reports the count and the range — *"Are you sure
+  you want to delete 2,450 messages sent from … to …? This action may not be reversible."* — with
+  **Cancel** (which leaves everything untouched, always) and **Delete Messages**.
+- **Site-wide deletion needs two things**: an **Owner Admin** role *and* the typed phrase
+  `DELETE ALL MESSAGES` (`SITE_WIDE_PHRASE`, compared case/space-insensitively by `phraseMatches`).
+  Both are re-checked inside the mutation, so a crafted request that omits the phrase is refused.
+- **Scoped ids are never trusted**: the client sends `{ kind, id }`; the server re-resolves the row
+  and builds the history label from the real community/channel/conversation, so an audit entry cannot
+  be spoofed and cannot name something the actor could not see.
+- **Progress, then a report**: the panel subscribes to the running job (`cleanup.job`), so the bar,
+  the per-batch counts and the final summary (`jobResultLabel`, e.g. *"Completed — 2,450 messages,
+  18 files deleted"*) update live. Errors are counted and the last secret-free message is shown.
+
+### General System Cleanup — eight categories, preview then run
+
+Each card shows what the category IS, exactly which rows/files it may remove, the safety rule, who
+may run it and — where measurable — the storage it would recover. Eight categories exist because
+eight are supported by this app's actual schema:
+
+| Category | Removes | May run |
+| --- | --- | --- |
+| Orphaned records | Messages whose channel/sender is gone, DMs in a conversation with no members, plus their attachments/reactions/“delete for me” rows | Owner |
+| Abandoned file uploads | Stored files ≥ 24 h old that no message, profile, banner, group photo or community icon references | Owner |
+| Expired sessions and codes | Auth sessions, refresh tokens and verification codes past their own expiry | Admin |
+| Stale typing and call signals | “is typing” rows and call signalling payloads older than 30 min, presence rows of deleted accounts | Admin |
+| Finished call records | Call invitations that ended/expired more than 7 days ago | Admin |
+| Expired community invites | Invite links whose expiry passed or whose uses are used up | Admin |
+| Expired unlocks and reset codes | Lapsed lock unlocks, Secret Chats PIN reset codes, site-lock recovery codes, expired lockout timers | Admin |
+| Expired rate-limit counters | Abuse-protection windows that ended more than a day ago | Admin |
+
+- **Preview Cleanup** (`cleanup.previewGeneral`) scans every selected category and reports the record
+  count and recoverable bytes per card. It is read-only — it opens no write path.
+- **Run Cleanup** deletes only the categories the administrator selected, in bounded batches, and
+  reports progress and a final summary.
+- **Nothing is deleted for "looking old".** Every category is defined by a positive rule the row
+  itself carries (an expired timestamp) or by "nothing references this" — and every parent is
+  resolved server-side first (`referencedStorageIds` builds the set of storage ids that live
+  attachments, profiles, groups and communities still use, and a file is only unlinked when it is in
+  none of them).
+- **What general cleanup can never touch**: user accounts, communities, channels, memberships,
+  roles, profiles, groups, live sessions, attachments a message still references, audit records,
+  and anything from the active recovery windows above.
+
+### Concurrency, authorization and audit
+
+- **Every public function starts with `requireActor`** → `requirePanelAccess` (the panel's existing
+  `rankOf(role) >= ROLE_RANK.admin` gate). Ordinary users calling the endpoints directly are refused
+  with `Administrator access required.`, and the Owner-only paths are refused for a plain Admin.
+- **A running job re-checks its actor before every batch**, so revoking access stops the cleanup
+  with an audited `failed` status instead of letting it continue on stale authority.
+- **At most one cleanup runs at a time** (`requireNoRunningJob` uses the `by_status` index); a job
+  that stopped reporting progress is recovered as failed, so a crashed run cannot block the panel
+  forever.
+- **Locks, batches and atomicity**: each batch is one Convex mutation, so it is all-or-nothing — a
+  thrown batch rolls back and records the failure rather than leaving half-deleted records. Message
+  cleanup sweeps 200 rows per batch and re-schedules itself; a time window in the middle of a long
+  history is reached through an **indexed** time-bounded scan, so nothing is read merely to skip it.
+- **Audited**: start, completion, cancellation and failure are written through `auditAdmin` with the
+  actor, action, scope label, range label (including the time zone), counts and outcome. No module
+  here reads a password, PIN or token, so none can reach a log or a history row.
+
+### History and recovery (what is actually true)
+
+The **Cleanup History** table shows each job's date, administrator, type, scope, records affected and
+result, and stays readable after the messages are gone — `cleanupJobs` rows and their audit entries
+are never cleanup targets.
+
+**Recovery, stated honestly:** this project has no backup/restore mechanism for messages, so a
+message cleanup is **not** reversible — the confirmation dialog says so, and this README does not
+claim otherwise. What *is* recoverable is the record of what happened (job + audit rows), and the
+“Preview” step is the real safety net: run it first, check the count against the range, then delete.
+Files unlinked by a cleanup are removed from Convex storage; nothing in this feature deletes a
+backup, and no backup exists for it to delete.
+
+### Verification
+
+`bun cleanup-maintenance-test.mjs` (204 assertions) covers three layers, none of which needs an
+account:
+
+1. **The pure rules** — `rangeCovers` for each range kind, `scopeProblem`/`rangeProblem` rejections
+   (an empty window is refused rather than silently deleting nothing), `isSiteWide`/`requiredPhrase`
+   (the phrase is required for site-wide only), `phraseMatches` case/space handling, `batchPlan` and
+   `progressPercent` bounds, `formatCount`/`formatBytes`/`formatMoment`/`timeZoneLabel`,
+   `toLocalPicker`/`fromLocalPicker` round-tripping the admin's own time zone, and
+   `sanitizeCategoryIds` dropping unknown/duplicate ids.
+2. **The real source** — the rules are imported by both `src/convex/cleanup.ts` and
+   `CleanupMaintenance.tsx`; every public backend function begins with the admin gate; the
+   site-wide phrase is verified server-side; deletion goes through `deleteChannelMessage` /
+   `deleteDmMessage`; the UI shows a preview, a confirmation, progress and history, never a
+   `window.confirm`, never a `localStorage` flag and never a client-only delete; every category in
+   `GENERAL_CATEGORIES` has an implementation and vice versa.
+3. **The live deployment, with no session** — all four public entry points
+   (`permissions`, `scopes`, `history`, `job`, `startMessageCleanup`, `startGeneralCleanup`,
+   `cancelJob`, both previews) are called anonymously and must refuse with
+   `Administrator access required.`, so nothing is written.
+
+`bun deleted-messages-test.mjs`, `bun group-settings-test.mjs`, `bun community-category-test.mjs`,
+`bun layout-stability-test.mjs`, `bun admin-pin-test.mjs` and `bun site-lock-test.mjs` were re-run
+unchanged after this feature to confirm the existing retention, moderation and layout behaviour is
+intact.
+
 ## Admin Panel retention tabs — the "multiple paginated queries" trap
 
 Both retention tabs (`listMineDeletedMessages`, `listMineHiddenMessages`) share one indexed read,
