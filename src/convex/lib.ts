@@ -56,9 +56,10 @@ export async function presenceInfoOf(
   ctx: Ctx,
   userId: Id<"users">,
   viewerId?: Id<"users"> | null,
-): Promise<{ status: string; lastSeen: number | null }> {
+): Promise<{ status: string; lastSeen: number | null; lastActive: number | null }> {
   const p = await ctx.db.query("presence").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
-  const lastSeen = p?.lastSeen ?? null;
+  let lastSeen = p?.lastSeen ?? null;
+  let lastActive = p?.lastActive ?? null;
   let status = p?.status ?? "offline";
   if (!p) {
     status = "offline";
@@ -66,15 +67,25 @@ export async function presenceInfoOf(
     // Tab closed / explicit disconnect.
     status = "offline";
   } else if (lastSeen !== null && Date.now() - lastSeen > 90_000) {
-    // No heartbeat for 3 intervals — treat as gone even if "connected".
+    // No heartbeat for 3 intervals — treat as gone even if "connected". The
+    // stored lastSeen is NOT erased: it is the last-online timestamp the
+    // friends list sorts by, so an unexpected disconnection keeps its real
+    // "last online" value instead of looking like a brand-new account.
     status = "offline";
   }
   if (viewerId && viewerId !== userId) {
     if (status === "invisible") status = "offline";
     const settings = await settingsOf(ctx, userId);
     if (settings?.presenceVisible === false) status = "offline";
+    // Hidden presence hides the TIMESTAMPS too: "Last online 2 minutes ago"
+    // gives away exactly what hiding the status was meant to keep private, so
+    // another member never receives them. (You always see your own.)
+    if (status === "offline" && (p?.status === "invisible" || settings?.presenceVisible === false)) {
+      lastSeen = null;
+      lastActive = null;
+    }
   }
-  return { status, lastSeen };
+  return { status, lastSeen, lastActive };
 }
 
 /**

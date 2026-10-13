@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { areFriends, audit, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import type { Id } from "./_generated/dataModel";
+import { sortFriendsByActivity } from "../lib/friend-sort";
 
 function pair(a: Id<"users">, b: Id<"users">): [Id<"users">, Id<"users">] {
   return (a as string) < (b as string) ? [a, b] : [b, a];
@@ -12,7 +13,7 @@ function pair(a: Id<"users">, b: Id<"users">): [Id<"users">, Id<"users">] {
 async function publicCard(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"users">, viewerId?: Id<"users">) {
   const profile = await profileOf(ctx, userId);
   const user = await ctx.db.get(userId);
-  const { status, lastSeen } = await presenceInfoOf(ctx, userId, viewerId);
+  const { status, lastSeen, lastActive } = await presenceInfoOf(ctx, userId, viewerId);
   return {
     userId,
     username: user?.username ?? "",
@@ -21,6 +22,8 @@ async function publicCard(ctx: Parameters<typeof displayNameOf>[0], userId: Id<"
     avatarUrl: await avatarUrlOf(ctx, userId),
     presence: status,
     lastSeen,
+    // The last real interaction, used to order ONLINE friends by recency.
+    lastActive,
     customStatus: profile?.customStatus ?? "",
     decorationId: profile?.decorationId ?? null,
   };
@@ -121,11 +124,11 @@ export const listFriends = query({
     const asB = await ctx.db.query("friendships").withIndex("by_b", (q) => q.eq("userB", userId)).collect();
     const ids = [...asA.map((f) => f.userB), ...asB.map((f) => f.userA)];
     const cards = await Promise.all(ids.map((id) => publicCard(ctx, id, userId)));
-    // Online first, then alphabetical.
-    return cards.sort((x, y) => {
-      const rank = (s: string) => (s === "offline" ? 1 : 0);
-      return rank(x.presence) - rank(y.presence) || x.displayName.localeCompare(y.displayName);
-    });
+    // Ordered by real activity: online friends first (most recently active),
+    // then offline friends by their stored last-online timestamp, then friends
+    // who have never been online. Same rule the client applies, so the two can
+    // never disagree — see `src/lib/friend-sort.ts`.
+    return sortFriendsByActivity(cards);
   },
 });
 

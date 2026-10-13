@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toSafeArray } from "@/lib/collection";
+import { sortFriendsByActivity } from "@/lib/friend-sort";
 import { Button } from "@/components/ui/button";
 import { Avatar, EmptyState, SectionHeader, formatLastSeen } from "./ui";
 import { toast } from "sonner";
@@ -24,7 +25,16 @@ export default function HomeView({
   const following = useQuery(api.social.listFollowing, {});
   const people = useQuery(api.users.searchUsers, { q: "" });
   // Collections normalized once; a malformed payload can never crash a render.
-  const friendList = useMemo(() => toSafeArray<NonNullable<typeof friends>[number]>(friends, { label: "Friends", source: "api.social.listFriends" }), [friends]);
+  // Ordered by real activity — online friends first (most recently active), then
+  // offline friends by their stored last-online time, then friends who have never
+  // been online. `social.listFriends` already returns this order; applying the
+  // same shared rule here keeps the list correct even if a payload arrives
+  // unordered, and it re-runs whenever presence changes (the query is reactive),
+  // so a friend who comes online moves up on their own.
+  const friendList = useMemo(
+    () => sortFriendsByActivity(toSafeArray<NonNullable<typeof friends>[number]>(friends, { label: "Friends", source: "api.social.listFriends" })),
+    [friends],
+  );
   const incomingRequests = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof requests>["incoming"]>[number]>(requests?.incoming, { label: "Incoming friend requests", source: "api.social.listRequests" }), [requests]);
   const outgoingRequests = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof requests>["outgoing"]>[number]>(requests?.outgoing, { label: "Outgoing friend requests", source: "api.social.listRequests" }), [requests]);
   const followingList = useMemo(() => toSafeArray<NonNullable<typeof following>[number]>(following, { label: "Following", source: "api.social.listFollowing" }), [following]);

@@ -757,6 +757,49 @@ Locked & Hidden Conversations screen can never print different text for the same
   Conversations page renders the same rows and highlights the selected chat, and that a signed-out
   caller cannot rename a group.
 
+## Friends list ordered by last-online activity
+
+The friends list is ordered by real presence data — one pure rule, applied by the query AND the
+view, so the two can never disagree (`src/lib/friend-sort.ts`, `bun friend-sort-test.mjs`):
+
+| Order | What it means | Key |
+| --- | --- | --- |
+| 1 | `online`, then `dnd`, then `idle` | most recent activity (`lastActive`, else `lastSeen`) |
+| 2 | offline friends | stored `lastSeen`, newest first |
+| 3 | friends who have never been online | their name, then id |
+
+- **Where the data comes from.** `presence.lastSeen` / `lastActive` on the existing `presence` table
+  (`src/convex/schema.ts`), written by `profiles.heartbeat` (one 30s ping, only while the tab is
+  visible and online), `profiles.setPresence` (manual status) and `profiles.disconnect` (on unload —
+  an upsert, so a session that never heart-beated still records a last-online time). No sample users,
+  no hardcoded timestamps: `social.listFriends` reads the real `friendships` table and the viewer's
+  own authorization (`publicCard` resolves each friend server-side).
+- **Unexpected disconnections.** `presenceInfoOf` treats a session with no heartbeat for 90s as
+  offline **without erasing `lastSeen`**, so a crashed tab or lost connection keeps its real
+  last-online value and sorts by it instead of dropping to “never seen”.
+- **Privacy is part of the rule.** A friend who chose *invisible*, or who turned presence off
+  (`presenceVisible: false`), reads as offline to everyone else AND now has `lastSeen`/`lastActive`
+  withheld — “Last online 2 minutes ago” would give away exactly what hiding the status was meant to
+  keep private. To others they sort with the never-seen friends; you still see your own timestamps.
+- **Indicators.** The row keeps its picture, username and status dot: green `online`, yellow `idle`,
+  red `dnd`, gray `offline` (`PRESENCE_META`, with `showAllStates` drawing the gray dot in lists).
+  Offline rows print `formatLastSeen` — “Last online 5 minutes ago”, or “Last online unknown” for a
+  friend who has never been online.
+- **Real time.** `social.listFriends` is a reactive query and the client applies the same rule inside
+  a `useMemo`, so a friend coming online moves up, and a friend going offline drops into the
+  last-seen order, with no reload — and the order is identical after a refresh, because it is derived
+  from stored timestamps rather than client state. Equal timestamps are broken deterministically
+  (display name → username → user id), so the list never shuffles.
+- **Responsive row.** `.fc-row-main > span` may shrink (`min-width: 0`) and the name and status line
+  truncate with an ellipsis, and the row itself is never fixed-width — so a long display name or
+  username cannot push a friend's status or the action buttons off a narrow screen.
+- **Verification.** `bun friend-sort-test.mjs` (73 assertions): the rule offline (online > dnd >
+  idle > offline by `lastSeen` > never-online, coming online moves a friend up, the input array is
+  never mutated, ties are stable), the real source of the presence writes, the staleness window, the
+  withheld-timestamp privacy rule, that both the query and `HomeView` use the rule, the indicator
+  colours and the heartbeat/unload wiring, the responsive row rules, plus a live call proving the
+  friends query answers without exposing presence to a signed-out caller.
+
 ## Deployment safety (read this before deploys and before debugging a black screen)
 
 The app reads and writes ONE pinned Convex deployment (`src/main.tsx` → `CONVEX_URL`).
