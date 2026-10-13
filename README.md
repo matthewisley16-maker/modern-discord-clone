@@ -439,6 +439,96 @@ Freecord deletes messages after seven days.
   `bun deleted-messages-test.mjs` pins the boundary itself with a fixed clock: 7 days minus a
   minute is still listed, exactly 7 days is not.
 
+## Optional PIN and password locks on Freecord itself (both optional, independently)
+
+A member can put a **PIN** and/or an **extra password** in front of Freecord, from
+**Settings → Account → Login & Security**. Both are opt-in, independent, and never required: with
+both off — the default for every account and every existing user — the site opens on the normal
+account sign-in and behaves **exactly as it did before this feature existed**.
+
+| Piece | Where |
+| --- | --- |
+| Rules (PIN length, password rule, configurations, lockout maths, recovery codes) | `src/lib/site-lock.ts` (`bun site-lock-test.mjs`) |
+| Backend: status / verify / setPin / setPassword / disablePin / disablePassword / recovery / lockNow | `src/convex/siteLock.ts` |
+| Storage | `siteLocks` in `src/convex/schema.ts` (`by_user`, one row per member who opts in) |
+| Settings card | `src/components/dashboard/SiteLockSettings.tsx` (rendered in the Account tab) |
+| Lock screen | `src/components/SiteLockGate.tsx`, applied in `src/main.tsx` (`/`, `/dashboard`, `/admin`) |
+
+### The four configurations
+
+| PIN lock | Password lock | What happens when a session starts |
+| --- | --- | --- |
+| off | off | Nothing is asked. The dashboard, chats, friends and groups render immediately — the gate is a no-op (`status.enabled === false`). |
+| on | off | The PIN is asked. Nothing else. |
+| off | on | The extra password is asked. Nothing else. |
+| on | on | Both are required in one submit before the app renders. Verifying only one is not enough (`pendingSiteFactors` keeps the other pending). |
+
+Nobody is ever asked to *set up* either credential: the gate only ever appears for a member who
+turned a lock on, and the settings section never auto-opens a form.
+
+### Security
+
+- **Server-side, hashed, never plain text.** Credentials are only ever stored as one-way **Scrypt**
+  hashes with a random salt (`pinHash`, `passwordHash`); they are never returned by a query, never
+  logged, and never echoed in an error message. Crypto runs in **actions**, never in a query.
+- **Leading zeros survive.** The PIN is 1–10 digits and is handled, transported and hashed as a
+  STRING, so `0042` is a valid PIN and is a *different* credential from `42`. Both inputs sanitise
+  to digits only, and nothing ever calls `Number()` on a PIN.
+- **Independent.** `clearPin` touches only the PIN, `clearPassword` only the password. Enabling one
+  never enables, disables or verifies the other, and **neither** touches account authentication:
+  no auth session is created, revoked or modified, so changing an unrelated setting never signs
+  anybody out.
+- **Rate limits and progressive delay.** Every entry point is rate limited server-side
+  (`enforceRateLimit`: verify 30/min, set 8/min, recovery email 3/10min) and wrong entries escalate
+  through the same ladder the Admin PIN uses — the first two typos are free, then 5s, 10s, 20s …
+  capped at 15 minutes, reset by a correct entry and decaying after an hour of quiet.
+- **Proof of identity to change, disable or recover.** Changing a credential requires the current
+  one; turning one off requires the current credential **or** the account's Freecord password
+  (verified against its stored hash). Accounts with no password credential (email-code sign-in) use
+  the signed-in session itself, exactly like the Admin PIN — a forgotten lock never becomes a
+  lockout. Every change is written to the audit log (`site_lock.*`) with no credential in the detail.
+- **Cannot be bypassed by a deep link.** `SiteLockGate` reads `api.siteLock.status` on every render
+  and the dashboard is not mounted at all while a session is unsatisfied, `/dashboard` and `/admin`
+  are wrapped inside `RequireAuth`, and `verify` is a server action scoped to the caller's own row
+  and auth session. Refreshing the page cannot skip it, and nothing is cached in `localStorage`,
+  `sessionStorage` or any other browser storage.
+
+### Sessions
+
+Verification is remembered **per auth session** (`verifiedPinSessionId` /
+`verifiedPasswordSessionId`), not with a client flag or a timer: a credential is asked for once when
+a session starts, stays satisfied for that whole session (navigating, refreshing, reconnecting a
+socket or a Convex websocket never re-asks), and is required again after signing out, after the
+session expires, or on any other device — because a new session is a new session id. “Lock Freecord
+now” in settings revokes the current session's verification immediately, which also makes the
+feature trivial to try out.
+
+### Recovery
+
+On the lock screen (the one place a locked-out member can reach) **Forgot PIN/password** offers a
+single-use, hashed, 10-minute **email code** that can set a new credential or turn the lock off, plus
+the account-password route. In Settings, the same two proofs are available without being locked out.
+A code is burned as soon as it is used, allows only a few wrong entries, and is dropped if delivery
+fails. The code is only ever emailed to the account's own address and is shown masked back to the
+member (`a••a@example.com`).
+
+### Verification
+
+`bun site-lock-test.mjs` (188 assertions) covers four layers: the pure rules (PIN format and leading
+zeros, the password rule with symbols allowed, all four configurations, the progressive delay, the
+recovery-code rules); the server source (only hashes in the schema, Scrypt hashing and verification,
+session-scoped verification, rate limits, identity checks and the audit trail); the UI wiring (which
+fields appear for which configuration, both-required submit, Clear/Forgot/loading/error controls,
+protected-route wrapping, no browser storage); and live read-only calls with no session — a
+signed-out visitor is never asked for a lock and can never verify, create, disable or recover one.
+
+The end-to-end click-through of a signed-in session is **not** automated here: the suite guard
+(`test-support/guard.mjs`) refuses to create synthetic accounts on the shared production deployment,
+so the four configurations are proven by the shared rule both the server and the gate import, the
+source wiring, and the live no-session boundary. To try it by hand: sign in → Settings → Account →
+Login & Security → enable a lock → **Lock Freecord now** → unlock; then toggle the other lock and
+repeat.
+
 ## Optional Admin PIN (never forced, never a way in)
 
 The Admin Panel can be protected by a PIN that an ADMINISTRATOR chooses for their own account. It

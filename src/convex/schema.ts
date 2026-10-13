@@ -361,6 +361,54 @@ const schema = defineSchema(
     }).index("by_user", ["userId"]),
 
     /**
+     * OPTIONAL site locks — one row per member who chooses to use them.
+     *
+     * Freecord can be opened behind a short numeric PIN and/or an extra
+     * password, and BOTH are entirely optional and independent: no row at all
+     * means "no lock", which is the default for every account. A row exists
+     * only once a member deliberately turns a lock on, so nothing here is ever
+     * created, prompted for or required on their behalf.
+     *
+     * These credentials are NOT account authentication — signing in still goes
+     * through the existing auth provider. They are an extra door on an already
+     * signed-in session, granting access to nothing but the member's own UI, and
+     * they can never be used to reach someone else's data. Hashes are Scrypt (a
+     * random salt per credential) and are never returned to any client; plain
+     * values are never stored, logged or sent anywhere but the verification
+     * step.
+     */
+    siteLocks: defineTable({
+      userId: v.id("users"),
+      /** Explicit preferences — absent/false means that lock is off. */
+      pinEnabled: v.optional(v.boolean()),
+      passwordEnabled: v.optional(v.boolean()),
+      /**
+       * One-way Scrypt hashes (a fresh random salt per credential). The PIN is
+       * hashed as the STRING the member typed, never as a number, so leading
+       * zeros such as "0042" survive hashing and stay distinct from "42".
+       */
+      pinHash: v.optional(v.string()),
+      passwordHash: v.optional(v.string()),
+      /**
+       * Per-SESSION verification, not a timed grant: the auth session that proved
+       * a credential stays verified for the whole session, so browsing around
+       * never re-asks — while signing out, expiring the session or opening
+       * another device locks the site again immediately.
+       */
+      verifiedPinSessionId: v.optional(v.string()),
+      verifiedPasswordSessionId: v.optional(v.string()),
+      /** Progressive delay after consecutive wrong entries (shared ladder). */
+      failedAttempts: v.number(),
+      lockedUntil: v.optional(v.number()),
+      lastFailedAt: v.optional(v.number()),
+      /** Emailed recovery code for a forgotten PIN/password (hashed, expiring). */
+      recoveryCodeHash: v.optional(v.string()),
+      recoveryCodeExpiresAt: v.optional(v.number()),
+      recoveryAttempts: v.optional(v.number()),
+      updatedAt: v.number(),
+    }).index("by_user", ["userId"]),
+
+    /**
      * Short-lived unlock grants. `conversationId` is absent for a grant that
      * covers every locked conversation (issued by the Secret Chats screen); a
      * concrete id unlocks exactly one conversation (the Lock Only prompt).

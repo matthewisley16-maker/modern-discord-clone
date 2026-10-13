@@ -1677,3 +1677,53 @@ html.fc-light .fc-status-diagnostics { border-top-color: rgba(0,0,0,.08); }
 html.fc-light .fc-status-diagnostics li { background: rgba(0,0,0,.04); color: #6d6b84; }
 html.fc-light .fc-connection-banner.notice { background: rgba(109,63,245,.12); color: #4a2fa8; }
 html.fc-light .fc-connection-banner.alert { background: rgba(200,40,55,.12); color: #8c1c26; }
+
+/* ============ Optional site locks (PIN and/or password) ============ */
+/* These styles only ever paint when a member deliberately turned a lock ON:
+   with both off (the default) the gate renders the app unchanged and the
+   Settings cards stay switched off. Same surfaces, accent and type scale as the
+   service-status screens, so the lock screen looks native to Freecord. */
+.fc-sitegate-shell { min-height: 100dvh; display: grid; align-content: center; justify-items: center; padding: 32px 20px; background: radial-gradient(ellipse at 50% 8%, rgba(109,63,245,.18), transparent 58%), #0b0b10; color: #eeecf6; }
+.fc-sitegate-card { width: min(440px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 30px 26px; border: 1px solid rgba(255,255,255,.08); border-radius: 18px; background: #15151d; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+.fc-sitegate-mark { display: inline-flex; align-items: center; gap: 9px; font-size: 22px; font-weight: 750; letter-spacing: -1px; color: #f2f0fa; }
+.fc-sitegate-mark svg { width: 22px; height: 22px; color: #8b5cf6; }
+.fc-sitegate-body { display: flex; flex-direction: column; gap: 12px; }
+.fc-sitegate-title { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; letter-spacing: -.3px; color: #f2f0fa; }
+.fc-sitegate-title svg { color: #a78bfa; }
+.fc-sitegate-sub { font-size: 12.5px; line-height: 1.7; color: #9d99b0; }
+.fc-sitegate-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #9d99b0; }
+.fc-sitegate-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.fc-sitegate-error { font-size: 12px; line-height: 1.6; color: #f0616d; }
+.fc-sitegate-notice { font-size: 12px; line-height: 1.6; color: #a78bfa; }
+.fc-sitegate-recover { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.07); }
+.fc-sitegate-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.fc-sitegate-chip { padding: 7px 12px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.04); color: #b7b1cc; }
+.fc-sitegate-chip.active { background: rgba(139,92,246,.2); border-color: rgba(139,92,246,.6); color: #cfbeff; }
+.fc-sitegate-foot { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: space-between; align-items: center; font-size: 11px; color: #7d7891; }
+.fc-sitegate-foot button { font-size: 11px; font-weight: 600; color: #b7a4ff; text-decoration: underline; text-underline-offset: 3px; }
+.fc-sitegate-foot button:hover { color: #d8caff; }
+/* Small screens: the card keeps breathing room and the buttons stack full-width. */
+@media (max-width: 520px) {
+  .fc-sitegate-shell { padding: 20px 14px; }
+  .fc-sitegate-card { padding: 24px 18px; gap: 12px; }
+  .fc-sitegate-actions > button { flex: 1 1 auto; }
+}
+
+/* Settings → Account → Login & Security: one card per independent lock. */
+.fc-lock-card { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; border: 1px solid rgba(255,255,255,.07); background: rgba(255,255,255,.02); }
+.fc-lock-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.fc-lock-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; color: #eeecf6; }
+.fc-lock-title svg { color: #a78bfa; }
+.fc-lock-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fc-lock-card .fc-muted { margin-top: 4px; }
+html.fc-light .fc-sitegate-shell { background: radial-gradient(ellipse at 50% 8%, rgba(109,63,245,.12), transparent 58%), #f6f5fb; color: #1c1b22; }
+html.fc-light .fc-sitegate-card { background: #fff; border-color: rgba(0,0,0,.08); box-shadow: 0 24px 60px rgba(20,18,40,.12); }
+html.fc-light .fc-sitegate-mark, html.fc-light .fc-sitegate-title { color: #1c1b22; }
+html.fc-light .fc-sitegate-sub, html.fc-light .fc-sitegate-field { color: #6d6b84; }
+html.fc-light .fc-sitegate-foot { color: #6d6b84; }
+html.fc-light .fc-sitegate-foot button, html.fc-light .fc-sitegate-notice { color: #6d3ff5; }
+html.fc-light .fc-sitegate-recover { border-top-color: rgba(0,0,0,.08); }
+html.fc-light .fc-sitegate-chip { background: rgba(0,0,0,.03); border-color: rgba(0,0,0,.1); color: #4b4a58; }
+html.fc-light .fc-sitegate-chip.active { background: rgba(124,92,246,.16); border-color: rgba(124,92,246,.45); color: #5b3fd6; }
+html.fc-light .fc-lock-card { background: rgba(0,0,0,.02); border-color: rgba(0,0,0,.08); }
+html.fc-light .fc-lock-title { color: #1c1b22; }

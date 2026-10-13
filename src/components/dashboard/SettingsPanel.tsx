@@ -9,6 +9,7 @@ import { Avatar } from "./ui";
 import { toast } from "sonner";
 import { Eye, EyeOff, KeyRound, Lock, Mail, Mic, Monitor, Palette, Settings2, Shield, Trash2, User, X } from "lucide-react";
 import SecretChatsDialog from "./SecretChats";
+import SiteLockSettings from "./SiteLockSettings";
 
 const TABS = ["General", "Profile", "Appearance", "Notifications", "Privacy", "Voice & Video", "Account", "Sessions"] as const;
 type Tab = (typeof TABS)[number];
@@ -443,6 +444,9 @@ export default function SettingsPanel({ onClose, onEditProfile }: { onClose: () 
                   </div>
                 </div>
               )}
+              {/* Optional PIN/password locks — independent, off by default. */}
+              <SiteLockSettings />
+
               <h3 className="danger-heading"><Trash2 size={16} /> Delete account</h3>
               <p className="fc-muted">This permanently deletes your profile, messages, and communities you own. Type your username to confirm.</p>
               <div className="fc-delete-row">

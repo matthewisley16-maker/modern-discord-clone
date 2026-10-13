@@ -1,5 +1,6 @@
 import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
+import SiteLockGate from "@/components/SiteLockGate";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
 import { BrandSplash, DiagnosticsWatcher, GlobalConnectionBanner, ServiceStatusScreen } from "@/components/ServiceStatus";
 import { useServiceStatus } from "@/hooks/use-service-status";
@@ -53,7 +54,14 @@ function RootGate() {
   if (status.phase === "ready") {
     return (
       <FeatureBoundary key={handle.retryEpoch} label="Freecord" block>
-        {isAuthenticated ? <Dashboard /> : <Landing />}
+        {/* Optional PIN/password lock: a no-op unless the member enabled one. */}
+        {isAuthenticated ? (
+          <SiteLockGate>
+            <Dashboard />
+          </SiteLockGate>
+        ) : (
+          <Landing />
+        )}
       </FeatureBoundary>
     );
   }
@@ -225,7 +233,9 @@ createRoot(document.getElementById("root")!).render(
                 path="/onboarding"
                 element={
                   <RequireAuth redirectImmediately>
-                    <Onboarding />
+                    <SiteLockGate>
+                      <Onboarding />
+                    </SiteLockGate>
                   </RequireAuth>
                 }
               />
@@ -234,7 +244,9 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth redirectImmediately>
                     <FeatureBoundary label="The dashboard" block>
-                      <Dashboard />
+                      <SiteLockGate>
+                        <Dashboard />
+                      </SiteLockGate>
                     </FeatureBoundary>
                   </RequireAuth>
                 }
@@ -245,7 +257,9 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth redirectImmediately>
                     <FeatureBoundary label="The Admin Panel" block>
-                      <AdminPanel />
+                      <SiteLockGate>
+                        <AdminPanel />
+                      </SiteLockGate>
                     </FeatureBoundary>
                   </RequireAuth>
                 }
