@@ -7,6 +7,7 @@ import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherW
 import { lockStateOf } from "./conversationPrivacy";
 import { resolveMentions, type MentionCache } from "./mentions";
 import { groupDisplayName } from "../lib/group-name";
+import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary } from "../lib/message-format";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 
@@ -246,7 +247,7 @@ export const listConversations = query({
         // leaks a message preview until the PIN has been entered.
         locked: lock.locked,
         unlocked: lock.unlocked,
-        lastMessage: lock.unlocked && last && !last.deleted ? last.body.slice(0, 90) : "",
+        lastMessage: lock.unlocked && last && !last.deleted ? plainSummary(last.body, 90) : "",
       });
     }
     return out.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastMessageAt - a.lastMessageAt);
@@ -307,7 +308,8 @@ export const sendBatch = mutation({
 
     const safeGif = gif ? requireGif(gif) : undefined;
     const raw = body.trim();
-    if (raw.length > 4000) throw new ConvexError("Message is too long (4000 characters max).");
+    // Counted in code points, exactly like the composer's character counter.
+    if (messageLength(raw) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);
     const text = safeGif ? raw || "Sent a GIF" : raw;
     if (!text) throw new ConvexError("Message can't be empty.");
 
@@ -669,7 +671,8 @@ export const messages = query({
         if (parent) {
           reply = parent.deletedForEveryone
             ? { _id: parent._id, author: "", body: "Original message deleted", deleted: true }
-            : { _id: parent._id, author: await displayNameOf(ctx, parent.userId), body: parent.body.slice(0, 140), deleted: false };
+            // The quote preview shows the message WITHOUT its formatting markers.
+            : { _id: parent._id, author: await displayNameOf(ctx, parent.userId), body: plainSummary(parent.body, 140), deleted: false };
         }
       }
       result.push({
@@ -713,7 +716,8 @@ export const sendMessage = mutation({
     // Validate the GIF server-side; never trust a client-provided media URL.
     const safeGif = gif ? requireGif(gif) : undefined;
     const raw = body.trim();
-    if (raw.length > 4000) throw new Error("Message is too long (4000 characters max).");
+    // Counted in code points, exactly like the composer's character counter.
+    if (messageLength(raw) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);
     // A GIF can be sent on its own; a text fallback keeps search/history working.
     const text = safeGif ? raw || "Sent a GIF" : raw;
     if (!text) throw new Error("Message can't be empty.");
@@ -759,7 +763,9 @@ export const editMessage = mutation({
     if (message.userId !== me) throw new Error("You can only edit your own messages.");
     const text = body.trim();
     if (!text) throw new Error("Message can't be empty.");
-    await ctx.db.patch(messageId, { body: text.slice(0, 4000), editedAt: Date.now() });
+    // An edit is never silently truncated: an over-long one is refused instead.
+    if (messageLength(text) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);
+    await ctx.db.patch(messageId, { body: text, editedAt: Date.now() });
   },
 });
 

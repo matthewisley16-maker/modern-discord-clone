@@ -7,6 +7,7 @@ import { gifValidator, requireGif } from "./gif";
 import { hasChannelPermission, isBlockedEitherWay, isTimedOut, memoizeAuthorCards, notify } from "./lib";
 import { resolveMentions, type MentionCache } from "./mentions";
 import { collectChannelNotifyTargets } from "../lib/server-notifications";
+import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary } from "../lib/message-format";
 
 async function signedIn(ctx: QueryCtx) {
   const id = await getAuthUserId(ctx);
@@ -24,9 +25,14 @@ async function nameOf(ctx: QueryCtx, id: Id<"users">) {
   const user = await ctx.db.get(id);
   return profile?.displayName || user?.name || "Freecord member";
 }
+/**
+ * Trim + length-check a user-supplied string. The length is counted in Unicode
+ * code points (`messageLength`), the SAME way the composers' character counter
+ * counts, so an emoji is one character on both sides of the wire.
+ */
 function clean(value: string, max: number) {
   const text = value.trim();
-  if (!text || text.length > max) throw new ConvexError(`Please enter between 1 and ${max} characters.`);
+  if (!text || messageLength(text) > max) throw new ConvexError(`Please enter between 1 and ${max.toLocaleString("en-US")} characters.`);
   return text;
 }
 export const workspace = query({ args: {}, handler: async ctx => {
@@ -82,7 +88,8 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
         // Never expose the contents of a message deleted for everyone.
         reply = parent.deletedForEveryone
           ? { _id: parent._id, author: "", body: "Original message deleted", deleted: true }
-          : { _id: parent._id, author: await nameOf(ctx, parent.userId), body: parent.body.slice(0, 140), deleted: false };
+          // The quote preview shows the message WITHOUT its formatting markers.
+          : { _id: parent._id, author: await nameOf(ctx, parent.userId), body: plainSummary(parent.body, 140), deleted: false };
       }
     }
     return { ...message, ...(await authorCardFor(message.userId)), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply, mentionUsers: await resolveMentions(ctx, message.body, { serverId: channel.serverId }, mentionCache) };
@@ -132,9 +139,9 @@ export const sendMessage = mutation({ args: { channelId: v.id("channels"), body:
   if (/@(everyone|here)\b/i.test(raw) && !(await hasChannelPermission(ctx, channelId, userId, "mentionEveryone"))) {
     throw new ConvexError("You don't have permission to mention everyone.");
   }
-  if (raw.length > 4000) throw new ConvexError("Please enter between 1 and 4000 characters.");
+  if (messageLength(raw) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);
   // A GIF can be sent on its own; a plain-text fallback keeps search/replies working.
-  const text = safeGif ? raw || "Sent a GIF" : clean(body, 4000);
+  const text = safeGif ? raw || "Sent a GIF" : clean(body, MESSAGE_MAX_LENGTH);
   const messageId = await ctx.db.insert("messages", { channelId, userId, body: text, replyToId, gif: safeGif });
   // Deep link so the recipient lands on this exact message.
   const link = `?server=${channel.serverId}&channel=${channelId}&message=${messageId}`;
@@ -229,7 +236,9 @@ export const editMessage = mutation({ args: { messageId: v.id("messages"), body:
   if (message.userId !== userId) throw new ConvexError("You can only edit your own messages.");
   const text = body.trim();
   if (!text) throw new ConvexError("Message can't be empty.");
-  await ctx.db.patch(messageId, { body: text.slice(0, 4000), editedAt: Date.now() });
+  // An edit is never silently truncated: an over-long one is refused instead.
+  if (messageLength(text) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);
+  await ctx.db.patch(messageId, { body: text, editedAt: Date.now() });
 }});
 export const pinMessage = mutation({ args: { messageId: v.id("messages"), pinned: v.boolean() }, handler: async (ctx, { messageId, pinned }) => {
   const message = await ctx.db.get(messageId);

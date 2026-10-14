@@ -15,6 +15,8 @@ import MentionText from "./MentionText";
 import YouTubeEmbeds from "./YouTubeEmbed";
 import { useMessageScroll } from "@/hooks/use-message-scroll";
 import { gifUrlsIn } from "@/lib/message-links";
+import { formatCharacterCount, isMessageTooLong, MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary } from "@/lib/message-format";
+import { pastedMarkdown } from "@/lib/paste-html";
 import { sanitizeCollectionFields, toSafeArray } from "@/lib/collection";
 import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
@@ -117,7 +119,9 @@ export default function ChannelView({
   const [pendingGif, setPendingGif] = useState<GifValue | null>(null);
   const { scrollRef, atBottom, newCount, scrollToBottom, onScroll } = useMessageScroll(channelId, messageList.length);
   const fileInput = useRef<HTMLInputElement>(null);
-  const msgInput = useRef<HTMLInputElement>(null);
+  // A textarea, not a single-line input: a single-line input silently drops
+  // every newline, which is what used to flatten pasted paragraphs.
+  const msgInput = useRef<HTMLTextAreaElement>(null);
   // Typing heartbeats are throttled and cleared on send, switch, and unmount.
   const { onType, stop: stopTyping } = useTyping({ channelId });
   // @mention autocomplete — real users, prioritized by the viewer's follows.
@@ -148,6 +152,11 @@ export default function ChannelView({
   }, [messages, messageList, myUserId, playSound]);
 
   const canSend = permissions.includes("sendMessages");
+  // Character budget, counted in code points (see src/lib/message-format.ts) so
+  // the counter here is exactly what the backend validates.
+  const draftLength = messageLength(draft);
+  const tooLong = isMessageTooLong(draft);
+  const nearLimit = !tooLong && draftLength > MESSAGE_MAX_LENGTH * 0.9;
   // Derived from query data, not from the composer draft, so typing does not
   // recompute the list. Memoized so the whole message list can bail out of
   // re-rendering on every keystroke (the main cause of composer lag).
@@ -159,9 +168,61 @@ export default function ChannelView({
       .filter((m) => !search || m.body.toLowerCase().includes(term));
   }, [messageList, hiddenIdList, search]);
 
-  async function submit(e: React.FormEvent) {
+  // Grow the composer with the draft, up to the CSS max-height, then scroll.
+  useEffect(() => {
+    const el = msgInput.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [draft]);
+
+  /**
+   * Paste handler.
+   *
+   * 1. Files pasted into the composer become attachments (unchanged).
+   * 2. Otherwise the clipboard's rich flavour is converted to Freecord's
+   *    plain-text formatting and inserted at the caret, so bold/italic/
+   *    underline/strike, links, lists, headings, quotes, paragraph breaks,
+   *    blank lines and indentation all survive. If the browser only offers
+   *    plain text, its line breaks are kept. Pasted text is never truncated.
+   */
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData.files ?? []);
+    if (files.length) { e.preventDefault(); files.forEach(stageFile); return; }
+    const text = pastedMarkdown({
+      html: e.clipboardData.getData("text/html"),
+      text: e.clipboardData.getData("text/plain"),
+    });
+    if (!text) return;
     e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? draft.length;
+    const end = el.selectionEnd ?? start;
+    const next = `${draft.slice(0, start)}${text}${draft.slice(end)}`;
+    const caret = start + text.length;
+    mentions.onValueChange(next, caret);
+    onType(next);
+    requestAnimationFrame(() => {
+      const field = msgInput.current;
+      if (field) { field.focus(); field.setSelectionRange(caret, caret); }
+    });
+  }
+
+  function handleComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // The mention menu claims Arrow/Enter/Escape first while it is open.
+    mentions.onKeyDown(e);
+    if (e.defaultPrevented) return;
+    // Enter sends; Shift+Enter inserts a newline. Never send mid-IME-composition.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void sendDraft();
+    }
+  }
+
+  async function sendDraft() {
     if ((!draft.trim() && pending.length === 0 && !pendingGif) || busy || !canSend) return;
+    // Over-long drafts stay visible and editable; they are simply not sent.
+    if (tooLong) { toast.error(MESSAGE_TOO_LONG); return; }
     setBusy(true);
     try {
       if (editing) {
@@ -190,6 +251,11 @@ export default function ChannelView({
         toast.error(err instanceof Error ? err.message : "Message failed to send.");
       }
     } finally { setBusy(false); }
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    void sendDraft();
   }
 
   function clearPending() {
@@ -244,7 +310,7 @@ export default function ChannelView({
         <div className="fc-confirm">
           <h3>Delete for everyone?</h3>
           <p className="fc-confirm-quote">
-            “{confirmDelete.body.trim() ? confirmDelete.body.slice(0, 140) : "(attachment only)"}” — sent by <strong>{confirmDelete.author}</strong> in <strong>#{channelName}</strong>
+            “{confirmDelete.body.trim() ? plainSummary(confirmDelete.body, 140) : "(attachment only)"}” — sent by <strong>{confirmDelete.author}</strong> in <strong>#{channelName}</strong>
           </p>
           <p>This removes the message for every member of this community and deletes its attachments. It cannot be undone.</p>
           <div className="fc-confirm-actions">
@@ -477,21 +543,37 @@ export default function ChannelView({
             >
               <span className="fc-gif-glyph">GIF</span>
             </button>
-            <input
+            <textarea
               ref={msgInput}
               aria-label="Message"
               value={draft}
+              rows={1}
               disabled={busy}
-              maxLength={4000}
               onChange={(e) => { mentions.onValueChange(e.target.value, e.target.selectionStart); onType(e.target.value); }}
-              onKeyDown={mentions.onKeyDown}
+              onKeyDown={handleComposerKeyDown}
               onBlur={() => window.setTimeout(mentions.close, 120)}
-              onPaste={(e) => { const files = Array.from(e.clipboardData.files ?? []); if (files.length) { e.preventDefault(); files.forEach(stageFile); } }}
+              onPaste={handlePaste}
               placeholder={editing ? "Edit your message…" : `Message #${channelName}`}
             />
-            <button type="submit" disabled={(!draft.trim() && pending.length === 0 && !pendingGif) || busy} aria-label="Send message"><Send size={18} /></button>
+            <button type="submit" disabled={(!draft.trim() && pending.length === 0 && !pendingGif) || busy || tooLong} aria-label="Send message"><Send size={18} /></button>
           </form>
-          <div className="fc-composer-note"><span>Enter to send · Use @ to mention</span><span className="fc-receipt"><CheckCheck size={13} /> Live</span></div>
+          {tooLong && (
+            <div className="fc-composer-warning" role="alert">
+              {MESSAGE_TOO_LONG} This draft is {formatCharacterCount(draftLength)} characters — remove at least{" "}
+              {formatCharacterCount(draftLength - MESSAGE_MAX_LENGTH)} to send it. Nothing has been cut off.
+            </div>
+          )}
+          <div className="fc-composer-note">
+            <span>Enter to send · Shift+Enter for a new line · Use @ to mention</span>
+            <span className="fc-composer-note-right">
+              {draftLength > 0 && (
+                <span className={`fc-counter ${tooLong ? "over" : nearLimit ? "warn" : ""}`}>
+                  {formatCharacterCount(draftLength)} / {formatCharacterCount(MESSAGE_MAX_LENGTH)}
+                </span>
+              )}
+              <span className="fc-receipt"><CheckCheck size={13} /> Live</span>
+            </span>
+          </div>
         </div>
       )}
     </div>

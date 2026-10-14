@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "./ui";
+import { formatCharacterCount, isMessageTooLong, MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength } from "@/lib/message-format";
+import { pastedMarkdown } from "@/lib/paste-html";
 import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { Check, Search, Users, X } from "lucide-react";
@@ -57,9 +59,32 @@ export default function NewMessageDialog({
     setQuery("");
   };
 
-  const canSend = mode === "group" ? selected.length >= 1 && groupName.trim().length > 0 : selected.length >= 1 && body.trim().length > 0;
+  // Same character budget as the channel/DM composers (src/lib/message-format.ts).
+  const bodyLength = messageLength(body);
+  const tooLong = isMessageTooLong(body);
+  const canSend = mode === "group"
+    ? selected.length >= 1 && groupName.trim().length > 0
+    : selected.length >= 1 && body.trim().length > 0 && !tooLong;
+
+  /** Keep pasted formatting and line breaks instead of a flattened one-liner. */
+  const handleBodyPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = pastedMarkdown({
+      html: e.clipboardData.getData("text/html"),
+      text: e.clipboardData.getData("text/plain"),
+    });
+    if (!text) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? body.length;
+    const end = el.selectionEnd ?? start;
+    const next = `${body.slice(0, start)}${text}${body.slice(end)}`;
+    setBody(next);
+    const caret = start + text.length;
+    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(caret, caret); });
+  };
 
   async function doSend() {
+    if (tooLong) { toast.error(MESSAGE_TOO_LONG); return; }
     setBusy(true);
     try {
       if (mode === "group") {
@@ -153,14 +178,24 @@ export default function NewMessageDialog({
         )}
 
         {mode === "separate" && (
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={3}
-            maxLength={4000}
-            placeholder="Write your message…"
-            className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring"
-          />
+          <div className="space-y-1">
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              onPaste={handleBodyPaste}
+              rows={3}
+              placeholder="Write your message…"
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring"
+            />
+            <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span>{tooLong ? MESSAGE_TOO_LONG : "Formatting from a paste is preserved."}</span>
+              {bodyLength > 0 && (
+                <span className={tooLong ? "font-semibold text-destructive" : "tabular-nums"}>
+                  {formatCharacterCount(bodyLength)} / {formatCharacterCount(MESSAGE_MAX_LENGTH)}
+                </span>
+              )}
+            </div>
+          </div>
         )}
 
         {confirming ? (

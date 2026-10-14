@@ -10,6 +10,7 @@ import { enforceRateLimit } from "./authHelpers";
 import { avatarUrlOf, currentUserId, displayNameOf, presenceInfoOf, profileOf } from "./lib";
 import { sendCodeEmail } from "./mailer";
 import { groupDisplayName } from "../lib/group-name";
+import { plainSummary } from "../lib/message-format";
 
 /**
  * ---------------------------------------------------------------------------
@@ -520,7 +521,7 @@ export const secretChats = query({
         presence,
         unread,
         lastMessageAt: convo.lastMessageAt,
-        lastMessage: last && !last.deleted ? last.body.slice(0, 90) : "",
+        lastMessage: last && !last.deleted ? plainSummary(last.body, 90) : "",
       });
     }
     conversations.sort((a, b) => Number(b.hidden) - Number(a.hidden) || b.lastMessageAt - a.lastMessageAt);

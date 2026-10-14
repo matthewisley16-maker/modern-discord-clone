@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { avatarUrlOf, displayNameOf, profileOf, settingsOf } from "./lib";
 import { communityCategoryOf } from "../lib/community-categories";
+import { plainSummary } from "../lib/message-format";
 import type { QueryCtx } from "./_generated/server";
 
 async function presenceOf(ctx: QueryCtx, userId: string) {
@@ -112,7 +113,8 @@ export const global = query({
             if (!message.body.toLowerCase().includes(term)) continue;
             out.messages.push({
               messageId: message._id,
-              body: message.body.slice(0, 160),
+              // A result preview shows plain text, not the message's markers.
+              body: plainSummary(message.body, 160),
               author: await displayNameOf(ctx, message.userId),
               channelName: channel.name,
               communityName: server?.name ?? "",

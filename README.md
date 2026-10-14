@@ -750,6 +750,38 @@ orphan-safe attachments removed) and every view, search, preview and reply quote
   (phase 8b: an Admin deletes another member's channel + DM message, non-admins are refused with a
   real message id).
 
+## Message composer: pasting, formatting and the 30,000-character limit
+
+A Freecord message is stored as ONE plain-text string in the database. That is why formatting is
+carried *inside* the text as a small Markdown subset, and why pasted rich text is converted to that
+subset instead of being inserted as HTML.
+
+- **The limit.** `MESSAGE_MAX_LENGTH = 30_000` lives in `src/lib/message-format.ts` and is imported by
+  the composer, the character counter **and** the backend (`convex/chat.ts`, `convex/dms.ts`). Length
+  is counted in Unicode **code points** (`messageLength`), so an emoji is one character and the
+  counter and the server agree exactly. Type/paste/edit up to 30,000; over that the counter turns
+  red, the send button is disabled and a notice explains how many characters to remove. Text is
+  **never truncated** — not on paste, not on edit, not on send (the old `body.slice(0, 4000)` in both
+  edit mutations is gone).
+- **Pasting.** `src/lib/paste-html.ts` converts the clipboard's `text/html` flavour into the subset
+  and falls back to `text/plain` (with its line breaks intact) when there is no rich flavour. It
+  never renders or inserts HTML: scripts, styles, iframes, `onerror=`-style handlers and
+  `javascript:`/`data:` links are dropped, so pasted markup cannot execute. Paragraph breaks, blank
+  lines, indentation, bold, italic, underline, strikethrough, inline code, fenced code, links,
+  bullet/numbered lists, headings, blockquotes, emoji and non-English text are preserved. Google
+  Docs/Word boilerplate (`<b style="font-weight:normal">` wrappers) is detected and not turned into
+  fake bold.
+- **Rendering.** `MentionText` renders the stored body through the shared parser, so channels, DMs,
+  group chats, replies and every other device show the same formatting. Reply quotes, search results
+  and sidebar previews show `plainSummary(...)` — the text without markers.
+- **Composers.** The message box in a channel and in a DM (and the New Message dialog) is an
+  auto-growing **textarea**: a single-line `<input>` is what silently dropped every newline and
+  produced the flattened pastes. `Enter` sends, `Shift+Enter` inserts a newline, `@mention`
+  autocomplete still owns the arrow/Enter keys while its menu is open.
+- **Tests.** `bun message-format-test.mjs` (113 assertions: limits, Unicode counting, HTML→markdown
+  conversion, sanitisation, plain-text fallback, parser output, copy-out/copy-in round trip, and
+  source invariants that no `4000` limit survives).
+
 ## Admin Panel → Cleanup & Maintenance
 
 A new Admin Panel tab (between Communities/Moderation and the retention tabs) with **two

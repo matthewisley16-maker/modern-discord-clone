@@ -43,7 +43,8 @@ export function useMentions({
 }: {
   value: string;
   setValue: (next: string) => void;
-  inputRef: { current: HTMLInputElement | null };
+  /** The composer field: a textarea (messages) or an input (search boxes). */
+  inputRef: { current: HTMLInputElement | HTMLTextAreaElement | null };
   serverId?: Id<"servers">;
   conversationId?: Id<"dmConversations">;
 }) {
@@ -90,7 +91,7 @@ export function useMentions({
   );
 
   const onKeyDown = useCallback(
-    (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    (e: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       if (!open) {
         if (e.key === "Escape") setToken(null);
         return;
