@@ -1,0 +1,12 @@
+cleanup:previewAccess                     2 30299.09
+adminPin:setPin                           2 30299.09
+adminPin:grantUnlock                      2 30299.09
+profiles:disconnect                       2 30299.09
+adminPin:lock                             2 30299.09
+adminPin:pinRecord                        2 30299.09
+cleanup:startMessageCleanup               2 30299.09
+deleteForMeRetention:expireRetainedEntries      2 30299.09
+communities:setCategory                   2 30299.09
+users:viewer                              2 30299.09
+voice:channelTree                         2 30299.09
+admin:listUsers                           2 30299.09

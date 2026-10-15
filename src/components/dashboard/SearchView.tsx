@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { toSafeArray } from "@/lib/collection";
 import { communityCoverUrl, communityInitial } from "@/lib/community-cover";
 import { Avatar, EmptyState, SectionHeader } from "./ui";
@@ -37,7 +38,11 @@ export default function SearchView({
   onOpenCommunity: (id: string) => void;
 }) {
   const [filter, setFilter] = useState<"all" | "people" | "communities" | "messages" | "channels">("all");
-  const results = useQuery(api.search.global, query.trim() ? { q: query, filter } : "skip");
+  // Keystrokes are debounced before they reach the query. `search.global` runs a
+  // text-index scan over messages, so subscribing on every character was the
+  // single most expensive over-request in the app.
+  const debouncedQuery = useDebouncedValue(query);
+  const results = useQuery(api.search.global, debouncedQuery.trim() ? { q: debouncedQuery, filter } : "skip");
   // Each result bucket is normalized so a malformed payload can never crash a render.
   const peopleList = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof results>["people"]>[number]>(results?.people, { label: "Search people", source: "api.search.global" }), [results]);
   const communityResults = useMemo(() => toSafeArray<NonNullable<NonNullable<typeof results>["communities"]>[number]>(results?.communities, { label: "Search communities", source: "api.search.global" }), [results]);

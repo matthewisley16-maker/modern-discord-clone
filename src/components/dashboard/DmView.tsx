@@ -13,6 +13,7 @@ import GifPicker from "./GifPicker";
 import InlineGif from "./InlineGif";
 import MentionText from "./MentionText";
 import YouTubeEmbeds from "./YouTubeEmbed";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useMessageScroll } from "@/hooks/use-message-scroll";
 import { gifUrlsIn } from "@/lib/message-links";
 import { formatCharacterCount, isMessageTooLong, MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary } from "@/lib/message-format";
@@ -78,7 +79,10 @@ export default function DmView({
   );
   const convo = conversationList.find((c) => c.conversationId === conversationId);
   const [search, setSearch] = useState("");
-  const messages = useQuery(api.dms.messages, { conversationId, search: search || undefined });
+  // The in-conversation search box feeds a query argument, so its keystrokes are
+  // debounced: otherwise every character re-ran a message text-index scan.
+  const debouncedSearch = useDebouncedValue(search);
+  const messages = useQuery(api.dms.messages, { conversationId, search: debouncedSearch || undefined });
   // The server withholds every message while a locked conversation is locked,
   // so an empty `messageList` here is authoritative — not a UI decision.
   // Accept both the current `{ messages, ... }` shape and a legacy bare array
@@ -135,7 +139,8 @@ export default function DmView({
     [group],
   );
   const [memberQuery, setMemberQuery] = useState("");
-  const memberResults = useQuery(api.users.searchUsers, { q: memberQuery });
+  const debouncedMemberQuery = useDebouncedValue(memberQuery);
+  const memberResults = useQuery(api.users.searchUsers, { q: debouncedMemberQuery });
   const memberResultList = useMemo(
     () => toSafeArray<NonNullable<typeof memberResults>[number]>(memberResults, {
       label: "DM member search results",

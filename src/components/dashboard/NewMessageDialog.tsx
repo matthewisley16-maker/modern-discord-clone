@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Avatar } from "./ui";
 import { formatCharacterCount, isMessageTooLong, MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength } from "@/lib/message-format";
 import { pastedMarkdown } from "@/lib/paste-html";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
 import { Check, Search, Users, X } from "lucide-react";
@@ -37,7 +38,9 @@ export default function NewMessageDialog({
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
-  const results = useQuery(api.users.searchUsers, { q: query });
+  // Debounced so typing a name does not re-run the people search per key.
+  const debouncedQuery = useDebouncedValue(query);
+  const results = useQuery(api.users.searchUsers, { q: debouncedQuery });
   const sendBatch = useMutation(api.dms.sendBatch);
   const createGroup = useMutation(api.dms.createGroup);
 

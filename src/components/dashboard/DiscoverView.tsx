@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { toSafeArray } from "@/lib/collection";
 import { communityCoverUrl, communityInitial } from "@/lib/community-cover";
 import { Button } from "@/components/ui/button";
@@ -101,7 +102,9 @@ export default function DiscoverView({
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const categories = useQuery(api.communities.categories, {});
-  const results = useQuery(api.communities.discover, { q: query || undefined, category: category ?? undefined });
+  // Debounced so typing a community name does not re-run the search per key.
+  const debouncedQuery = useDebouncedValue(query);
+  const results = useQuery(api.communities.discover, { q: debouncedQuery || undefined, category: category ?? undefined });
   const join = useMutation(api.communities.join);
   const mine = useQuery(api.communities.listMine, {});
   // Collections normalized once so a malformed payload can never crash a render.
