@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { currentUserId, requireMember } from "./lib";
+import { truncateText } from "../lib/message-format";
 
 /** File size + type limits enforced server-side (client MIME is never trusted). */
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -68,7 +69,7 @@ export const attach = mutation({
     return ctx.db.insert("attachments", {
       storageId: args.storageId,
       uploaderId: userId,
-      name: args.name.slice(0, 120),
+      name: truncateText(args.name, 120),
       size: args.size,
       contentType: args.contentType,
       messageId: args.messageId,

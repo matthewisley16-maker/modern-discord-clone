@@ -5,6 +5,7 @@ import type { MutationCtx } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { USERNAME_PATTERN, normalizeUsername, assertValidUsername } from "./auth";
 import { avatarUrlOf, currentUserId, displayNameOf, presenceInfoOf, profileOf, settingsOf, audit, areFriends, isBlockedEitherWay, syncOwnerRole, rankOf, isProtectedOwnerEmail } from "./lib";
+import { stripLoneSurrogates, truncateText } from "../lib/message-format";
 
 // ---------- Identity helpers (username is unique, display name is not) ----------
 
@@ -28,7 +29,7 @@ function humanizeEmail(email?: string | null): string {
   const source = cleaned || local.replace(/[._\-]+/g, " ").trim();
   const words = source.split(/\s+/).filter(Boolean).slice(0, 3);
   const name = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ").trim();
-  return name.slice(0, 40);
+  return truncateText(name, 40);
 }
 
 /** Build a unique, valid username from an email (falling back to "user"). */
@@ -63,6 +64,15 @@ export const ensureIdentity = mutation({
     const user = await ctx.db.get(userId);
     if (!user) return null;
 
+    // Repair a name stored before truncation was surrogate-safe. `auth.ts` is
+    // read-only and still cuts a new account's display name at 40 code units,
+    // so an emoji exactly on that boundary could otherwise leave an invalid
+    // string that breaks `users.me` (and with it the whole dashboard) forever.
+    if (user.name) {
+      const safeName = stripLoneSurrogates(user.name);
+      if (safeName !== user.name) await ctx.db.patch(userId, { name: safeName || user.username || "Freecord member" });
+    }
+
     // Keep the account role aligned with the protected-owner emails on every
     // load, so an owner email always resolves to Owner Admin and nobody else
     // can hold that role.
@@ -77,11 +87,11 @@ export const ensureIdentity = mutation({
     const fallbackName = user.name || humanizeEmail(user.email) || username;
     const profile = await profileOf(ctx, userId);
     if (!profile) {
-      await ctx.db.insert("profiles", { userId, displayName: fallbackName.slice(0, 40) || username });
+      await ctx.db.insert("profiles", { userId, displayName: truncateText(fallbackName, 40) || username });
     } else if (!profile.displayName) {
-      await ctx.db.patch(profile._id, { displayName: fallbackName.slice(0, 40) || username });
+      await ctx.db.patch(profile._id, { displayName: truncateText(fallbackName, 40) || username });
     }
-    if (!user.name) await ctx.db.patch(userId, { name: (humanizeEmail(user.email) || username).slice(0, 40) });
+    if (!user.name) await ctx.db.patch(userId, { name: truncateText(humanizeEmail(user.email) || username, 40) });
 
     return { username };
   },
@@ -243,7 +253,9 @@ export const me = query({
       userId,
       username: user?.username ?? null,
       email: user?.email ?? null,
-      name: user?.name ?? null,
+      // Never return a half-emoji: a name written before sanitization could
+      // otherwise make this top-level dashboard query un-serializable.
+      name: user?.name ? stripLoneSurrogates(user.name) : null,
       image: user?.image ?? null,
       // Account role + protected-owner flag (server-authoritative; the Admin
       // Panel route is still gated by a server query, not just this value).
@@ -376,10 +388,10 @@ export const updateProfile = mutation({
       if (name.length < 1 || name.length > 40) throw new Error("Display name must be 1-40 characters.");
       patch.displayName = name;
     }
-    if (args.bio !== undefined) patch.bio = args.bio.slice(0, 400);
+    if (args.bio !== undefined) patch.bio = truncateText(args.bio, 400);
     if (args.avatarColor !== undefined) patch.avatarColor = args.avatarColor;
     if (args.bannerColor !== undefined) patch.bannerColor = args.bannerColor;
-    if (args.customStatus !== undefined) patch.customStatus = args.customStatus.slice(0, 80);
+    if (args.customStatus !== undefined) patch.customStatus = truncateText(args.customStatus, 80);
     if (args.avatarStorageId !== undefined) patch.avatarStorageId = args.avatarStorageId;
     if (args.bannerStorageId !== undefined) patch.bannerStorageId = args.bannerStorageId;
 

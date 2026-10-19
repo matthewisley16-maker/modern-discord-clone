@@ -17,6 +17,8 @@ import {
   parseInline,
   parseMessageBody,
   plainSummary,
+  stripLoneSurrogates,
+  truncateText,
 } from "./src/lib/message-format.ts";
 import {
   decodeEntities,
@@ -331,6 +333,95 @@ check("no 4000 limit survives in the shared formatting module",
   !/4000/.test(read("./src/lib/message-format.ts")));
 check("the composer still guards the send button",
   read("./src/components/dashboard/ChannelView.tsx").includes("|| tooLong}"));
+
+// ---------------------------------------------------------------------------
+// 10. Every query result must be valid Unicode (JSON-safe)
+// ---------------------------------------------------------------------------
+// A Convex query result is serialized to JSON. One lone UTF-16 surrogate in a
+// string makes the ENTIRE function fail with
+// `Could not parse return value as json: unexpected end of hex escape`.
+// That is exactly how a message preview cut through the middle of an emoji took
+// the whole dashboard down: `dms.listConversations` is a top-level dashboard
+// subscription, so its failure unmounted the dashboard and only the dashboard.
+console.log("\n-- JSON-safe previews --");
+
+/** True when the string contains half of a surrogate pair (invalid Unicode). */
+function hasLoneSurrogate(text) {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+const emoji = "😀"; // one code point, TWO UTF-16 units
+
+check("the detector catches a half emoji", hasLoneSurrogate(`half ${emoji.slice(0, 1)}`));
+// The exact old shape — `slice(0, max - 1)` cutting a pair — must be caught,
+// otherwise these assertions could pass while the production bug is back.
+check("the detector catches the old slice(0, max - 1) cut",
+  hasLoneSurrogate(`${"a".repeat(88)}${emoji}`.slice(0, 89)));
+
+// Put the emoji on every offset around each cut point: the old
+// `text.slice(0, max - 1)` left its first half behind at two of them.
+for (const max of [2, 3, 4, 5, 10, 90, 140]) {
+  for (const offset of [max - 3, max - 2, max - 1, max]) {
+    const body = "a".repeat(Math.max(0, offset)) + emoji + " tail text";
+    const summary = plainSummary(body, max);
+    check(`plainSummary(${max}) at offset ${offset} is valid Unicode`, !hasLoneSurrogate(summary), JSON.stringify(summary));
+    check(`plainSummary(${max}) at offset ${offset} survives a JSON round-trip`,
+      JSON.parse(JSON.stringify(summary)) === summary);
+  }
+}
+eq("an unpaired high surrogate is removed", stripLoneSurrogates(`boom ${emoji.slice(0, 1)}`), "boom ");
+eq("an unpaired low surrogate is removed", stripLoneSurrogates(`boom ${emoji.slice(1)}`), "boom ");
+eq("a complete emoji is kept", stripLoneSurrogates(`boom ${emoji}`), `boom ${emoji}`);
+check("plainSummary sanitizes a legacy body before returning it",
+  !hasLoneSurrogate(plainSummary(`legacy ${emoji.slice(0, 1)}`, 40)));
+eq("truncateText drops the half emoji instead of keeping it", truncateText(`ab${emoji}`, 3), "ab");
+eq("truncateText keeps an emoji that fits", truncateText(`ab${emoji}`, 4), `ab${emoji}`);
+eq("truncateText leaves short text untouched", truncateText("abc", 10), "abc");
+eq("truncateText strips an unpaired surrogate even when it fits",
+  truncateText(`ab${emoji.slice(0, 1)}`, 99), "ab");
+check("a surrogate-range HTML entity never becomes half an emoji",
+  !hasLoneSurrogate(decodeEntities("&#xD83D;")));
+
+// Source invariants: the two paths that made this happen cannot come back.
+check("plainSummary truncates with the pair-safe helper",
+  read("./src/lib/message-format.ts").includes("truncateText(text, Math.max(0, max - 1))"));
+check("channel notifications never slice raw message text", !chat.includes("text.slice(0, 80)"));
+check("DM notifications never slice raw message text", !dms.includes("text.slice(0, 80)"));
+check("DM message bodies are stored without lone surrogates",
+  (dms.match(/stripLoneSurrogates\(body\.trim\(\)\)/g) ?? []).length >= 2);
+check("channel message bodies are stored without lone surrogates",
+  chat.includes("stripLoneSurrogates(value.trim())") && chat.includes("stripLoneSurrogates(body.trim())"));
+
+// The same class of bug in the OTHER fields the dashboard subscribes to: a
+// group/profile/community/channel name cut mid-emoji would break the very same
+// top-level queries. Every user-written field that is stored is cut this way.
+const profilesSource = read("./src/convex/profiles.ts");
+const communitiesSource = read("./src/convex/communities.ts");
+const voiceSource = read("./src/convex/voice.ts");
+const adminSource = read("./src/convex/admin.ts");
+const usersSource = read("./src/convex/users.ts");
+check("group names are cut pair-safely", dms.includes("truncateText(name.trim(), 50)"));
+check("profile text is cut pair-safely", profilesSource.includes("truncateText(args.customStatus, 120)"));
+check("profile activity text is cut pair-safely", profilesSource.includes("truncateText(args.activityName, 80)"));
+check("community names/descriptions are cut pair-safely",
+  communitiesSource.includes("truncateText(patch.description.trim(), 200)") &&
+  communitiesSource.includes("truncateText(args.description.trim(), 200)"));
+check("channel and category names are cut pair-safely", voiceSource.includes("truncateText(patch.name.trim(), 40)"));
+check("the dashboard announcement is cut pair-safely", adminSource.includes("truncateText(args.announcement.trim(), 280)"));
+check("profile status/bio saves are cut pair-safely", usersSource.includes("truncateText(args.bio, 400)"));
+check("users.me never returns a half-emoji name",
+  usersSource.includes("name: user?.name ? stripLoneSurrogates(user.name) : null"));
+check("a legacy half-emoji account name is repaired on load",
+  usersSource.includes("const safeName = stripLoneSurrogates(user.name);"));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

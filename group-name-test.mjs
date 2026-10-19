@@ -79,7 +79,9 @@ check("the list still carries the member count", listConversations.includes("mem
 check("a direct chat still shows the other person's name", listConversations.includes("otherCards[0]?.displayName"), "the direct-chat name disappeared");
 
 const createGroup = handlerOf(dms, "export const createGroup = mutation({");
-check("a new group stores the name exactly as typed", createGroup.includes("const clean = name.trim().slice(0, 50);"), "the stored name is no longer the typed name");
+// The name is still stored as typed; the cut is pair-safe so an emoji can never
+// be left half-stored (which would break the conversations query's JSON).
+check("a new group stores the name exactly as typed", createGroup.includes("const clean = truncateText(name.trim(), 50);"), "the stored name is no longer the typed name");
 check("a blank name stores NO placeholder", createGroup.includes("...(clean ? { name: clean } : {})"), "a placeholder would be written into the database again");
 check("the chat header row uses the shared rule", handlerOf(dms, "export const groupDetails = query({").includes("groupDisplayName(convo.name)"), "groupDetails no longer applies the rule");
 check("Secret Chats lists the same name", privacy.includes("groupDisplayName(convo.name)"), "the Secret Chats query stopped using the rule");

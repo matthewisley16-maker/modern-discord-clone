@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { audit, avatarUrlOf, currentUserId, displayNameOf, hasChannelPermission, hasPermission, isTimedOut, membershipOf, notify, profileOf, requireMember, requirePermission } from "./lib";
+import { truncateText } from "../lib/message-format";
 import type { Ctx } from "./lib";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
@@ -61,7 +62,7 @@ export const createChannelFull = mutation({
     // Voice channel names keep their formatting; text channels are slugified.
     const name = args.type === "text"
       ? raw.toLowerCase().replace(/[^a-z0-9- ]/g, "-").replace(/\s+/g, "-").slice(0, 40)
-      : raw.slice(0, 40);
+      : truncateText(raw, 40);
     if (existing.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
       throw new ConvexError("A channel with that name already exists.");
     }
@@ -70,7 +71,7 @@ export const createChannelFull = mutation({
     const id = await ctx.db.insert("channels", {
       serverId: args.serverId,
       name,
-      description: (args.description?.trim().slice(0, 200)) || (args.type === "voice" ? "Hop in and talk." : "A new conversation starts here."),
+      description: (args.description === undefined ? undefined : truncateText(args.description.trim(), 200)) || (args.type === "voice" ? "Hop in and talk." : "A new conversation starts here."),
       type: args.type,
       categoryId: args.categoryId,
       position: existing.length,
@@ -104,11 +105,11 @@ export const updateChannelFull = mutation({
 
     const clean: Record<string, unknown> = {};
     if (patch.name !== undefined) {
-      const name = patch.name.trim().slice(0, 40);
+      const name = truncateText(patch.name.trim(), 40);
       if (!name) throw new ConvexError("Channel name can't be empty.");
       clean.name = name;
     }
-    if (patch.description !== undefined) clean.description = patch.description.trim().slice(0, 200);
+    if (patch.description !== undefined) clean.description = truncateText(patch.description.trim(), 200);
     if (patch.userLimit !== undefined) clean.userLimit = Math.max(0, Math.min(100, Math.round(patch.userLimit)));
     if (patch.isPrivate !== undefined) clean.isPrivate = patch.isPrivate;
     if (patch.allowedRoleIds !== undefined) clean.allowedRoleIds = patch.allowedRoleIds.slice(0, 20);
@@ -177,7 +178,7 @@ export const duplicateChannel = mutation({
     const existing = await ctx.db.query("channels").withIndex("by_server", (q) => q.eq("serverId", channel.serverId)).collect();
     const id = await ctx.db.insert("channels", {
       serverId: channel.serverId,
-      name: `${channel.name} copy`.slice(0, 40),
+      name: truncateText(`${channel.name} copy`, 40),
       description: channel.description,
       type: channel.type,
       categoryId: channel.categoryId,
@@ -198,7 +199,7 @@ export const createCategory = mutation({
   handler: async (ctx, { serverId, name }) => {
     const userId = await currentUserId(ctx);
     await requirePermission(ctx, serverId, userId, "manageChannels");
-    const clean = name.trim().slice(0, 40);
+    const clean = truncateText(name.trim(), 40);
     if (!clean) throw new ConvexError("Category name can't be empty.");
     const existing = await ctx.db.query("channelCategories").withIndex("by_server", (q) => q.eq("serverId", serverId)).collect();
     return ctx.db.insert("channelCategories", { serverId, name: clean, position: existing.length });
@@ -228,7 +229,7 @@ export const updateCategory = mutation({
     if (!category) throw new ConvexError("Category not found.");
     await requirePermission(ctx, category.serverId, userId, "manageChannels");
     const clean: Record<string, unknown> = {};
-    if (patch.name !== undefined) clean.name = patch.name.trim().slice(0, 40);
+    if (patch.name !== undefined) clean.name = truncateText(patch.name.trim(), 40);
     if (patch.position !== undefined) clean.position = Math.max(0, Math.round(patch.position));
     await ctx.db.patch(categoryId, clean);
   },

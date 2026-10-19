@@ -60,6 +60,11 @@ export function decodeEntities(text: string): string {
         ? Number.parseInt(body.slice(2), 16)
         : Number.parseInt(body.slice(1), 10);
       if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return whole;
+      // A numeric entity in the surrogate range (`&#xD83D;`) would produce HALF
+      // of an emoji. That lone surrogate is not valid Unicode, and storing it
+      // makes every query that returns the message fail to serialize — so the
+      // entity is left as literal text instead.
+      if (code >= 0xd800 && code <= 0xdfff) return whole;
       try {
         return String.fromCodePoint(code);
       } catch {

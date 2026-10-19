@@ -7,7 +7,7 @@ import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherW
 import { lockStateOf } from "./conversationPrivacy";
 import { resolveMentions, type MentionCache } from "./mentions";
 import { groupDisplayName } from "../lib/group-name";
-import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary } from "../lib/message-format";
+import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary, stripLoneSurrogates, truncateText } from "../lib/message-format";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 
@@ -307,7 +307,9 @@ export const sendBatch = mutation({
     await enforceRateLimit(ctx, `batch:${me}`, 5, 60_000);
 
     const safeGif = gif ? requireGif(gif) : undefined;
-    const raw = body.trim();
+    // Never store half of an emoji: a lone surrogate breaks JSON serialization
+    // for every query that later returns the message.
+    const raw = stripLoneSurrogates(body.trim());
     // Counted in code points, exactly like the composer's character counter.
     if (messageLength(raw) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);
     const text = safeGif ? raw || "Sent a GIF" : raw;
@@ -326,7 +328,7 @@ export const sendBatch = mutation({
       const messageId = await ctx.db.insert("dmMessages", { conversationId, userId: me, body: text, gif: safeGif });
       await ctx.db.patch(conversationId, { lastMessageAt: Date.now() });
       sent++;
-      await notify(ctx, id, "dm", "New direct message", `${await displayNameOf(ctx, me)}: ${text.slice(0, 80)}`, `?dm=${conversationId}&message=${messageId}`, me);
+      await notify(ctx, id, "dm", "New direct message", `${await displayNameOf(ctx, me)}: ${truncateText(text, 80)}`, `?dm=${conversationId}&message=${messageId}`, me);
     }
     return { sent, skipped };
   },
@@ -340,7 +342,7 @@ export const createGroup = mutation({
     // a placeholder, because a placeholder in the database is indistinguishable
     // from a real name and would show up as one. Display falls back to
     // "Unnamed Group" (src/lib/group-name.ts) instead.
-    const clean = name.trim().slice(0, 50);
+    const clean = truncateText(name.trim(), 50);
     const unique = [...new Set(memberIds.filter((id) => id !== me))].slice(0, 24);
     if (unique.length === 0) throw new Error("Add at least one friend to the group.");
     for (const id of unique) {
@@ -359,7 +361,7 @@ export const renameGroup = mutation({
   handler: async (ctx, { conversationId, name }) => {
     const me = await currentUserId(ctx);
     await requireGroupManager(ctx, conversationId, me);
-    const clean = name.trim().slice(0, 50);
+    const clean = truncateText(name.trim(), 50);
     if (!clean) throw new ConvexError("Group name can't be empty.");
     await ctx.db.patch(conversationId, { name: clean });
   },
@@ -715,7 +717,9 @@ export const sendMessage = mutation({
     await enforceRateLimit(ctx, `dmsg:${me}`, 60, 60_000);
     // Validate the GIF server-side; never trust a client-provided media URL.
     const safeGif = gif ? requireGif(gif) : undefined;
-    const raw = body.trim();
+    // Never store half of an emoji: a lone surrogate breaks JSON serialization
+    // for every query that later returns the message.
+    const raw = stripLoneSurrogates(body.trim());
     // Counted in code points, exactly like the composer's character counter.
     if (messageLength(raw) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);
     // A GIF can be sent on its own; a text fallback keeps search/history working.
@@ -743,7 +747,7 @@ export const sendMessage = mutation({
         m.userId,
         isMention ? "mention" : replyToId ? "reply" : "dm",
         isMention ? "You were mentioned" : replyToId ? "New reply" : "New direct message",
-        `${await displayNameOf(ctx, me)}${convo?.type === "group" ? ` in ${convo.name ?? "a group"}` : ""}: ${text.slice(0, 80)}`,
+        `${await displayNameOf(ctx, me)}${convo?.type === "group" ? ` in ${convo.name ?? "a group"}` : ""}: ${truncateText(text, 80)}`,
         // Deep link: open this conversation and jump to the message.
         `?dm=${conversationId}&message=${messageId}`,
         me,
@@ -761,7 +765,7 @@ export const editMessage = mutation({
     if (!message) throw new Error("Message not found.");
     await requireMember(ctx, message.conversationId, me);
     if (message.userId !== me) throw new Error("You can only edit your own messages.");
-    const text = body.trim();
+    const text = stripLoneSurrogates(body.trim());
     if (!text) throw new Error("Message can't be empty.");
     // An edit is never silently truncated: an over-long one is refused instead.
     if (messageLength(text) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);
@@ -798,7 +802,7 @@ export const toggleReaction = mutation({
       .collect();
     const mine = existing.find((r) => r.userId === me && r.emoji === emoji);
     if (mine) await ctx.db.delete(mine._id);
-    else await ctx.db.insert("dmReactions", { messageId, userId: me, emoji: emoji.slice(0, 8) });
+    else await ctx.db.insert("dmReactions", { messageId, userId: me, emoji: truncateText(stripLoneSurrogates(emoji), 8) });
   },
 });
 

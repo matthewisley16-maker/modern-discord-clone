@@ -22,6 +22,7 @@ import { communityCategoryOf, communityCategoryProblem, normalizeCommunityCatego
 // community itself would reject (and old pictures never pile up in storage).
 import { assertUsableCover } from "./communities";
 import { deleteStoredFile } from "./maintenance";
+import { truncateText } from "../lib/message-format";
 
 /**
  * ---------------------------------------------------------------------------
@@ -309,7 +310,7 @@ export const banUser = mutation({
       banned: true,
       bannedAt: Date.now(),
       bannedBy: me,
-      banReason: reason?.slice(0, 200) ?? undefined,
+      banReason: reason === undefined ? undefined : truncateText(reason, 200),
     });
     await killSessions(ctx, userId);
     const actor = await actorCard(ctx, me);
@@ -373,7 +374,7 @@ export const suspendUser = mutation({
     await ctx.db.patch(userId, {
       suspendedUntil: until,
       suspendedBy: me,
-      suspendReason: reason?.slice(0, 200) ?? undefined,
+      suspendReason: reason === undefined ? undefined : truncateText(reason, 200),
     });
     await killSessions(ctx, userId);
     const actor = await actorCard(ctx, me);
@@ -661,7 +662,7 @@ export const updateCommunity = mutation({
       if (name.length < 2 || name.length > 50) throw new ConvexError("Community name must be 2-50 characters.");
       update.name = name;
     }
-    if (patch.description !== undefined) update.description = patch.description.trim().slice(0, 200);
+    if (patch.description !== undefined) update.description = truncateText(patch.description.trim(), 200);
     if (patch.isPublic !== undefined) update.isPublic = patch.isPublic;
     if (patch.locked !== undefined) update.locked = patch.locked;
     if (patch.category !== undefined) {
@@ -832,7 +833,7 @@ export const updatePlatformSettings = mutation({
     if (!isOwnerRole(role)) throw new ConvexError("Only Owner Admins can change platform-wide settings.");
     const row = await platformSettingsOf(ctx);
     const patch: Record<string, unknown> = { updatedAt: Date.now(), updatedBy: userId };
-    if (args.announcement !== undefined) patch.announcement = args.announcement.trim().slice(0, 280);
+    if (args.announcement !== undefined) patch.announcement = truncateText(args.announcement.trim(), 280);
     if (args.newCommunitiesEnabled !== undefined) patch.newCommunitiesEnabled = args.newCommunitiesEnabled;
     if (args.discoveryEnabled !== undefined) patch.discoveryEnabled = args.discoveryEnabled;
 

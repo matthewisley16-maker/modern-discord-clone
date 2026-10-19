@@ -31,6 +31,7 @@ import {
   DEFAULT_COMMUNITY_CATEGORY,
   normalizeCommunityCategory,
 } from "../lib/community-categories";
+import { truncateText } from "../lib/message-format";
 
 /** Community cover art / banner limits (mirrors the client-side picker). */
 const COVER_MAX_BYTES = 5 * 1024 * 1024;
@@ -128,19 +129,19 @@ export const create = mutation({
         throw new Error("Creating new communities is temporarily disabled.");
       }
     }
-    const name = args.name.trim();
-    if (name.length < 2 || name.length > 50) throw new Error("Community name must be 2-50 characters.");
+    const name = truncateText(args.name.trim(), 50);
+    if (name.length < 2) throw new Error("Community name must be 2-50 characters.");
     // The subcategory is validated against the ONE supported list, so a new
     // community can never start life in a category Discover's filters can't reach.
     const categoryProblem = args.category === undefined ? null : communityCategoryProblem(args.category);
     if (categoryProblem) throw new Error(categoryProblem);
     const serverId = await ctx.db.insert("servers", {
       name,
-      description: args.description.trim().slice(0, 200),
+      description: truncateText(args.description.trim(), 200),
       ownerId: userId,
       inviteCode: inviteCode(),
       isPublic: args.isPublic ?? false,
-      tags: (args.tags ?? []).slice(0, 6).map((t) => t.trim().slice(0, 20)).filter(Boolean),
+      tags: (args.tags ?? []).slice(0, 6).map((t) => truncateText(t.trim(), 20)).filter(Boolean),
       category: normalizeCommunityCategory(args.category) ?? DEFAULT_COMMUNITY_CATEGORY,
       iconColor: "violet",
     });
@@ -319,15 +320,15 @@ export const updateSettings = mutation({
     if (!previous) throw new ConvexError("Community not found.");
     const clean: Record<string, unknown> = {};
     if (patch.name !== undefined) {
-      const name = patch.name.trim();
-      if (name.length < 2 || name.length > 50) throw new Error("Community name must be 2-50 characters.");
+      const name = truncateText(patch.name.trim(), 50);
+      if (name.length < 2) throw new Error("Community name must be 2-50 characters.");
       clean.name = name;
     }
-    if (patch.description !== undefined) clean.description = patch.description.trim().slice(0, 200);
+    if (patch.description !== undefined) clean.description = truncateText(patch.description.trim(), 200);
     if (patch.isPublic !== undefined) clean.isPublic = patch.isPublic;
     if (patch.bannerColor !== undefined) clean.bannerColor = patch.bannerColor;
     if (patch.iconColor !== undefined) clean.iconColor = patch.iconColor;
-    if (patch.tags !== undefined) clean.tags = patch.tags.slice(0, 6);
+    if (patch.tags !== undefined) clean.tags = patch.tags.slice(0, 6).map((t) => truncateText(t, 20));
     // The subcategory is validated here too, against the same supported list the
     // dedicated editor uses: a settings save can never file a community into an
     // unsupported category, and an OUTDATED stored value passes when it is
@@ -480,7 +481,7 @@ export const createChannel = mutation({
     if (channels.some((c) => c.name.toLowerCase() === normalized)) throw new Error("A channel with that name already exists.");
     const id = await ctx.db.insert("channels", {
       serverId,
-      name: type === "text" || !type ? normalized : name.trim().slice(0, 40),
+      name: type === "text" || !type ? normalized : truncateText(name.trim(), 40),
       description: "A new conversation starts here.",
       type: type ?? "text",
     });
@@ -497,8 +498,8 @@ export const updateChannel = mutation({
     if (!channel) throw new Error("Channel not found.");
     await requirePermission(ctx, channel.serverId, userId, "manageChannels");
     const clean: Record<string, unknown> = {};
-    if (patch.name !== undefined) clean.name = patch.name.trim().slice(0, 40);
-    if (patch.description !== undefined) clean.description = patch.description.trim().slice(0, 200);
+    if (patch.name !== undefined) clean.name = truncateText(patch.name.trim(), 40);
+    if (patch.description !== undefined) clean.description = truncateText(patch.description.trim(), 200);
     if (patch.locked !== undefined) clean.locked = patch.locked;
     if (patch.slowModeSeconds !== undefined) clean.slowModeSeconds = Math.max(0, Math.min(300, patch.slowModeSeconds));
     await ctx.db.patch(channelId, clean);
@@ -530,7 +531,7 @@ export const createRole = mutation({
   handler: async (ctx, { serverId, name, color, permissions }) => {
     const userId = await currentUserId(ctx);
     await requirePermission(ctx, serverId, userId, "manageRoles");
-    const clean = name.trim().slice(0, 30);
+    const clean = truncateText(name.trim(), 30);
     if (!clean) throw new Error("Please enter a role name.");
     const existing = await ctx.db.query("communityRoles").withIndex("by_server", (q) => q.eq("serverId", serverId)).collect();
     const id = await ctx.db.insert("communityRoles", { serverId, name: clean, color, permissions, position: existing.length });
@@ -547,7 +548,7 @@ export const updateRole = mutation({
     if (!role) throw new Error("Role not found.");
     await requirePermission(ctx, role.serverId, userId, "manageRoles");
     const clean: Record<string, unknown> = {};
-    if (patch.name !== undefined) clean.name = patch.name.trim().slice(0, 30);
+    if (patch.name !== undefined) clean.name = truncateText(patch.name.trim(), 30);
     if (patch.color !== undefined) clean.color = patch.color;
     if (patch.permissions !== undefined) clean.permissions = patch.permissions;
     await ctx.db.patch(roleId, clean);
@@ -738,7 +739,7 @@ export const banMember = mutation({
     const server = await ctx.db.get(serverId);
     if (server?.ownerId === userId) throw new Error("You can't ban the owner.");
     const existing = await ctx.db.query("bans").withIndex("by_server_user", (q) => q.eq("serverId", serverId).eq("userId", userId)).unique();
-    if (!existing) await ctx.db.insert("bans", { serverId, userId, reason: reason?.slice(0, 200), byId: me });
+    if (!existing) await ctx.db.insert("bans", { serverId, userId, reason: reason === undefined ? undefined : truncateText(reason, 200), byId: me });
     const target = await membershipOf(ctx, serverId, userId);
     if (target) await ctx.db.delete(target._id);
     await audit(ctx, "member.ban", me, `Banned ${userId}${reason ? `: ${reason}` : ""}`, "user", userId);

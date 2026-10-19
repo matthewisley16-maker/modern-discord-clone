@@ -325,11 +325,70 @@ export function parseMessageBody(body: string): MessageBlock[] {
 }
 
 /**
+ * Remove unpaired UTF-16 surrogates from a string.
+ *
+ * A JavaScript string can hold half of a surrogate pair, but that is NOT valid
+ * Unicode, and Convex serializes every query/mutation result to JSON. A lone
+ * surrogate makes the whole function fail with
+ * `Could not parse return value as json: unexpected end of hex escape`, which
+ * takes down every component that subscribes to it — the entire dashboard in
+ * the case of `dms.listConversations`.
+ *
+ * Valid pairs (an emoji, for example) are preserved; only broken halves are
+ * dropped. This is deliberately applied both when text is stored and when a
+ * preview is produced, so legacy rows can never break a query either.
+ */
+export function stripLoneSurrogates(text: string): string {
+  if (!/[\uD800-\uDFFF]/.test(text)) return text;
+  let out = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += text[i] + text[i + 1];
+        i += 1;
+      }
+      // A high surrogate without its pair is dropped.
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      // A low surrogate without its pair is dropped.
+    } else {
+      out += text[i];
+    }
+  }
+  return out;
+}
+
+/**
+ * Cut text to a UTF-16 budget WITHOUT splitting an emoji in half, and drop any
+ * unpaired surrogate it is handed.
+ *
+ * `String#slice` counts code units, so slicing between the two halves of an
+ * emoji leaves a lone high surrogate at the end of the string — the exact value
+ * that makes Convex's JSON serialization of a preview fail. If the last unit in
+ * the budget is a high surrogate, it is excluded along with its pair. The
+ * result is always valid Unicode, which is the requirement for ANY string a
+ * Convex function returns.
+ */
+export function truncateText(text: string, max: number): string {
+  if (max <= 0) return "";
+  const clean = stripLoneSurrogates(text);
+  if (clean.length <= max) return clean;
+  let end = max;
+  const last = clean.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return clean.slice(0, end);
+}
+
+/**
  * A one-line, formatting-free summary of a message (reply quotes, previews).
- * Never throws, never returns markup.
+ * Never throws, never returns markup, and always returns a JSON-safe string:
+ * the body is stripped of unpaired surrogates and the cut can never split an
+ * emoji. Both matter because a summary is part of a Convex query result, and
+ * one malformed string fails the entire query.
  */
 export function plainSummary(body: string, max = 140): string {
-  const text = String(body ?? "")
+  const text = stripLoneSurrogates(String(body ?? ""))
     .replace(/\r\n?/g, " ")
     .replace(/\n+/g, " ")
     // Only the MARKERS are removed; a stray `*` or `#` in real text stays.
@@ -342,5 +401,5 @@ export function plainSummary(body: string, max = 140): string {
     .replace(/^\s*#{1,3}\s+/gm, "")
     .replace(/\s+/g, " ")
     .trim();
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  return text.length > max ? `${truncateText(text, Math.max(0, max - 1))}…` : text;
 }

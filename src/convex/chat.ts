@@ -7,7 +7,7 @@ import { gifValidator, requireGif } from "./gif";
 import { hasChannelPermission, isBlockedEitherWay, isTimedOut, memoizeAuthorCards, notify } from "./lib";
 import { resolveMentions, type MentionCache } from "./mentions";
 import { collectChannelNotifyTargets } from "../lib/server-notifications";
-import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary } from "../lib/message-format";
+import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary, stripLoneSurrogates, truncateText } from "../lib/message-format";
 
 async function signedIn(ctx: QueryCtx) {
   const id = await getAuthUserId(ctx);
@@ -31,7 +31,9 @@ async function nameOf(ctx: QueryCtx, id: Id<"users">) {
  * counts, so an emoji is one character on both sides of the wire.
  */
 function clean(value: string, max: number) {
-  const text = value.trim();
+  // Unpaired surrogates are not valid Unicode and would make every query that
+  // later returns this body fail to serialize, so they never reach the database.
+  const text = stripLoneSurrogates(value.trim());
   if (!text || messageLength(text) > max) throw new ConvexError(`Please enter between 1 and ${max.toLocaleString("en-US")} characters.`);
   return text;
 }
@@ -201,7 +203,7 @@ export const sendMessage = mutation({ args: { channelId: v.id("channels"), body:
   const senderName = await nameOf(ctx, userId);
   for (const recipientId of recipients) {
     already.add(recipientId);
-    await notify(ctx, recipientId as Id<"users">, "message", `New message in #${channel.name}`, `${senderName}: ${text.slice(0, 80)}`, link, userId);
+    await notify(ctx, recipientId as Id<"users">, "message", `New message in #${channel.name}`,    `${senderName}: ${truncateText(text, 80)}`, link, userId);
   }
   return messageId;
 }});
@@ -234,7 +236,7 @@ export const editMessage = mutation({ args: { messageId: v.id("messages"), body:
   if (!channel) throw new ConvexError("Channel not found.");
   const userId = await member(ctx, channel.serverId);
   if (message.userId !== userId) throw new ConvexError("You can only edit your own messages.");
-  const text = body.trim();
+  const text = stripLoneSurrogates(body.trim());
   if (!text) throw new ConvexError("Message can't be empty.");
   // An edit is never silently truncated: an over-long one is refused instead.
   if (messageLength(text) > MESSAGE_MAX_LENGTH) throw new ConvexError(MESSAGE_TOO_LONG);

@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { areFriends, currentUserId, isBlockedEitherWay, presenceInfoOf, profileOf, settingsOf } from "./lib";
+import { truncateText } from "../lib/message-format";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 
@@ -239,15 +240,15 @@ export const updateCustomization = mutation({
       if (/@(everyone|here)/i.test(name)) throw new Error("That display name isn't allowed.");
       patch.displayName = name;
     }
-    if (args.bio !== undefined) patch.bio = args.bio.slice(0, 600);
-    if (args.pronouns !== undefined) patch.pronouns = args.pronouns.slice(0, 40);
-    if (args.customStatus !== undefined) patch.customStatus = args.customStatus.slice(0, 120);
-    if (args.interests !== undefined) patch.interests = args.interests.slice(0, 12).map((i) => i.slice(0, 24));
+    if (args.bio !== undefined) patch.bio = truncateText(args.bio, 600);
+    if (args.pronouns !== undefined) patch.pronouns = truncateText(args.pronouns, 40);
+    if (args.customStatus !== undefined) patch.customStatus = truncateText(args.customStatus, 120);
+    if (args.interests !== undefined) patch.interests = args.interests.slice(0, 12).map((i) => truncateText(i, 24));
     if (args.socialLinks !== undefined) {
       patch.socialLinks = args.socialLinks.slice(0, 8).map((l) => ({
-        label: l.label.slice(0, 24),
+        label: truncateText(l.label, 24),
         // Only http(s) links — blocks javascript: and data: URLs.
-        url: /^https?:\/\//i.test(l.url) ? l.url.slice(0, 200) : "",
+        url: /^https?:\/\//i.test(l.url) ? truncateText(l.url, 200) : "",
       })).filter((l) => l.url);
     }
 
@@ -290,10 +291,10 @@ export const updateCustomization = mutation({
       patch.widgets = args.widgets
         .filter((w) => VALID_WIDGET.has(w.type))
         .slice(0, 12)
-        .map((w, i) => ({ id: w.id.slice(0, 40), type: w.type, enabled: w.enabled, position: i, content: w.content?.slice(0, 400) }));
+        .map((w, i) => ({ id: truncateText(w.id, 40), type: w.type, enabled: w.enabled, position: i, content: w.content === undefined ? undefined : truncateText(w.content, 400) }));
     }
     if (args.activityName !== undefined) {
-      patch.activityName = args.activityName.slice(0, 80);
+      patch.activityName = truncateText(args.activityName, 80);
       patch.activityType = args.activityType?.slice(0, 20) ?? "playing";
       patch.activitySince = Date.now();
     }
@@ -353,8 +354,8 @@ export const updateMemberProfile = mutation({
     const patch: Record<string, unknown> = {};
     if (args.nickname !== undefined) patch.nickname = args.nickname.trim().slice(0, 32);
     if (args.bio !== undefined) patch.bio = args.bio.slice(0, 300);
-    if (args.pronouns !== undefined) patch.pronouns = args.pronouns.slice(0, 40);
-    if (args.statusText !== undefined) patch.statusText = args.statusText.slice(0, 120);
+    if (args.pronouns !== undefined) patch.pronouns = truncateText(args.pronouns, 40);
+    if (args.statusText !== undefined) patch.statusText = truncateText(args.statusText, 120);
     if (args.nameFont !== undefined) patch.nameFont = args.nameFont;
     if (args.nameEffect !== undefined) patch.nameEffect = args.nameEffect;
     if (args.nameColors !== undefined) patch.nameColors = args.nameColors.slice(0, 2).map(cleanColor).filter(Boolean);
