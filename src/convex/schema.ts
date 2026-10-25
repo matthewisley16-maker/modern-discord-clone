@@ -304,6 +304,12 @@ const schema = defineSchema(
       deletedForEveryone: v.optional(v.boolean()),
       deletedAt: v.optional(v.number()),
       deletedBy: v.optional(v.id("users")),
+      /**
+       * Server invitations carried by this message (one row per recipient, so
+       * every member of a group DM sees their OWN pending/joined state on the
+       * same card). Absent on ordinary messages.
+       */
+      serverInviteIds: v.optional(v.array(v.id("serverInviteCards"))),
     })
       // Same implicit send-time ordering as `messages.by_channel`, for direct
       // conversations.
@@ -655,6 +661,40 @@ const schema = defineSchema(
     })
       .index("by_code", ["code"])
       .index("by_server", ["serverId"]),
+
+    /**
+     * A Discord-style server invitation DELIVERED THROUGH A DM.
+     *
+     * Deliberately separate from `invites` (the reusable share-code table): this
+     * row is addressed to ONE recipient, is rendered as a card inside the DM
+     * that carries it, and is redeemed only by that recipient accepting it.
+     * Nothing here can join anyone automatically — membership is inserted by
+     * `serverInvites.respond` after the recipient accepts, and only once.
+     */
+    serverInviteCards: defineTable({
+      serverId: v.id("servers"),
+      inviterId: v.id("users"),
+      recipientId: v.id("users"),
+      /** Secure, unguessable identifier used for preview/pending checks. */
+      code: v.string(),
+      conversationId: v.id("dmConversations"),
+      messageId: v.id("dmMessages"),
+      status: v.union(
+        v.literal("pending"),
+        v.literal("accepted"),
+        v.literal("declined"),
+        v.literal("revoked"),
+      ),
+      createdAt: v.number(),
+      expiresAt: v.number(),
+      resolvedAt: v.optional(v.number()),
+    })
+      .index("by_code", ["code"])
+      .index("by_recipient", ["recipientId"])
+      .index("by_inviter", ["inviterId"])      .index("by_server", ["serverId"])
+      .index("by_conversation", ["conversationId"])
+      // Deleting a message deletes the invitations it carried.
+      .index("by_message", ["messageId"]),
 
     bans: defineTable({
       serverId: v.id("servers"),

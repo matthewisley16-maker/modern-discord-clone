@@ -261,6 +261,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .fc-sidebar-action:hover { background: rgba(255,255,255,.05); color: #e5e0ff; }
 .fc-invite-btn { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 16px 12px 0; padding: 10px; border-radius: 9px; font-size: 12px; color: #c4b5f7; border: 1px solid rgba(139,92,246,.3); background: rgba(139,92,246,.1); }
 .fc-invite-btn:hover { background: rgba(139,92,246,.2); }
+.fc-invite-btn.secondary { margin-top: 6px; color: #d9ccff; background: rgba(139,92,246,.16); border-color: rgba(139,92,246,.35); }
+.fc-invite-btn.secondary:hover { background: rgba(139,92,246,.26); }
 .fc-leave-btn { margin: 8px 12px 0; padding: 8px; font-size: 11px; color: #f0616d; }
 .fc-sidebar-empty { padding: 10px 16px; font-size: 12px; color: #7c7890; line-height: 1.6; }
 .fc-communities-empty { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px 4px; }
@@ -1202,6 +1204,75 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
 .fc-lightbox-bar button { display: inline-flex; align-items: center; gap: 6px; color: #a78bfa; flex-shrink: 0; }
 .fc-lightbox-bar button:hover { color: #fff; }
 @media (max-width: 520px) { .fc-image-preview img { max-width: 168px; max-height: 128px; } }
+
+/* ---- Multi-image message gallery ---- */
+.fc-gallery { display: grid; gap: 6px; margin-top: 6px; max-width: min(440px, 100%); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fc-gallery.layout-pair { max-width: min(420px, 100%); }
+.fc-gallery.layout-triple .fc-gallery-tile:first-child { grid-column: span 2; aspect-ratio: 2 / 1; }
+.fc-gallery-tile { position: relative; display: block; padding: 0; margin: 0; border: 1px solid rgba(255,255,255,.09); border-radius: 10px; overflow: hidden; background: #17161d; cursor: zoom-in; aspect-ratio: 1; line-height: 0; }
+.fc-gallery-tile:hover { border-color: rgba(167,139,250,.5); }
+.fc-gallery-tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.fc-gallery-more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(9,9,14,.66); color: #f4f2ff; font-size: 15px; font-weight: 700; letter-spacing: .01em; }
+.fc-gallery-broken { display: grid; place-items: center; gap: 4px; width: 100%; height: 100%; padding: 10px; color: #9a95b2; font-size: 11px; line-height: 1.35; text-align: center; }
+.fc-gallery-broken small { font-size: 10.5px; opacity: .8; }
+
+.fc-gallery-lightbox { position: fixed; inset: 0; z-index: 130; background: rgba(6,6,10,.94); display: flex; align-items: center; justify-content: center; padding: 28px; }
+.fc-gallery-frame { margin: 0; max-width: min(94vw, 1300px); max-height: 84vh; overflow: auto; border-radius: 12px; }
+.fc-gallery-frame img { display: block; max-width: min(94vw, 1300px); max-height: 84vh; width: auto; height: auto; object-fit: contain; border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.7); cursor: zoom-in; }
+.fc-gallery-frame img.zoomed { max-width: none; max-height: none; width: 190%; cursor: zoom-out; }
+.fc-gallery-nav { position: fixed; top: 50%; transform: translateY(-50%); width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.1); color: #fff; }
+.fc-gallery-nav:hover { background: rgba(255,255,255,.2); }
+.fc-gallery-nav.prev { left: 18px; }
+.fc-gallery-nav.next { right: 18px; }
+.fc-gallery-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; padding: 9px 14px; border-radius: 999px; background: rgba(20,20,27,.92); border: 1px solid rgba(255,255,255,.1); color: #d8d4e6; font-size: 12px; max-width: 92vw; }
+.fc-gallery-bar .counter { font-variant-numeric: tabular-nums; color: #fff; font-weight: 600; flex-shrink: 0; }
+.fc-gallery-bar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34vw; }
+.fc-gallery-bar button { display: inline-flex; align-items: center; gap: 6px; color: #a78bfa; flex-shrink: 0; }
+.fc-gallery-bar button:hover { color: #fff; }
+
+/* ---- Server invitation cards (in DMs) ---- */
+.fc-server-invite { margin-top: 8px; padding: 12px; border-radius: 12px; border: 1px solid rgba(139,92,246,.28); background: linear-gradient(160deg, rgba(139,92,246,.15), rgba(139,92,246,.04)); max-width: min(420px, 100%); display: flex; flex-direction: column; gap: 10px; }
+.fc-server-invite-head { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 0; color: inherit; }
+.fc-server-invite-head:hover .fc-server-invite-text strong { color: #fff; }
+.fc-server-invite-icon { width: 42px; height: 42px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; background: rgba(255,255,255,.08); color: #e7e1ff; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+.fc-server-invite-icon img { width: 100%; height: 100%; object-fit: cover; }
+.fc-server-invite-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fc-server-invite-text strong { font-size: 13px; color: #f2eefc; }
+.fc-server-invite-text small { font-size: 11.5px; color: #b6b0cc; line-height: 1.4; }
+.fc-server-invite-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #a9a3bf; flex-wrap: wrap; }
+.fc-server-invite-status { padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1); font-weight: 600; }
+.fc-server-invite-status.pending { color: #d8c8ff; border-color: rgba(167,139,250,.45); background: rgba(139,92,246,.18); }
+.fc-server-invite-status.joined { color: #a7f3c9; border-color: rgba(59,165,93,.45); background: rgba(59,165,93,.16); }
+.fc-server-invite-status.expired, .fc-server-invite-status.invalid, .fc-server-invite-status.revoked, .fc-server-invite-status.declined { color: #c9c3db; opacity: .9; }
+.fc-server-invite-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.fc-server-invite-actions button { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; border: 1px solid rgba(255,255,255,.14); color: #e9e5f7; }
+.fc-server-invite-actions button:hover { background: rgba(255,255,255,.08); }
+.fc-server-invite-actions button.primary { background: #7c5cf5; border-color: #8b6cf7; color: #fff; }
+.fc-server-invite-actions button.primary:hover { background: #8d70f7; }
+
+.fc-invite-preview { display: flex; flex-direction: column; gap: 12px; }
+.fc-invite-preview-banner { height: 92px; border-radius: 10px; background-size: cover; background-position: center; background-color: rgba(139,92,246,.25); }
+.fc-invite-preview-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.fc-invite-preview-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fc-invite-picker { display: flex; flex-direction: column; gap: 10px; }
+.fc-invite-picker-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; max-height: 32vh; padding-right: 4px; }
+.fc-invite-person { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 9px; text-align: left; width: 100%; color: #e6e2f2; font-size: 13px; }
+.fc-invite-person:hover { background: rgba(255,255,255,.06); }
+.fc-invite-person.selected { background: rgba(139,92,246,.2); box-shadow: inset 0 0 0 1px rgba(167,139,250,.45); }
+.fc-invite-person small { color: #a9a3bf; font-size: 11px; }
+.fc-invite-person .tag { margin-left: auto; font-size: 10.5px; color: #a9a3bf; }
+.fc-invite-sent-list { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid rgba(255,255,255,.08); padding-top: 8px; }
+.fc-invite-sent { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 12px; color: #b9b3ce; }
+.fc-invite-sent button.revoke { margin-left: auto; color: #f08a8a; }
+.fc-invite-sent button.revoke:hover { color: #ff9d9d; }
+
+@media (max-width: 520px) {
+  .fc-gallery { max-width: 100%; }
+  .fc-gallery-nav { width: 36px; height: 36px; }
+  .fc-gallery-nav.prev { left: 8px; }
+  .fc-gallery-nav.next { right: 8px; }
+  .fc-gallery-bar .name { display: none; }
+}
 
 /* ---------- Inline audio player ---------- */
 .fc-audio { display: flex; gap: 11px; align-items: stretch; margin-top: 6px; padding: 10px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); max-width: 420px; }

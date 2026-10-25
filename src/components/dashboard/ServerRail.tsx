@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
-  Check, ChevronDown, Folder, FolderOpen, FolderPlus, Hash, Plus, Search, X,
+  Check, ChevronDown, Folder, FolderOpen, FolderPlus, Hash, Plus, Search, UserPlus, X,
 } from "lucide-react";
 import {
   cloneItems,
@@ -54,14 +54,24 @@ export default function ServerRail({
   onOpen,
   onCreate,
   onJoin,
+  onInvite,
 }: {
   communities: RailCommunity[];
   communityId: string | null;
   onOpen: (id: string) => void;
   onCreate: () => void;
   onJoin: () => void;
+  /** Open "Invite to server" for one community (DM invitations). */
+  onInvite?: (id: string) => void;
 }) {
   const org = useQuery(api.serverOrg.get, {});
+  // Only communities where this account may actually invite people get the
+  // menu item — the server re-checks `createInvites` either way.
+  const invitable = useQuery(api.serverInvites.invitableServers, onInvite ? {} : "skip");
+  const invitableIds = useMemo(
+    () => new Set(toSafeArray<{ serverId: string }>(invitable, { label: "Invitable communities", source: "api.serverInvites.invitableServers" }).map((s) => s.serverId)),
+    [invitable],
+  );
   const saveOrg = useMutation(api.serverOrg.save);
   const touchRecent = useMutation(api.serverOrg.touchRecent);
 
@@ -202,6 +212,9 @@ export default function ServerRail({
           {folder && <button onClick={() => apply(moveBy(cloneItems(items), sid, -1, folder.id))}>Move up in folder</button>}
           {folder && <button onClick={() => apply(moveBy(cloneItems(items), sid, 1, folder.id))}>Move down in folder</button>}
           <button onClick={() => apply([...withoutServer(cloneItems(items), sid), { type: "server", id: sid }])}>Remove from folder</button>
+          {onInvite && invitableIds.has(sid) && (
+            <button onClick={() => { onInvite(sid); close(); }}><UserPlus size={13} /> Invite to server</button>
+          )}
         </>
       );
     }
@@ -211,6 +224,9 @@ export default function ServerRail({
     return (
       <>
         <button onClick={() => { handleOpen(sid); close(); }}>Open</button>
+        {onInvite && invitableIds.has(sid) && (
+          <button onClick={() => { onInvite(sid); close(); }}><UserPlus size={13} /> Invite to server</button>
+        )}
         <button onClick={() => apply(moveBy(cloneItems(items), sid, -1))}>Move up</button>
         <button onClick={() => apply(moveBy(cloneItems(items), sid, 1))}>Move down</button>
         {folderList.length > 0 && <div className="fc-rail-menu-label">Move to folder</div>}

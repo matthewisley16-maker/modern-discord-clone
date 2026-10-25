@@ -22,6 +22,7 @@ import SettingsPanel from "@/components/dashboard/SettingsPanel";
 import CommunitySettings from "@/components/dashboard/CommunitySettings";
 import ServerRail from "@/components/dashboard/ServerRail";
 import NewMessageDialog from "@/components/dashboard/NewMessageDialog";
+import InviteToServerDialog from "@/components/dashboard/InviteToServerDialog";
 import SecretChatsDialog, { ProtectConversationDialog } from "@/components/dashboard/SecretChats";
 import { Avatar, GroupIcon, SectionHeader, formatLastSeen, initialsOf, PRESENCE_META } from "@/components/dashboard/ui";
 import { FeatureBoundary } from "@/components/ui/feature-boundary";
@@ -31,7 +32,7 @@ import { trackOp } from "@/lib/usage-monitor";
 import { useMessageSound } from "@/hooks/use-message-sound";
 import { toast } from "sonner";
 import {
-  AtSign, Bell, BellOff, Compass, Hash, Home, Loader2, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, Users, Volume2, X,
+  AtSign, Bell, BellOff, Compass, Hash, Home, Loader2, Lock, LogOut, Menu, Phone, Plus, Search, Settings, ShieldCheck, UserPlus, Users, Volume2, X,
 } from "lucide-react";
 
 /**
@@ -378,6 +379,8 @@ export default function Dashboard() {
   const [communitySettingsOpen, setCommunitySettingsOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [newMessageOpen, setNewMessageOpen] = useState(false);
+  /** Community whose "Invite to server" dialog is open (DM invitations). */
+  const [inviteServerId, setInviteServerId] = useState<string | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   // Locked & hidden conversations: which one is being protected, and whether
   // the PIN-gated Secret Chats screen is open.
@@ -1085,6 +1088,7 @@ export default function Dashboard() {
             onOpen={(id) => openCommunity(id)}
             onCreate={() => openModal("createCommunity")}
             onJoin={() => openModal("join")}
+            onInvite={(id) => setInviteServerId(id)}
           />
         </FeatureBoundary>
 
@@ -1180,6 +1184,12 @@ export default function Dashboard() {
             <button className="fc-invite-btn" onClick={() => openModal("invite")}>
               <Users size={16} /> Invite your people
             </button>
+            {/* Discord-style: send a real invitation card through a DM. */}
+            {detailsPermissions.includes("createInvites") && (
+              <button className="fc-invite-btn secondary" onClick={() => setInviteServerId(communityId)}>
+                <UserPlus size={16} /> Invite to server
+              </button>
+            )}
             <button className="fc-sidebar-action" onClick={() => { setSettingsOpen(true); setMobileNav(false); }}><Settings size={17} /> Settings</button>
             {communityList.length > 0 && (
               <>
@@ -1476,7 +1486,16 @@ export default function Dashboard() {
                     </div>
                   }
                 >
-                  <DmView conversationId={selectedConversationId} myUserId={me?.userId ?? ""} isPlatformAdmin={Boolean(me?.isAdmin)} onOpenProfile={setProfileUserId} onStartCall={startDmCall} highlightMessageId={highlightMessageId} onHighlightHandled={() => setHighlightMessageId(null)} />
+                  <DmView
+                    conversationId={selectedConversationId}
+                    myUserId={me?.userId ?? ""}
+                    isPlatformAdmin={Boolean(me?.isAdmin)}
+                    onOpenProfile={setProfileUserId}
+                    onStartCall={startDmCall}
+                    onOpenCommunity={(id) => openCommunity(id as Id<"servers">)}
+                    highlightMessageId={highlightMessageId}
+                    onHighlightHandled={() => setHighlightMessageId(null)}
+                  />
                 </FeatureBoundary>
               ) : selectedConversationId ? (
                 <div className="fc-scroll-view">
@@ -1616,6 +1635,25 @@ export default function Dashboard() {
           onOpenConversation={(id) => { setSecretOpen(false); openConversation(id); }}
         />
       </FeatureBoundary>
+      {inviteServerId && (
+        <FeatureBoundary label="Invite to server" fallback={null}>
+          <InviteToServerDialog
+            open
+            onClose={() => setInviteServerId(null)}
+            serverId={inviteServerId}
+            serverName={
+              inviteServerId === communityId
+                ? details?.server.name
+                : communityList.find((c) => c._id === inviteServerId)?.name
+            }
+            serverIconUrl={
+              inviteServerId === communityId
+                ? details?.server.iconUrl
+                : (communityList.find((c) => c._id === inviteServerId) as { iconUrl?: string | null } | undefined)?.iconUrl ?? null
+            }
+          />
+        </FeatureBoundary>
+      )}
       {communitySettingsOpen && communityId && (
         <FeatureBoundary label="Community settings" fallback={null}>
           <CommunitySettings

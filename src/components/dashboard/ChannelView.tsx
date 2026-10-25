@@ -7,7 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { GifValue } from "@/convex/gif";
 import { Avatar, EmptyState } from "./ui";
-import MediaAttachment from "./MediaAttachment";
+import MessageAttachments from "./ImageGallery";
 import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
 import InlineGif from "./InlineGif";
@@ -418,11 +418,8 @@ export default function ChannelView({
                 )}
                 {/* YouTube links become lazy embeds; the video itself is never copied. */}
                 <YouTubeEmbeds body={m.body} />
-                {m.attachments.length > 0 && (
-                  <div className="fc-attachments">
-                    {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}
-                  </div>
-                )}
+                {/* Several images in one message become one compact gallery. */}
+                <MessageAttachments attachments={m.attachments} />
                 <div className="fc-reactions">
                   {grouped.map((emoji) => {
                     const list = m.reactions.filter((r) => r.emoji === emoji);

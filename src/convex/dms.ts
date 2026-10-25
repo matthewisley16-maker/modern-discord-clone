@@ -3,11 +3,12 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { enforceRateLimit } from "./authHelpers";
 import { gifValidator, requireGif } from "./gif";
-import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, memoizeAuthorCards, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
+import { areFriends, avatarUrlOf, currentUserId, displayNameOf, isBlockedEitherWay, memoizeAuthorCards, membershipOf, notify, presenceInfoOf, profileOf, settingsOf } from "./lib";
 import { lockStateOf } from "./conversationPrivacy";
 import { resolveMentions, type MentionCache } from "./mentions";
 import { groupDisplayName } from "../lib/group-name";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary, stripLoneSurrogates, truncateText } from "../lib/message-format";
+import { canRespondToInvite, inviteViewStatus } from "../lib/server-invites";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 
@@ -114,8 +115,14 @@ async function requireGroupManager(
   return { convo, member, isOwner };
 }
 
-/** Find (or create) the 1:1 conversation for two users, or null if not allowed. */
-async function ensureDirect(
+/**
+ * Find (or create) the 1:1 conversation for two users, or null if not allowed.
+ *
+ * Exported because server invitations (`serverInvites.send`) deliver their card
+ * through the exact same DM, so the recipient's DM privacy and blocks are
+ * honoured in one place instead of being re-implemented (and drifting).
+ */
+export async function ensureDirect(
   ctx: MutationCtx,
   me: Id<"users">,
   otherId: Id<"users">,
@@ -542,7 +549,13 @@ export const deleteConversation = mutation({
     const remaining = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
     if (remaining.length === 0) {
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
-      for (const m of messages) await ctx.db.delete(m._id);
+      for (const m of messages) {
+        // The whole conversation is disappearing: its invitation cards go too.
+        for (const invite of await ctx.db.query("serverInviteCards").withIndex("by_message", (q) => q.eq("messageId", m._id)).collect()) {
+          await ctx.db.delete(invite._id);
+        }
+        await ctx.db.delete(m._id);
+      }
       // The conversation is going away entirely: its photo must not survive as
       // an unreachable blob (the retention sweep only prunes blobs referenced
       // by `attachments`, so an orphaned icon would sit in storage forever).
@@ -567,7 +580,13 @@ export const leaveGroup = mutation({
     const remaining = await ctx.db.query("dmMembers").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
     if (remaining.length === 0) {
       const messages = await ctx.db.query("dmMessages").withIndex("by_conversation", (q) => q.eq("conversationId", conversationId)).collect();
-      for (const m of messages) await ctx.db.delete(m._id);
+      for (const m of messages) {
+        // The whole conversation is disappearing: its invitation cards go too.
+        for (const invite of await ctx.db.query("serverInviteCards").withIndex("by_message", (q) => q.eq("messageId", m._id)).collect()) {
+          await ctx.db.delete(invite._id);
+        }
+        await ctx.db.delete(m._id);
+      }
       // Last member out: the group photo goes with the conversation, so no
       // unreachable blob is left behind in file storage.
       if (convo?.iconStorageId) await deleteStoredBlob(ctx, convo.iconStorageId);
@@ -623,6 +642,54 @@ export const markRead = mutation({
   },
 });
 
+/**
+ * Resolve the invitation card a DM message carries, from one viewer's point of
+ * view.
+ *
+ * A group invitation is one row per recipient, so the viewer sees THEIR row:
+ * pending for them even when somebody else already joined. Only public server
+ * metadata is returned — the card is rendered for non-members, so nothing about
+ * channels or messages may leak here.
+ */
+async function inviteCardFor(
+  ctx: Parameters<typeof displayNameOf>[0],
+  ids: Id<"serverInviteCards">[] | undefined,
+  viewerId: Id<"users">,
+  now: number,
+  authorCardFor: ReturnType<typeof memoizeAuthorCards>,
+) {
+  if (!ids || ids.length === 0) return null;
+  const rows = (await Promise.all(ids.map((id) => ctx.db.get(id)))).filter(
+    (row): row is NonNullable<typeof row> => Boolean(row),
+  );
+  if (rows.length === 0) return null;
+  // The viewer's own invitation when there is one, else the inviter's view.
+  const invite = rows.find((row) => row.recipientId === viewerId) ?? rows[0];
+  const server = await ctx.db.get(invite.serverId);
+  const inviter = await authorCardFor(invite.inviterId);
+  const member = await membershipOf(ctx, invite.serverId, viewerId);
+  // "Joined" describes the RECIPIENT. The inviter is always a member of their
+  // own community, so their view must stay "Invite Pending" until it resolves.
+  const joined = invite.recipientId === viewerId && Boolean(member);
+  const status = server ? inviteViewStatus(invite, now, joined) : "invalid";
+  return {
+    inviteId: invite._id,
+    code: invite.code,
+    serverId: invite.serverId,
+    serverName: server?.name ?? "",
+    serverDescription: server?.description ?? "",
+    serverIconUrl: server?.iconStorageId ? await ctx.storage.getUrl(server.iconStorageId) : null,
+    serverIconColor: server?.iconColor ?? "violet",
+    serverIsPublic: Boolean(server?.isPublic),
+    inviterName: inviter.author,
+    inviterAvatarUrl: inviter.authorAvatarUrl,
+    expiresAt: invite.expiresAt,
+    status,
+    isRecipient: invite.recipientId === viewerId,
+    canRespond: invite.recipientId === viewerId && canRespondToInvite(status),
+  };
+}
+
 /** Messages in a conversation, with reactions, attachments, replies and read state. */
 export const messages = query({
   args: { conversationId: v.id("dmConversations"), search: v.optional(v.string()) },
@@ -644,11 +711,15 @@ export const messages = query({
     const hidden = new Set(
       (await ctx.db.query("messageVisibility").withIndex("by_user", (q) => q.eq("userId", userId)).collect()).map((h) => h.messageId),
     );
-    const rows = await ctx.db
-      .query("dmMessages")
-      .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
-      .order("desc")
-      .take(150);
+  const rows = await ctx.db
+    .query("dmMessages")
+    .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+    .order("desc")
+    .take(150);
+  // Own invitation-card preload: only messages that actually carry one pay the
+  // extra reads, and every status is computed for THIS viewer (their own row in
+  // a group invitation, or the inviter's view of it).
+  const now = Date.now();
     // Deleted-for-everyone messages are removed entirely; hides apply per user.
     const ordered = rows
       .filter((r) => !r.deletedForEveryone && !hidden.has(r._id as string))
@@ -683,6 +754,7 @@ export const messages = query({
         reactions,
         // Attachments are removed on delete-for-everyone, so this stays empty.
         attachments,
+        serverInvite: await inviteCardFor(ctx, m.serverInviteIds, userId, now, authorCardFor),
         reply,
         mentionUsers: await resolveMentions(ctx, m.body, { conversationId }, mentionCache),
       });
@@ -785,6 +857,10 @@ export const deleteMessage = mutation({
     for (const r of reactions) await ctx.db.delete(r._id);
     const files = await ctx.db.query("attachments").withIndex("by_dm_message", (q) => q.eq("dmMessageId", messageId)).collect();
     for (const f of files) { await ctx.storage.delete(f.storageId); await ctx.db.delete(f._id); }
+    // An invitation card can never outlive the message that carried it.
+    for (const invite of await ctx.db.query("serverInviteCards").withIndex("by_message", (q) => q.eq("messageId", messageId)).collect()) {
+      await ctx.db.delete(invite._id);
+    }
     await ctx.db.delete(messageId);
   },
 });

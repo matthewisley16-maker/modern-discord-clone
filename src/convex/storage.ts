@@ -369,6 +369,11 @@ export async function deleteDmMessage(
   for (const vis of await ctx.db.query("messageVisibility").withIndex("by_message", (q) => q.eq("messageId", message._id)).collect()) {
     await ctx.db.delete(vis._id);
   }
+  // A server invitation card is part of the message: removing the message (for
+  // everyone, or by retention) must not leave a dangling invitation behind.
+  for (const invite of await ctx.db.query("serverInviteCards").withIndex("by_message", (q) => q.eq("messageId", message._id)).collect()) {
+    await ctx.db.delete(invite._id);
+  }
   await ctx.db.delete(message._id);
   return { attachments, bytes };
 }

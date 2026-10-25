@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, EmptyState, GroupIcon, PRESENCE_META, formatLastSeen } from "./ui";
 import GroupPhotoEditor from "./GroupPhotoEditor";
-import MediaAttachment from "./MediaAttachment";
+import MessageAttachments from "./ImageGallery";
+import ServerInviteCard from "./ServerInviteCard";
+import InviteToServerDialog from "./InviteToServerDialog";
 import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
 import InlineGif from "./InlineGif";
@@ -26,7 +28,7 @@ import { useTyping, typingLabel } from "@/hooks/use-typing";
 import { normalizeDmMessages } from "@/lib/dm-messages";
 import { toSafeArray } from "@/lib/collection";
 import { toast } from "sonner";
-import { Check, CheckCheck, Copy, FileText, Flag, Lock, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, Users, X } from "lucide-react";
+import { Check, CheckCheck, Copy, FileText, Flag, Lock, MessageCircle, MonitorUp, MoreVertical, Music, Paperclip, Pencil, Phone, Pin, Reply, Search, Send, Smile, Trash2, UserPlus, Users, X } from "lucide-react";
 
 const EMOJIS = ["😀", "😂", "🙌", "❤️", "🔥", "👍", "🎉", "👋", "✨", "😮", "😢", "🙏"];
 const REACTIONS = ["👍", "❤️", "😂", "🔥", "🎉"];
@@ -49,6 +51,7 @@ export default function DmView({
   isPlatformAdmin,
   onOpenProfile,
   onStartCall,
+  onOpenCommunity,
   highlightMessageId,
   onHighlightHandled,
 }: {
@@ -63,6 +66,8 @@ export default function DmView({
   isPlatformAdmin?: boolean;
   onOpenProfile: (userId: string) => void;
   onStartCall: (media: "voice" | "video") => void;
+  /** Jump to a community after accepting a server invitation from this chat. */
+  onOpenCommunity?: (serverId: string) => void;
   highlightMessageId?: string | null;
   onHighlightHandled?: () => void;
 }) {
@@ -162,6 +167,8 @@ export default function DmView({
   const [dragging, setDragging] = useState(false);
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [showGroupPanel, setShowGroupPanel] = useState(false);
+  // "Invite to Server": choose a community and post a real invitation here.
+  const [inviteOpen, setInviteOpen] = useState(false);
   // GIF picker + the selected (not yet sent) GIF.
   const [gifOpen, setGifOpen] = useState(false);
   const [pendingGif, setPendingGif] = useState<GifValue | null>(null);
@@ -477,6 +484,10 @@ export default function DmView({
         <div className="fc-head-actions">
           <button title="Start voice call" aria-label="Start voice call" onClick={() => onStartCall("voice")}><Phone size={18} /></button>
           <button title="Start video call" aria-label="Start video call" onClick={() => onStartCall("video")}><MonitorUp size={18} /></button>
+          {/* Only when the conversation is readable: a locked chat can't send. */}
+          {!messages?.locked && (
+            <button title="Invite to a server" aria-label="Invite to a server" onClick={() => setInviteOpen(true)}><UserPlus size={18} /></button>
+          )}
           {convo?.type === "group" && <button title="Group members" aria-label="Group members" onClick={() => setShowGroupPanel((v) => !v)}><Users size={18} /></button>}
           <div className="fc-search">
             <Search size={14} />
@@ -656,11 +667,10 @@ export default function DmView({
                 )}
                 {/* YouTube links become lazy embeds; the video itself is never copied. */}
                 <YouTubeEmbeds body={m.body} />
-                {m.attachments.length > 0 && (
-                  <div className="fc-attachments">
-                    {m.attachments.map((a) => <MediaAttachment key={a._id} attachment={a} />)}
-                  </div>
-                )}
+                {/* Several images in one message become one compact gallery. */}
+                <MessageAttachments attachments={m.attachments} />
+                {/* A Discord-style server invitation sent through this DM. */}
+                {m.serverInvite && <ServerInviteCard card={m.serverInvite} onOpenCommunity={onOpenCommunity} />}
                 <div className="fc-reactions">
                   {grouped.map((emoji) => {
                     const list = m.reactions.filter((r) => r.emoji === emoji);
@@ -698,7 +708,7 @@ export default function DmView({
               </div>
             </article>
           );
-        }), [messages, myUserId, openMenu, onOpenProfile, react, setPinned, deleteDmForMe, deleteDmForEveryone, report, isPlatformAdmin])}
+        }), [messages, myUserId, openMenu, onOpenProfile, onOpenCommunity, react, setPinned, deleteDmForMe, deleteDmForEveryone, report, isPlatformAdmin])}
         {typingList.length > 0 && <p className="fc-typing">{typingLabel(typingList)}</p>}
       </div>
 
@@ -831,6 +841,14 @@ export default function DmView({
         </div>
       </div>
     </div>
+
+    {inviteOpen && (
+      <InviteToServerDialog
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        conversationId={conversationId}
+      />
+    )}
     </>
   );
 }
