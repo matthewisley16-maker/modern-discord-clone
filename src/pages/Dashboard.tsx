@@ -259,6 +259,7 @@ export default function Dashboard() {
   const voiceSession = useQuery(api.communities.myVoiceSession, {});
   const incomingCall = useQuery(api.calls.incomingCall, {});
   const outgoingCall = useQuery(api.calls.outgoingCall, {});
+  const invitableQuery = useQuery(api.serverInvites.invitableServers, {});
 
   // ---- Collection shape normalization -------------------------------------
   // Every list that feeds the sidebar / DM UI is normalized exactly once here,
@@ -271,6 +272,13 @@ export default function Dashboard() {
   const conversationList = useMemo(
     () => toSafeArray<NonNullable<typeof conversations>[number]>(conversations, { label: "DM conversations", source: "api.dms.listConversations" }),
     [conversations],
+  );
+  // Communities this account may invite people to. Used only to decide whether
+  // the channel header offers "share an invite" — the server re-checks the
+  // permission on every send, so this can never grant anything by itself.
+  const invitableServers = useMemo(
+    () => toSafeArray<{ serverId: string }>(invitableQuery, { label: "Invitable communities", source: "api.serverInvites.invitableServers" }),
+    [invitableQuery],
   );
   const activeConversations = useMemo(() => conversationList.filter((c) => !c.archived), [conversationList]);
   const archivedConversations = useMemo(() => conversationList.filter((c) => c.archived), [conversationList]);
@@ -381,6 +389,8 @@ export default function Dashboard() {
   const [newMessageOpen, setNewMessageOpen] = useState(false);
   /** Community whose "Invite to server" dialog is open (DM invitations). */
   const [inviteServerId, setInviteServerId] = useState<string | null>(null);
+  /** Community channel an invitation is being shared into, when opened from the channel header. */
+  const [inviteChannelId, setInviteChannelId] = useState<string | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   // Locked & hidden conversations: which one is being protected, and whether
   // the PIN-gated Secret Chats screen is open.
@@ -1555,6 +1565,12 @@ export default function Dashboard() {
                 isVoice={channel.type === "voice"}
                 highlightMessageId={highlightMessageId}
                 onHighlightHandled={() => setHighlightMessageId(null)}
+                // Share an invite here only when the user may invite to some
+                // community AND may speak in THIS channel — the server checks
+                // both again on every post.
+                canInvite={invitableServers.length > 0 && detailsPermissions.includes("sendMessages")}
+                onShareInvite={() => setInviteChannelId(channel._id)}
+                onOpenCommunity={(id) => openCommunity(id)}
               />
             )}
             {section === "community" && details && !channel && (
@@ -1651,6 +1667,15 @@ export default function Dashboard() {
                 ? details?.server.iconUrl
                 : (communityList.find((c) => c._id === inviteServerId) as { iconUrl?: string | null } | undefined)?.iconUrl ?? null
             }
+          />
+        </FeatureBoundary>
+      )}
+      {inviteChannelId && (
+        <FeatureBoundary label="Share an invite" fallback={null}>
+          <InviteToServerDialog
+            open
+            onClose={() => setInviteChannelId(null)}
+            channelId={inviteChannelId as Id<"channels">}
           />
         </FeatureBoundary>
       )}

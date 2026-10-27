@@ -95,6 +95,43 @@ export function inviteRecipients(
   return out;
 }
 
+/**
+ * The ONE rule for "what may this viewer do with this invitation".
+ *
+ * Shared by the Convex backend (which enforces it), the card renderer (which
+ * only reflects it) and the unit tests, so a button can never offer something
+ * the server would reject, and a posted invitation can never be treated like an
+ * addressed one:
+ *
+ *  - `recipientId` present  → an ADDRESSED invitation: only that person may act.
+ *  - `recipientId` absent   → a POSTED invitation shared in a channel: anyone
+ *    who can see it may accept (never the inviter, who is already a member), and
+ *    there is nothing to decline — you accept it or ignore it.
+ */
+export function inviteCardAccess(
+  invite: {
+    recipientId?: string | null;
+    inviterId: string;
+    status?: string | null;
+    expiresAt?: number | null;
+  } | null | undefined,
+  viewerId: string,
+  alreadyMember: boolean,
+  now: number = Date.now(),
+): { status: InviteViewStatus; isOpen: boolean; mayAccept: boolean; mayDecline: boolean } {
+  if (!invite) return { status: "invalid", isOpen: false, mayAccept: false, mayDecline: false };
+  const isOpen = !invite.recipientId;
+  // "Joined" describes the person the card belongs to; for a posted card that is
+  // whoever is looking at it and is already in the community.
+  const joined = isOpen ? alreadyMember : invite.recipientId === viewerId && alreadyMember;
+  const status = inviteViewStatus(invite, now, joined);
+  const actionable = canRespondToInvite(status);
+  const mayAccept =
+    actionable &&
+    (isOpen ? invite.inviterId !== viewerId && !alreadyMember : invite.recipientId === viewerId);
+  return { status, isOpen, mayAccept, mayDecline: mayAccept && !isOpen };
+}
+
 /** Button label for the recipient picker. */
 export function inviteSendLabel(count: number): string {
   const n = Math.max(0, Math.trunc(count));

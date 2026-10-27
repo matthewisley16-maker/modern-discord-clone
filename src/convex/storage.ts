@@ -338,6 +338,11 @@ export async function deleteChannelMessage(
   for (const vis of await ctx.db.query("messageVisibility").withIndex("by_message", (q) => q.eq("messageId", message._id)).collect()) {
     await ctx.db.delete(vis._id);
   }
+  // A posted server invitation is part of the message: retention must not leave
+  // an invitation card behind for a message that no longer exists.
+  for (const invite of await ctx.db.query("serverInviteCards").withIndex("by_channel_message", (q) => q.eq("channelMessageId", message._id)).collect()) {
+    await ctx.db.delete(invite._id);
+  }
   await ctx.db.delete(message._id);
   return { attachments, bytes };
 }

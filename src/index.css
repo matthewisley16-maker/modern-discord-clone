@@ -1230,7 +1230,7 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
 .fc-gallery-bar button { display: inline-flex; align-items: center; gap: 6px; color: #a78bfa; flex-shrink: 0; }
 .fc-gallery-bar button:hover { color: #fff; }
 
-/* ---- Server invitation cards (in DMs) ---- */
+/* ---- Server invitation cards (in DMs and in community channels) ---- */
 .fc-server-invite { margin-top: 8px; padding: 12px; border-radius: 12px; border: 1px solid rgba(139,92,246,.28); background: linear-gradient(160deg, rgba(139,92,246,.15), rgba(139,92,246,.04)); max-width: min(420px, 100%); display: flex; flex-direction: column; gap: 10px; }
 .fc-server-invite-head { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 0; color: inherit; }
 .fc-server-invite-head:hover .fc-server-invite-text strong { color: #fff; }
@@ -1255,6 +1255,13 @@ html.fc-reduced-motion *, html.fc-reduced-motion *::before, html.fc-reduced-moti
 .fc-invite-preview-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .fc-invite-preview-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .fc-invite-picker { display: flex; flex-direction: column; gap: 10px; }
+/* Where an invitation goes: direct messages, or a channel the user can post in. */
+.fc-invite-destination { display: flex; gap: 6px; padding: 3px; border-radius: 10px; background: rgba(255,255,255,.05); }
+.fc-invite-destination button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; color: #b3adc9; }
+.fc-invite-destination button:hover { color: #e9e5f7; }
+.fc-invite-destination button.active { background: rgba(139,92,246,.22); color: #f4f1ff; box-shadow: inset 0 0 0 1px rgba(167,139,250,.4); }
+.fc-invite-channel-group { display: flex; flex-direction: column; gap: 2px; padding-bottom: 4px; }
+.fc-invite-channel-group .fc-field-label { padding-left: 9px; }
 .fc-invite-picker-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; max-height: 32vh; padding-right: 4px; }
 .fc-invite-person { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 9px; text-align: left; width: 100%; color: #e6e2f2; font-size: 13px; }
 .fc-invite-person:hover { background: rgba(255,255,255,.06); }
@@ -1741,6 +1748,10 @@ html.fc-light .fc-rail::-webkit-scrollbar-thumb { background: rgba(109,63,245,.4
 
 /* Channel notification bell (mute this channel — notifications only). */
 .fc-head-mute { display: grid; place-items: center; padding: 6px; border-radius: 8px; color: #8b87a0; }
+.fc-head-invite { display: grid; place-items: center; padding: 6px; border-radius: 8px; color: #8b87a0; }
+.fc-head-invite:hover { background: rgba(255,255,255,.06); color: #e5e0ff; }
+html.fc-light .fc-head-invite { color: #6d6b84; }
+html.fc-light .fc-head-invite:hover { background: rgba(0,0,0,.05); color: #1c1b22; }
 .fc-head-mute:hover { background: rgba(255,255,255,.06); color: #e5e0ff; }
 .fc-head-mute.muted { color: #f0a33d; }
 html.fc-light .fc-head-mute { color: #6d6b84; }

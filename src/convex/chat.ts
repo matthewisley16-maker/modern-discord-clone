@@ -7,6 +7,7 @@ import { gifValidator, requireGif } from "./gif";
 import { hasChannelPermission, isBlockedEitherWay, isTimedOut, memoizeAuthorCards, notify } from "./lib";
 import { resolveMentions, type MentionCache } from "./mentions";
 import { collectChannelNotifyTargets } from "../lib/server-notifications";
+import { inviteCardFor } from "./inviteCards";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, messageLength, plainSummary, stripLoneSurrogates, truncateText } from "../lib/message-format";
 
 async function signedIn(ctx: QueryCtx) {
@@ -73,6 +74,10 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
   // the difference is what the whole page costs every time somebody types.
   const authorCardFor = memoizeAuthorCards(ctx);
   const mentionCache: MentionCache = new Map();
+  // Posted server invitations are resolved for THIS viewer (their own joined
+  // state, their own ability to accept). Only messages that actually carry one
+  // pay the extra reads.
+  const now = Date.now();
   return Promise.all(messages
     // Messages deleted for everyone are removed from the conversation entirely,
     // and per-user hides are filtered for this viewer only.
@@ -94,7 +99,7 @@ export const messages = query({ args: { channelId: v.id("channels") }, handler: 
           : { _id: parent._id, author: await nameOf(ctx, parent.userId), body: plainSummary(parent.body, 140), deleted: false };
       }
     }
-    return { ...message, ...(await authorCardFor(message.userId)), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply, mentionUsers: await resolveMentions(ctx, message.body, { serverId: channel.serverId }, mentionCache) };
+    return { ...message, ...(await authorCardFor(message.userId)), reactions: await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", message._id)).collect(), attachments, reply, serverInvite: await inviteCardFor(ctx, message.serverInviteIds, viewUserId, now, authorCardFor), mentionUsers: await resolveMentions(ctx, message.body, { serverId: channel.serverId }, mentionCache) };
   }));
 }});
 export const createServer = mutation({ args: { name: v.string(), description: v.string() }, handler: async (ctx, args) => {
@@ -215,6 +220,10 @@ export const deleteMessage = mutation({ args: { messageId: v.id("messages") }, h
   const userId = await member(ctx, channel.serverId);
   if (message.userId !== userId) throw new ConvexError("You can only delete your own messages.");
   for (const reaction of await ctx.db.query("reactions").withIndex("by_message", q => q.eq("messageId", messageId)).collect()) await ctx.db.delete(reaction._id);
+  // A posted invitation can never outlive the message that carried it.
+  for (const invite of await ctx.db.query("serverInviteCards").withIndex("by_channel_message", q => q.eq("channelMessageId", messageId)).collect()) {
+    await ctx.db.delete(invite._id);
+  }
   await ctx.db.delete(messageId);
 }});
 export const toggleReaction = mutation({ args: { messageId: v.id("messages"), emoji: v.string() }, handler: async (ctx, { messageId, emoji }) => {

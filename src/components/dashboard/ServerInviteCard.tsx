@@ -10,13 +10,13 @@ import { toast } from "sonner";
 import { Check, UserPlus, X } from "lucide-react";
 
 /**
- * One server invitation rendered as a card inside a DM.
+ * One server invitation rendered as a card inside a DM or a community channel.
  *
- * The card is driven by the SAME reactive `dms.messages` subscription the rest
- * of the conversation uses, so it shows the right status after a refresh, in
- * old history and to every member of a group (each with their own row). Accept
- * and Decline only ever call the server, which re-checks that the invitation is
- * addressed to the caller, still pending, and not expired.
+ * The card is driven by the SAME reactive message subscription the rest of the
+ * conversation uses, so it shows the right status after a refresh, in old
+ * history and to every member of a group (each with their own row). Accept and
+ * Decline only ever call the server, which re-checks who may respond, that the
+ * invitation is still pending, and that it hasn't expired.
  */
 export type ServerInviteCardData = {
   inviteId: string;
@@ -33,6 +33,11 @@ export type ServerInviteCardData = {
   expiresAt: number;
   isRecipient: boolean;
   canRespond: boolean;
+  /** True when the invitation was posted in a channel (a shared invite): then
+   *  anybody who can see the message may accept it, so there is nothing to
+   *  "decline" and the card reports how many people already joined. */
+  isOpen: boolean;
+  joinCount: number;
 };
 
 function ServerBadge({ name, url, color }: { name: string; url: string | null; color: string }) {
@@ -59,7 +64,11 @@ export default function ServerInviteCard({
 
   const label = INVITE_STATUS_LABEL[card.status];
   const status = preview?.status ?? card.status;
-  const canRespond = preview ? preview.isRecipient && preview.status === "pending" : card.canRespond;
+  const canRespond = preview ? preview.canRespond : card.canRespond;
+  // A posted card is a shared invitation: no single addressee, and declining it
+  // is not a thing — you either accept it or ignore it.
+  const isOpen = preview?.isOpen ?? card.isOpen;
+  const joinCount = preview?.joinCount ?? card.joinCount;
   const server = preview?.server ?? null;
   const expiry = inviteExpiryLabel(preview?.expiresAt ?? card.expiresAt);
 
@@ -88,13 +97,14 @@ export default function ServerInviteCard({
           <ServerBadge name={card.serverName} url={card.serverIconUrl} color={card.serverIconColor} />
           <span className="fc-server-invite-text">
             <strong>{card.serverName || "Community invitation"}</strong>
-            <small>Invited by {card.inviterName}</small>
+            <small>{isOpen ? `Shared by ${card.inviterName}` : `Invited by ${card.inviterName}`}</small>
           </span>
         </button>
         <div className="fc-server-invite-meta">
           <span className={`fc-server-invite-status ${status}`}>{label}</span>
           {expiry && status !== "expired" && <span>{expiry}</span>}
           <span>{card.serverIsPublic ? "Public community" : "Private community"}</span>
+          {isOpen && joinCount > 0 && <span>{joinCount} joined</span>}
         </div>
         <div className="fc-server-invite-actions">
           {canRespond ? (
@@ -102,9 +112,11 @@ export default function ServerInviteCard({
               <button type="button" className="primary" disabled={busy} onClick={() => void act(true)}>
                 <Check size={13} /> Accept Invite
               </button>
-              <button type="button" disabled={busy} onClick={() => void act(false)}>
-                <X size={13} /> Decline
-              </button>
+              {!isOpen && (
+                <button type="button" disabled={busy} onClick={() => void act(false)}>
+                  <X size={13} /> Decline
+                </button>
+              )}
             </>
           ) : status === "joined" ? (
             <button type="button" onClick={() => onOpenCommunity?.(card.serverId as string)}>
@@ -146,8 +158,9 @@ export default function ServerInviteCard({
             <div className="fc-invite-preview-row">
               <Avatar name={preview?.inviter.name ?? card.inviterName} size={26} url={preview?.inviter.avatarUrl ?? card.inviterAvatarUrl} />
               <span className="fc-server-invite-text">
-                <small>Invitation from <strong>{preview?.inviter.name ?? card.inviterName}</strong></small>
+                <small>{isOpen ? "Shared by" : "Invitation from"} <strong>{preview?.inviter.name ?? card.inviterName}</strong></small>
                 <small>{expiry || "This invitation is no longer valid."}</small>
+                {isOpen && <small>{joinCount} {joinCount === 1 ? "person has" : "people have"} joined through this invitation</small>}
               </span>
             </div>
             <div className="fc-invite-preview-actions">
@@ -156,7 +169,9 @@ export default function ServerInviteCard({
               {canRespond && (
                 <>
                   <Button size="sm" onClick={() => void act(true)} disabled={busy}>Accept Invite</Button>
-                  <Button size="sm" variant="outline" onClick={() => void act(false)} disabled={busy}>Decline</Button>
+                  {!isOpen && (
+                    <Button size="sm" variant="outline" onClick={() => void act(false)} disabled={busy}>Decline</Button>
+                  )}
                 </>
               )}
               {status === "joined" && (

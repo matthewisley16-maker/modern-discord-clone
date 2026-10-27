@@ -86,6 +86,12 @@ async function redactChannelMessage(
   for (const r of await ctx.db.query("reactions").withIndex("by_message", (q) => q.eq("messageId", message._id)).collect()) {
     await ctx.db.delete(r._id);
   }
+  // A server invitation posted in this message is part of it: deleting the
+  // message for everyone removes the invitation with it (nobody can accept a
+  // card that no longer exists).
+  for (const invite of await ctx.db.query("serverInviteCards").withIndex("by_channel_message", (q) => q.eq("channelMessageId", message._id)).collect()) {
+    await ctx.db.delete(invite._id);
+  }
   await ctx.db.patch(message._id, {
     body: "",
     deletedForEveryone: true,
@@ -93,6 +99,7 @@ async function redactChannelMessage(
     deletedBy: actorId,
     deletedByModerator: byModerator,
     pinned: false,
+    serverInviteIds: undefined,
   });
 }
 

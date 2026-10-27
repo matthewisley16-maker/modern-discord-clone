@@ -12,6 +12,7 @@ import GifMessage from "./GifMessage";
 import GifPicker from "./GifPicker";
 import InlineGif from "./InlineGif";
 import MentionText from "./MentionText";
+import ServerInviteCard from "./ServerInviteCard";
 import YouTubeEmbeds from "./YouTubeEmbed";
 import { useMessageScroll } from "@/hooks/use-message-scroll";
 import { gifUrlsIn } from "@/lib/message-links";
@@ -21,7 +22,7 @@ import { sanitizeCollectionFields, toSafeArray } from "@/lib/collection";
 import { handleStorageError } from "@/lib/maintenance";
 import { useMentions } from "@/hooks/use-mentions";
 import { toast } from "sonner";
-import { Bell, BellOff, CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, X } from "lucide-react";
+import { Bell, BellOff, CheckCheck, Copy, FileText, Flag, Hash, Music, Paperclip, Pencil, Pin, Reply, Send, Smile, Trash2, UserPlus, X } from "lucide-react";
 
 const EMOJIS = ["😀", "😂", "🙌", "❤️", "🔥", "👍", "🎉", "👋", "✨", "😮", "😢", "🙏"];
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -50,6 +51,9 @@ export default function ChannelView({
   highlightMessageId,
   onHighlightHandled,
   serverId,
+  canInvite,
+  onShareInvite,
+  onOpenCommunity,
 }: {
   channelId: Id<"channels">;
   serverId?: Id<"servers">;
@@ -62,6 +66,12 @@ export default function ChannelView({
   isVoice?: boolean;
   highlightMessageId?: string | null;
   onHighlightHandled?: () => void;
+  /** True when this account may invite people to at least one community. */
+  canInvite?: boolean;
+  /** Share one of the user's communities into THIS channel. */
+  onShareInvite?: () => void;
+  /** Open a community after accepting an invitation posted here. */
+  onOpenCommunity?: (serverId: string) => void;
 }) {
   const messages = useQuery(api.chat.messages, { channelId });
   const typing = useQuery(api.communities.typingIn, { channelId });
@@ -355,6 +365,18 @@ export default function ChannelView({
           >
             {channelMuted ? <BellOff size={16} /> : <Bell size={16} />}
           </button>
+          {/* Share an invitation to one of your communities right here. The
+              server re-checks both permissions, so this is only a shortcut. */}
+          {canInvite && onShareInvite && (
+            <button
+              className="fc-head-invite"
+              title="Share an invite in this channel"
+              aria-label="Share an invite in this channel"
+              onClick={onShareInvite}
+            >
+              <UserPlus size={16} />
+            </button>
+          )}
           {isVoice && <button className="fc-join-voice" onClick={onJoinVoice}><Smile size={16} /> Join voice</button>}
           <div className="fc-search">
             <input aria-label="Search messages" placeholder="Search messages" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -420,6 +442,8 @@ export default function ChannelView({
                 <YouTubeEmbeds body={m.body} />
                 {/* Several images in one message become one compact gallery. */}
                 <MessageAttachments attachments={m.attachments} />
+                {/* A server invitation someone shared into this channel. */}
+                {m.serverInvite && <ServerInviteCard card={m.serverInvite} onOpenCommunity={onOpenCommunity} />}
                 <div className="fc-reactions">
                   {grouped.map((emoji) => {
                     const list = m.reactions.filter((r) => r.emoji === emoji);
@@ -455,7 +479,7 @@ export default function ChannelView({
               </div>
             </article>
           );
-        }), [visible, myUserId, menuFor, longPressFor, canModerate, onOpenProfile, react, pin, deleteForMe, deleteForEveryone, report])}
+        }), [visible, myUserId, menuFor, longPressFor, canModerate, onOpenProfile, onOpenCommunity, react, pin, deleteForMe, deleteForEveryone, report])}
         {typingList.length > 0 && <p className="fc-typing">{typingLabel(typingList)}</p>}
       </div>
 

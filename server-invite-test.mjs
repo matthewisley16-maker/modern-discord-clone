@@ -5,6 +5,7 @@
 // Run: bun server-invite-test.mjs
 import {
   canRespondToInvite,
+  inviteCardAccess,
   inviteExpiryLabel,
   inviteRecipients,
   inviteSendLabel,
@@ -74,6 +75,34 @@ eq("the cap is applied", inviteRecipients(Array.from({ length: 50 }, (_, i) => `
 eq("the default cap is 20", MAX_INVITE_RECIPIENTS, 20);
 eq("a custom cap is honoured", inviteRecipients(["a", "b", "c"], "me", 2), ["a", "b"]);
 eq("an invalid cap falls back safely", inviteRecipients(["a"], "me", 0), ["a"]);
+
+// ---- who may act on a card (addressed vs posted invitations) ----
+const addressed = { ...live, recipientId: "me", inviterId: "sender" };
+const addressedToOther = { ...live, recipientId: "someone", inviterId: "sender" };
+// A POSTED invitation has no addressee: it was shared into a channel.
+const posted = { ...live, recipientId: undefined, inviterId: "sender" };
+const access = (invite, viewer, member = false) => inviteCardAccess(invite, viewer, member, now);
+
+eq("an addressed invite is actionable by its recipient", access(addressed, "me"),
+  { status: "pending", isOpen: false, mayAccept: true, mayDecline: true });
+eq("an addressed invite is not actionable by anyone else", access(addressedToOther, "me").mayAccept, false);
+eq("an addressed invite cannot be declined by a bystander", access(addressedToOther, "me").mayDecline, false);
+eq("an addressed invite reads joined once the recipient is a member", access(addressed, "me", true).status, "joined");
+eq("an addressed invite stops being actionable once joined", access(addressed, "me", true).mayAccept, false);
+
+eq("a posted invite is open, not addressed", access(posted, "viewer").isOpen, true);
+eq("any member who can see a posted invite may accept it", access(posted, "viewer"),
+  { status: "pending", isOpen: true, mayAccept: true, mayDecline: false });
+eq("a posted invite can never be declined (it is shared)", access(posted, "viewer").mayDecline, false);
+eq("the poster cannot accept their own posted invite", access(posted, "sender").mayAccept, false);
+eq("an existing member sees a posted invite as joined", access(posted, "viewer", true).status, "joined");
+eq("an existing member cannot accept a posted invite again", access(posted, "viewer", true).mayAccept, false);
+eq("an expired posted invite is not actionable", access({ ...posted, expiresAt: now - 1 }, "viewer"),
+  { status: "expired", isOpen: true, mayAccept: false, mayDecline: false });
+eq("a revoked posted invite is not actionable", access({ ...posted, status: "revoked" }, "viewer").mayAccept, false);
+eq("a declined posted invite is not actionable", access({ ...posted, status: "declined" }, "viewer").mayAccept, false);
+eq("a missing invitation is invalid and inert", access(null, "viewer"),
+  { status: "invalid", isOpen: false, mayAccept: false, mayDecline: false });
 
 // ---- button wording ----
 eq("no selection", inviteSendLabel(0), "Send invitation");

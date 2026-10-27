@@ -622,6 +622,13 @@ const schema = defineSchema(
       deletedAt: v.optional(v.number()),
       deletedBy: v.optional(v.id("users")),
       deletedByModerator: v.optional(v.boolean()),
+      /**
+       * Server invitations carried by this message. A channel message carries a
+       * POSTED invitation (one shareable row that any member of this channel may
+       * accept), so a page of history resolves its card in one indexed read
+       * instead of scanning the invitations table. Absent on ordinary messages.
+       */
+      serverInviteIds: v.optional(v.array(v.id("serverInviteCards"))),
     })
       // `_creationTime` is appended to every index automatically, so `by_channel`
       // already yields one channel's messages in send-time order — which is what
@@ -663,22 +670,37 @@ const schema = defineSchema(
       .index("by_server", ["serverId"]),
 
     /**
-     * A Discord-style server invitation DELIVERED THROUGH A DM.
+     * A Discord-style server invitation delivered through a DM or posted into a
+     * community channel.
      *
-     * Deliberately separate from `invites` (the reusable share-code table): this
-     * row is addressed to ONE recipient, is rendered as a card inside the DM
-     * that carries it, and is redeemed only by that recipient accepting it.
-     * Nothing here can join anyone automatically — membership is inserted by
-     * `serverInvites.respond` after the recipient accepts, and only once.
+     * Deliberately separate from `invites` (the reusable share-code table): a DM
+     * row is addressed to ONE recipient and is redeemed only by that recipient
+     * accepting it; a channel row has no recipient and may be accepted by any
+     * member who can see the message it is attached to. Nothing here can join
+     * anyone automatically — membership is inserted by `serverInvites.respond`
+     * after the recipient accepts, and only once.
      */
     serverInviteCards: defineTable({
       serverId: v.id("servers"),
       inviterId: v.id("users"),
-      recipientId: v.id("users"),
+      /**
+       * The person this invitation is addressed to. ABSENT for an invitation
+       * that was posted into a community channel instead of DM'd: such a card is
+       * a shared invitation that any member who can see the message may accept,
+       * and every accept still goes through `serverInvites.respond` (one
+       * membership row per person, counted in `joins`).
+       */
+      recipientId: v.optional(v.id("users")),
       /** Secure, unguessable identifier used for preview/pending checks. */
       code: v.string(),
-      conversationId: v.id("dmConversations"),
-      messageId: v.id("dmMessages"),
+      /** Where the card was delivered: a DM conversation … */
+      conversationId: v.optional(v.id("dmConversations")),
+      messageId: v.optional(v.id("dmMessages")),
+      /** … or a community channel message. */
+      channelId: v.optional(v.id("channels")),
+      channelMessageId: v.optional(v.id("messages")),
+      /** How many people joined through a posted channel invitation. */
+      joins: v.optional(v.number()),
       status: v.union(
         v.literal("pending"),
         v.literal("accepted"),
@@ -691,10 +713,12 @@ const schema = defineSchema(
     })
       .index("by_code", ["code"])
       .index("by_recipient", ["recipientId"])
-      .index("by_inviter", ["inviterId"])      .index("by_server", ["serverId"])
+      .index("by_inviter", ["inviterId"])
+      .index("by_server", ["serverId"])
       .index("by_conversation", ["conversationId"])
       // Deleting a message deletes the invitations it carried.
-      .index("by_message", ["messageId"]),
+      .index("by_message", ["messageId"])
+      .index("by_channel_message", ["channelMessageId"]),
 
     bans: defineTable({
       serverId: v.id("servers"),
