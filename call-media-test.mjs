@@ -24,6 +24,7 @@ import {
   turnServers,
   turnUrls,
 } from "./src/lib/ice";
+import { fullscreenElement, fullscreenSupported, isFullscreenElement, viewAfterFullscreen } from "./src/lib/fullscreen";
 
 let pass = 0, fail = 0;
 const ok = (name) => { pass++; console.log(`PASS: ${name}`); };
@@ -133,6 +134,57 @@ check(
 );
 check("a stalled call retries ICE instead of spinning forever", dmPanel.includes("restartIce?.()") && dmPanel.includes("25_000"), "no bounded retry/watchdog exists");
 check("signals are applied oldest first (community)", /sort\(\(a, b\) => a\._creationTime - b\._creationTime\)/.test(communities), "signals can be applied out of order");
+
+// ---------------------------------------------------------------------------
+// 4. Fullscreen: the video is never cut off, and the panels follow the BROWSER
+//    (Esc and F11 leave fullscreen without asking us first)
+// ---------------------------------------------------------------------------
+is("a floating call comes back floating after fullscreen", viewAfterFullscreen("float", false), "float");
+is("an expanded call comes back expanded", viewAfterFullscreen("full", false), "full");
+is("a minimized call never comes back as a fullscreen window", viewAfterFullscreen("full", true), "compact");
+is("with nothing to restore, the floating window is the fallback", viewAfterFullscreen(null, false), "float");
+is("fullscreen is honestly unavailable when there is no browser", fullscreenSupported(), false);
+is("nothing is fullscreen outside a browser", fullscreenElement(), null);
+check("a missing element never counts as fullscreen", isFullscreenElement(null) === false, "null was reported as fullscreen");
+
+const indexCss = read("src", "index.css");
+/** Rules with braces (at-rules flattened), so `@media` overrides are seen too. */
+function cssRules(sheet, selector) {
+  const out = [];
+  const clean = sheet.replace(/\/\*[\s\S]*?\*\//g, "").replace(/@[^{]+\{/g, " ");
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(clean))) {
+    if (m[1].split(",").map((s) => s.trim()).includes(selector)) out.push(m[2]);
+  }
+  return out;
+}
+/** The last declared value of `prop` for an exact selector (null when absent). */
+function cssValue(sheet, selector, prop) {
+  const values = cssRules(sheet, selector)
+    .map((decls) => decls.match(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`)))
+    .filter(Boolean)
+    .map((m) => m[1].trim());
+  return values.at(-1) ?? null;
+}
+check("the DM call window can really fill the screen", cssValue(indexCss, ".fc-callwin:fullscreen", "width") === "100%" && cssValue(indexCss, ".fc-callwin:fullscreen", "height") === "100%", "a fullscreen call window keeps its floating size");
+is("the DM video is letterboxed, never cropped, in fullscreen", cssValue(indexCss, ".fc-callwin:fullscreen .fc-callwin-video", "object-fit"), "contain");
+is("the DM video is not cropped in the expanded view either", cssValue(indexCss, ".fc-callwin.full .fc-callwin-video", "object-fit"), "contain");
+check("the DM video stage fills the fullscreen window", cssValue(indexCss, ".fc-callwin:fullscreen .fc-callwin-remote", "flex") === "1", "the stage keeps its small aspect ratio");
+check("the DM call controls stay laid out in fullscreen", cssRules(indexCss, ".fc-callwin:fullscreen .fc-callwin-controls").length > 0, "fullscreen hides the controls");
+check("the community panel can fill the screen", cssValue(indexCss, ".vp-panel:fullscreen", "height") === "100%" && cssValue(indexCss, ".vp-panel:fullscreen", "max-height") === "none", "the panel keeps its 90vh cap, so part of the grid is cut off");
+is("community video is letterboxed, never cropped, in fullscreen", cssValue(indexCss, ".vp-panel:fullscreen .vp-video", "object-fit"), "contain");
+check("community video tiles are not capped at thumbnail size in fullscreen", cssValue(indexCss, ".vp-panel:fullscreen .vp-video", "max-height") === "none" && cssValue(indexCss, ".vp-panel:fullscreen .vp-video", "max-width") === "none", "the 168px thumbnail cap still applies in fullscreen");
+
+check("the DM panel asks the browser for fullscreen", dmPanel.includes("enterFullscreen(el)"), "no fullscreen request exists");
+check("the DM panel follows the browser's fullscreen state", dmPanel.includes("onFullscreenChange") && dmPanel.includes("isFullscreenElement(rootRef.current)"), "the panel keeps its own idea of fullscreen");
+check("the DM panel restores a real view when fullscreen ends (Esc included)", dmPanel.includes("viewAfterFullscreen(previous, minimizedRef.current)"), "leaving fullscreen can strand the window");
+check("the DM panel releases fullscreen when the call is minimized or ends", dmPanel.includes("if (minimized && fullscreenMineRef.current) void exitFullscreen();") && dmPanel.includes("if (fullscreenMineRef.current) void exitFullscreen();"), "a mini window can be left fullscreen/blank");
+check("the community panel asks the browser for fullscreen", voicePanel.includes("enterFullscreen(el)"), "no fullscreen request exists");
+check("the community panel follows the browser's fullscreen state", voicePanel.includes("onFullscreenChange") && voicePanel.includes("isFullscreenElement(panelRef.current)"), "the panel keeps its own idea of fullscreen");
+check("the community panel releases fullscreen when the call ends", voicePanel.includes("if (fullscreenMineRef.current) void exitFullscreen();"), "leaving the call can strand fullscreen");
+check("shared screens still fullscreen on their own", dmPanel.includes("toggleScreenFullscreen") && voicePanel.includes("toggleScreenFullscreen"), "the shared-screen fullscreen button was dropped");
+check("neither panel hand-rolls the fullscreen API", !/document\.fullscreenElement/.test(dmPanel + voicePanel), "a panel reads the raw API instead of the helpers");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

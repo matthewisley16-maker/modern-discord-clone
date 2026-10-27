@@ -722,6 +722,14 @@ html.fc-light .fc-subcat-value { color: #2a2836; }
 .vp-controls button:hover { background: #262335; }
 .vp-controls button.active { background: #8b5cf6; color: #fff; }
 .vp-head-actions { display: flex; gap: 8px; align-items: center; }
+/* ---- The browser's own fullscreen for a community call ---------------------
+   The panel fills the screen and every tile shows the WHOLE frame
+   (object-fit: contain), so fullscreen never cuts the video off. */
+.vp-panel:fullscreen, .vp-panel:-webkit-full-screen { width: 100%; max-width: none; height: 100%; max-height: none; padding: 16px; background: #0b0b10; overflow-y: auto; }
+.vp-panel:fullscreen .vp-grid, .vp-panel:-webkit-full-screen .vp-grid { flex: 1; min-height: 0; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-content: start; }
+.vp-panel:fullscreen .vp-media, .vp-panel:-webkit-full-screen .vp-media { min-height: 0; }
+.vp-panel:fullscreen .vp-video, .vp-panel:-webkit-full-screen .vp-video { width: 100%; max-width: none; max-height: none; height: auto; aspect-ratio: 16 / 9; object-fit: contain; }
+.vp-panel:fullscreen .vp-screen-video.focus, .vp-panel:-webkit-full-screen .vp-screen-video.focus { max-height: none; height: min(56vh, 100%); }
 .vp-sinks { position: fixed; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 /* ---- Floating minimized call window (voice + DM) ---- */
 .vp-mini { position: fixed; right: 18px; bottom: 18px; z-index: 95; width: 232px; background: #14141b; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 22px 55px rgba(0,0,0,.6); overflow: hidden; cursor: pointer; touch-action: none; }
@@ -797,6 +805,22 @@ html.fc-light .fc-subcat-value { color: #2a2836; }
 .fc-callwin.full .fc-callwin-remote { flex: 1; aspect-ratio: auto; }
 .fc-callwin.full .fc-callwin-selfvideo { width: clamp(120px, 22vw, 220px); }
 .fc-callwin.full .fc-callwin-controls { justify-content: center; gap: 10px; }
+/* Expanded, the video is LETTERBOXED instead of cropped: filling the window must
+   never cut off what the other person is showing. */
+.fc-callwin.full .fc-callwin-video { object-fit: contain; }
+/* ---- The browser's own fullscreen (Esc, F11 or the OS can leave it) --------
+   The window fills the screen, keeps its header and controls, and the video is
+   letterboxed — going fullscreen must never crop the video. */
+.fc-callwin:fullscreen, .fc-callwin:-webkit-full-screen { inset: 0; right: auto; bottom: auto; width: 100%; height: 100%; border-radius: 0; border: none; }
+.fc-callwin:fullscreen .fc-callwin-head, .fc-callwin:-webkit-full-screen .fc-callwin-head { cursor: default; }
+.fc-callwin:fullscreen .fc-callwin-body, .fc-callwin:-webkit-full-screen .fc-callwin-body { flex: 1; min-height: 0; }
+.fc-callwin:fullscreen .fc-callwin-stage, .fc-callwin:-webkit-full-screen .fc-callwin-stage { flex: 1; min-height: 0; display: flex; }
+.fc-callwin:fullscreen .fc-callwin-remote, .fc-callwin:-webkit-full-screen .fc-callwin-remote { flex: 1; aspect-ratio: auto; }
+.fc-callwin:fullscreen .fc-callwin-video, .fc-callwin:-webkit-full-screen .fc-callwin-video { object-fit: contain; }
+.fc-callwin:fullscreen .fc-callwin-selfvideo, .fc-callwin:-webkit-full-screen .fc-callwin-selfvideo { width: clamp(120px, 22vw, 240px); object-fit: contain; }
+.fc-callwin:fullscreen .fc-callwin-controls, .fc-callwin:-webkit-full-screen .fc-callwin-controls { justify-content: center; gap: 10px; }
+/* A shared screen takes the large area while the camera tiles stay underneath. */
+.fc-callwin:fullscreen .fc-callwin-screenvideo, .fc-callwin:-webkit-full-screen .fc-callwin-screenvideo { max-height: none; height: 54vh; }
 @media (max-width: 520px) { .fc-callwin { width: min(260px, calc(100vw - 16px)); } .fc-callwin.compact { width: min(210px, calc(100vw - 16px)); } .fc-callwin.full .fc-callwin-selfvideo { width: 110px; } }
 /* ---- Incoming call screen ---- */
 .fc-incoming-call { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; background: rgba(6,6,10,.72); backdrop-filter: blur(3px); }

@@ -12,6 +12,14 @@ import { Input } from "@/components/ui/input";
 import { PRESENCE_META } from "./ui";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "@/components/voice/screenShare";
 import { RELAY_CONFIGURED, RTC_CONFIGURATION, connectionFailureMessage } from "@/lib/ice";
+import {
+  enterFullscreen,
+  exitFullscreen,
+  fullscreenSupported,
+  isFullscreenElement,
+  onFullscreenChange,
+  viewAfterFullscreen,
+} from "@/lib/fullscreen";
 import "@/components/voice/screenShare.css";
 
 
@@ -104,6 +112,8 @@ export default function DmCallPanel({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [view, setView] = useState<View>(minimized ? "compact" : "float");
+  // True while the BROWSER (not Freecord) has this window fullscreen.
+  const [nativeFullscreen, setNativeFullscreen] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(savedPos);
   const [dragging, setDragging] = useState(false);
   // Flips to true once the peer connection exists, so the signaling effect
@@ -201,10 +211,77 @@ export default function DmCallPanel({
   const audioEl = useRef<HTMLAudioElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+  // The view the user was looking at before fullscreen, restored on the way out.
+  const viewBeforeFullscreen = useRef<View | null>(null);
+  // Mirrors the browser's fullscreen state, so an unmount can release it without
+  // touching a fullscreen that belongs to something else.
+  const fullscreenMineRef = useRef(false);
 
   const send = useCallback((to: Id<"users">, kind: "offer" | "answer" | "candidate" | "screen", payload: string) => {
     return sendSignalRef.current({ conversationId, toUserId: to, kind, payload }).catch(() => {});
   }, [conversationId]);
+
+  // ---- Fullscreen ---------------------------------------------------------
+  // Fullscreen is owned by the browser: Esc, F11 or the OS can leave it without
+  // telling us, so the state below is always derived from `fullscreenElement`
+  // and the window is restored to a real view the moment fullscreen ends.
+  const minimizedRef = useRef(minimized);
+  useEffect(() => { minimizedRef.current = minimized; }, [minimized]);
+  // Restoring a view has to notify the parent as well; read through a ref so
+  // subscribing to fullscreen never depends on props that change every render.
+  const viewRestoreRef = useRef<(next: View) => void>(() => {});
+
+  useEffect(() => {
+    return onFullscreenChange(() => {
+      const mine = isFullscreenElement(rootRef.current);
+      // The shared-screen stage is part of this panel too, so an unmount must be
+      // allowed to release it as well.
+      fullscreenMineRef.current = mine || isFullscreenElement(screenStageRef.current);
+      setNativeFullscreen(mine);
+      if (mine) return;
+      const previous = viewBeforeFullscreen.current;
+      if (!previous) return;
+      // Left fullscreen by any route (Esc included): come back to the view the
+      // user had before, never to a hidden or half-laid-out window.
+      viewBeforeFullscreen.current = null;
+      viewRestoreRef.current(viewAfterFullscreen(previous, minimizedRef.current));
+    });
+  }, []);
+
+  // A call that ends (or is minimized) must never leave the browser stuck in a
+  // fullscreen window that no longer has anything to show.
+  useEffect(() => () => {
+    if (fullscreenMineRef.current) void exitFullscreen();
+  }, []);
+
+  /** Fullscreen the WHOLE call window (video + controls), not just the video. */
+  async function toggleWindowFullscreen() {
+    const el = rootRef.current;
+    if (!el) return;
+    if (isFullscreenElement(el)) { await exitFullscreen(); return; }
+    if (!fullscreenSupported()) {
+      toast.error("Fullscreen isn't available in this browser — use Expand instead.");
+      return;
+    }
+    viewBeforeFullscreen.current = view;
+    if (await enterFullscreen(el)) {
+      setNativeFullscreen(true);
+      // The video stage only exists in an expanded view, so show it while the
+      // screen belongs to this window.
+      setViewAndNotify("full");
+    } else {
+      viewBeforeFullscreen.current = null;
+      toast.error("Fullscreen was blocked — use Expand instead.");
+    }
+  }
+
+  /** Fullscreen only the shared screen (the stage knows how to letterbox it). */
+  async function toggleScreenFullscreen() {
+    const el = screenStageRef.current;
+    if (!el) return;
+    if (isFullscreenElement(el)) { await exitFullscreen(); return; }
+    if (!(await enterFullscreen(el))) toast.error("Fullscreen was blocked — use Focus instead.");
+  }
 
   /**
    * Is the remote actually delivering a decodable video frame right now?
@@ -707,15 +784,19 @@ export default function DmCallPanel({
     ss?.getTracks().forEach((t) => { try { t.stop(); } catch { /* noop */ } ss.removeTrack(t); });
   }
 
-  function toggleFullscreen() {
-    const el = screenStageRef.current;
-    if (!el) return;
-    if (document.fullscreenElement) { void document.exitFullscreen?.().catch(() => {}); return; }
-    void el.requestFullscreen?.().catch(() => {});
-  }
+  useEffect(() => {
+    viewRestoreRef.current = (next) => {
+      setView(next);
+      if (next === "compact") onMinimize?.();
+      else if (next === "full") onExpand?.();
+    };
+  }, [onMinimize, onExpand]);
 
   // ---- Keep the view in sync with the external minimize flag (nav changes) ----
   useEffect(() => {
+    // The mini window is not a fullscreen surface: release the screen instead of
+    // showing a fullscreen window with the stage hidden.
+    if (minimized && fullscreenMineRef.current) void exitFullscreen();
     setView((v) => {
       if (minimized) return "compact";
       return v === "compact" ? "float" : v;
@@ -803,14 +884,23 @@ export default function DmCallPanel({
           </span>
           <span className="fc-callwin-head-btns">
             {canInvite && <button aria-label="Invite people" title="Invite people" onClick={(e) => { e.stopPropagation(); setInviteOpen(true); }}><UserPlus size={14} /></button>}
-            {view === "float" && (
-              <button aria-label="Minimize call window" title="Minimize" onClick={(e) => { e.stopPropagation(); setViewAndNotify("compact"); }}><Minimize2 size={14} /></button>
-            )}
-            {view === "compact" && (
-              <button aria-label="Restore call window" title="Restore" onClick={(e) => { e.stopPropagation(); setViewAndNotify("float"); }}><Maximize2 size={14} /></button>
-            )}
-            {view === "full" && (
-              <button aria-label="Shrink call window" title="Shrink" onClick={(e) => { e.stopPropagation(); setViewAndNotify("float"); }}><Minimize2 size={14} /></button>
+            {nativeFullscreen ? (
+              // While the browser has the window fullscreen, the only way out of
+              // that state is leaving fullscreen — shrinking the view would only
+              // leave a half-laid-out window on a fullscreen screen.
+              <button aria-label="Exit fullscreen" title="Exit fullscreen (Esc)" onClick={(e) => { e.stopPropagation(); void toggleWindowFullscreen(); }}><Minimize2 size={14} /></button>
+            ) : (
+              <>
+                {view === "float" && (
+                  <button aria-label="Minimize call window" title="Minimize" onClick={(e) => { e.stopPropagation(); setViewAndNotify("compact"); }}><Minimize2 size={14} /></button>
+                )}
+                {view === "compact" && (
+                  <button aria-label="Restore call window" title="Restore" onClick={(e) => { e.stopPropagation(); setViewAndNotify("float"); }}><Maximize2 size={14} /></button>
+                )}
+                {view === "full" && (
+                  <button aria-label="Shrink call window" title="Shrink" onClick={(e) => { e.stopPropagation(); setViewAndNotify("float"); }}><Minimize2 size={14} /></button>
+                )}
+              </>
             )}
             <button className="danger" aria-label="End call" title="End call" onClick={(e) => { e.stopPropagation(); onLeave(); }}><X size={14} /></button>
           </span>
@@ -834,7 +924,7 @@ export default function DmCallPanel({
               <button aria-label={screenEnlarged ? "Exit focus" : "Focus shared screen"} title={screenEnlarged ? "Exit focus" : "Focus"} onClick={() => setScreenEnlarged((v) => !v)}>
                 {screenEnlarged ? <Minimize2 size={14} /> : <Maximize size={14} />}
               </button>
-              <button aria-label="Fullscreen shared screen" title="Fullscreen" onClick={toggleFullscreen}><Maximize size={14} /></button>
+              <button aria-label="Fullscreen shared screen" title="Fullscreen" onClick={() => void toggleScreenFullscreen()}><Maximize size={14} /></button>
             </span>
           </div>
 
@@ -911,9 +1001,19 @@ export default function DmCallPanel({
               <UserPlus size={16} />
             </button>
           )}
-          {view === "full"
+          {/* Two steps, both useful: Expand fills the Freecord window, the
+              Fullscreen button hands the call to the browser. */}
+          {view === "full" && !nativeFullscreen
             ? <button onClick={() => setViewAndNotify("float")} aria-label="Shrink call window" title="Shrink"><Minimize2 size={16} /></button>
-            : <button onClick={() => setViewAndNotify("full")} aria-label="Expand call window" title="Expand"><Maximize2 size={16} /></button>}
+            : !nativeFullscreen && <button onClick={() => setViewAndNotify("full")} aria-label="Expand call window" title="Expand"><Maximize2 size={16} /></button>}
+          <button
+            className={nativeFullscreen ? "active" : ""}
+            onClick={() => void toggleWindowFullscreen()}
+            aria-label={nativeFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            title={nativeFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+          >
+            {nativeFullscreen ? <Minimize2 size={16} /> : <Maximize size={16} />}
+          </button>
           <button className="danger" onClick={onLeave} aria-label="End call" title="End call"><PhoneOff size={16} /></button>
         </div>
       </div>

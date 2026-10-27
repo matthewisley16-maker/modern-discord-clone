@@ -13,6 +13,7 @@ import { PRESENCE_META } from "@/components/dashboard/ui";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "./screenShare";
 import { useDraggableWindow } from "@/hooks/use-draggable";
 import { RTC_CONFIGURATION } from "@/lib/ice";
+import { enterFullscreen, exitFullscreen, isFullscreenElement, onFullscreenChange } from "@/lib/fullscreen";
 import "./screenShare.css";
 
 const SPEAK_THRESHOLD = 0.045; // RMS above this counts as speech
@@ -124,6 +125,8 @@ export default function VoicePanel({
   const [remoteScreens, setRemoteScreens] = useState<Record<string, MediaStream>>({});
   const [screenFocus, setScreenFocus] = useState<string | null>(null);
   const [enlarged, setEnlarged] = useState(false);
+  // True while the BROWSER (not Freecord) has this panel fullscreen.
+  const [panelFullscreen, setPanelFullscreen] = useState(false);
   // True once the mic attempt has finished (granted or denied), so peer
   // connections can still form for camera-only / listen-only participants.
   const [mediaReady, setMediaReady] = useState(false);
@@ -141,6 +144,10 @@ export default function VoicePanel({
   const videoEls = useRef<Map<string, HTMLVideoElement>>(new Map());
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // Mirrors the browser's fullscreen state so an unmount only releases OUR
+  // fullscreen, never one that belongs to something else.
+  const fullscreenMineRef = useRef(false);
   // Throttles the mic-level meter so it does not re-render the whole grid 60×/s.
   const lastLevelRef = useRef(0);
   const lastLevelAtRef = useRef(0);
@@ -646,11 +653,37 @@ export default function VoicePanel({
     if (wasSharing) await setVoiceFlags({ screen: false }).catch(() => {});
   }
 
-  function toggleFullscreen() {
+  // ---- Fullscreen ---------------------------------------------------------
+  // Fullscreen is owned by the browser: Esc, F11 or the OS can leave it without
+  // telling us, so the state below is always derived from `fullscreenElement`.
+  useEffect(() => {
+    return onFullscreenChange(() => {
+      const mine = isFullscreenElement(panelRef.current);
+      fullscreenMineRef.current = mine || isFullscreenElement(stageRef.current);
+      setPanelFullscreen(mine);
+    });
+  }, []);
+
+  // Leaving the call must never leave the browser stuck in a fullscreen panel
+  // that no longer has anything to show.
+  useEffect(() => () => {
+    if (fullscreenMineRef.current) void exitFullscreen();
+  }, []);
+
+  /** Fullscreen the whole call panel — tiles, screen share and controls. */
+  async function togglePanelFullscreen() {
+    const el = panelRef.current;
+    if (!el) return;
+    if (isFullscreenElement(el)) { await exitFullscreen(); return; }
+    if (!(await enterFullscreen(el))) toast.error("Fullscreen was blocked by the browser.");
+  }
+
+  /** Fullscreen only the shared screen (it letterboxes, so nothing is cut off). */
+  async function toggleScreenFullscreen() {
     const el = stageRef.current;
     if (!el) return;
-    if (document.fullscreenElement) { void document.exitFullscreen?.().catch(() => {}); return; }
-    void el.requestFullscreen?.().catch(() => {});
+    if (isFullscreenElement(el)) { await exitFullscreen(); return; }
+    if (!(await enterFullscreen(el))) toast.error("Fullscreen was blocked by the browser.");
   }
 
   const statusLabel = connection === "connected" ? "Voice Connected" : connection === "connecting" ? "Connecting…" : "Connection Lost";
@@ -748,7 +781,7 @@ export default function VoicePanel({
         </div>
       ) : (
         <div className="fc-call-overlay" role="dialog" aria-label={`${channelName} voice`}>
-          <div className="vp-panel">
+          <div className="vp-panel" ref={panelRef}>
             <header className="vp-head">
               <div>
                 <p className="vp-title">{channelName}</p>
@@ -770,6 +803,15 @@ export default function VoicePanel({
                     <Minimize2 className="mr-1 h-4 w-4" /> Minimize
                   </Button>
                 )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void togglePanelFullscreen()}
+                  title={panelFullscreen ? "Leave fullscreen (Esc)" : "Fullscreen — fills the screen, video stays whole"}
+                >
+                  {panelFullscreen ? <Minimize2 className="mr-1 h-4 w-4" /> : <Maximize2 className="mr-1 h-4 w-4" />}
+                  {panelFullscreen ? "Exit" : "Fullscreen"}
+                </Button>
                 <Button size="sm" variant="destructive" onClick={onLeave}><PhoneOff className="mr-1 h-4 w-4" /> Disconnect</Button>
               </div>
             </header>
@@ -790,7 +832,7 @@ export default function VoicePanel({
                     <button onClick={() => setEnlarged((v) => !v)} title={enlarged ? "Exit focus" : "Focus shared screen"} aria-label={enlarged ? "Exit focus" : "Focus shared screen"}>
                       {enlarged ? <Minimize2 size={14} /> : <Maximize size={14} />}
                     </button>
-                    <button onClick={toggleFullscreen} title="Fullscreen" aria-label="Fullscreen"><Maximize size={14} /></button>
+                    <button onClick={() => void toggleScreenFullscreen()} title="Fullscreen" aria-label="Fullscreen"><Maximize size={14} /></button>
                   </span>
                 </div>
                 <div className="vp-screen-main">
