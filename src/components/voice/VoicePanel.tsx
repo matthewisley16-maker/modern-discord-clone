@@ -12,9 +12,9 @@ import { Input } from "@/components/ui/input";
 import { PRESENCE_META } from "@/components/dashboard/ui";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "./screenShare";
 import { useDraggableWindow } from "@/hooks/use-draggable";
+import { RTC_CONFIGURATION } from "@/lib/ice";
 import "./screenShare.css";
 
-const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 const SPEAK_THRESHOLD = 0.045; // RMS above this counts as speech
 const SPEAK_HOLD_MS = 350; // keep the ring on briefly after speech stops
 
@@ -149,8 +149,22 @@ export default function VoicePanel({
   const screenStreamRef = useRef<MediaStream | null>(null); // persistent local preview + send source
   const screenSendersRef = useRef<Map<string, ScreenSenders>>(new Map());
   const sharingRef = useRef(false);
-  // Which peers we initiated the offer for (only they auto-negotiate).
-  const initiatorsRef = useRef<Set<string>>(new Set());
+  /**
+   * Perfect-negotiation state, per peer.
+   *
+   * BOTH sides negotiate here — turning a camera on, sharing a screen or
+   * recovering from an ICE failure all add or replace media after the first
+   * exchange, so whichever side changes something sends the offer and the other
+   * answers. When both offer at the same instant this state resolves the
+   * collision: the polite side yields, the impolite side keeps its offer.
+   */
+  const negotiationRef = useRef<Map<string, {
+    makingOffer: boolean;
+    ignoreOffer: boolean;
+    remoteDescSet: boolean;
+    pending: RTCIceCandidateInit[];
+    restarts: number;
+  }>>(new Map());
   // Every screen stream id a peer has ever announced (a peer's screen stream
   // stays the same object across start/stop, so tracks stay classified even
   // while sharing is paused).
@@ -252,7 +266,7 @@ export default function VoicePanel({
       screenStreamRef.current?.getTracks().forEach((t) => { try { t.stop(); } catch { /* noop */ } });
       screenStreamRef.current = null;
       screenSendersRef.current.clear();
-      initiatorsRef.current.clear();
+      negotiationRef.current.clear();
       mainStreams.current.clear();
       remoteScreenStreams.current.clear();
       remoteScreenIds.current.clear();
@@ -276,21 +290,10 @@ export default function VoicePanel({
     if (!pc || !ss || !sharingRef.current) return;
     let holders = screenSendersRef.current.get(remoteId);
     if (!holders) { holders = {}; screenSendersRef.current.set(remoteId, holders); }
-    const firstTime = !holders.video && !holders.audio;
+    // Adding (or replacing) the screen transceivers changes the session, so the
+    // browser fires `onnegotiationneeded` for THIS peer and the offer goes out
+    // with the new m-lines — on either side, since every peer negotiates.
     await applyScreenToPeer(pc, holders, ss, ss.getVideoTracks()[0] ?? null, ss.getAudioTracks()[0] ?? null);
-    // Adding the screen transceiver needs a renegotiation. The offer-initiating
-    // peer gets it automatically from `onnegotiationneeded`; the other peer must
-    // send the offer explicitly (same pattern the camera toggle already uses) so
-    // the remote actually receives the new track.
-    if (firstTime && !initiatorsRef.current.has(remoteId)) {
-      try {
-        const offer = await pc.createOffer();
-        if (pc.signalingState === "stable") {
-          await pc.setLocalDescription(offer);
-          await sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "offer", payload: JSON.stringify(pc.localDescription) });
-        }
-      } catch { /* retried on the next negotiationneeded */ }
-    }
     notifyScreen(remoteId, true);
   }
 
@@ -338,12 +341,39 @@ export default function VoicePanel({
     if (vel) { vel.srcObject = stream; void vel.play().catch(() => {}); }
   }
 
-  function createPeer(remoteId: string, initiator: boolean) {
+  /** The negotiation bookkeeping for one peer (created on demand). */
+  function negotiationFor(remoteId: string) {
+    let state = negotiationRef.current.get(remoteId);
+    if (!state) {
+      state = { makingOffer: false, ignoreOffer: false, remoteDescSet: false, pending: [], restarts: 0 };
+      negotiationRef.current.set(remoteId, state);
+    }
+    return state;
+  }
+
+  /**
+   * One peer connection per participant, with PERFECT NEGOTIATION on both sides.
+   *
+   * Previously only the participant with the lower user id ever offered, so if
+   * that side had no microphone (nothing to negotiate) — or if their one offer
+   * was missed — the two halves never negotiated at all and the call sat on
+   * "Connecting…" with no audio. Every peer now negotiates, and media that
+   * cannot be sent (no microphone) is still requested as receive-only.
+   */
+  function createPeer(remoteId: string) {
     const existing = peers.current.get(remoteId);
     if (existing) return existing;
-    const pc = new RTCPeerConnection(ICE);
+    const pc = new RTCPeerConnection(RTC_CONFIGURATION);
     peers.current.set(remoteId, pc);
-    localStream.current?.getTracks().forEach((t) => pc.addTrack(t, localStream.current!));
+    const state = negotiationFor(remoteId);
+
+    const local = localStream.current;
+    local?.getTracks().forEach((t) => pc.addTrack(t, local));
+    // No microphone on this device? Without a transceiver there is nothing to
+    // negotiate, so the other side is never asked to send and nobody is heard.
+    if (!local?.getAudioTracks().length) {
+      try { pc.addTransceiver("audio", { direction: "recvonly" }); } catch { /* older browsers */ }
+    }
 
     const remote = new MediaStream();
     mainStreams.current.set(remoteId, remote);
@@ -354,32 +384,41 @@ export default function VoicePanel({
     pc.onicecandidate = (e) => {
       if (e.candidate) sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "candidate", payload: JSON.stringify(e.candidate) }).catch(() => {});
     };
+    pc.onnegotiationneeded = async () => {
+      if (pc.signalingState === "closed") return;
+      try {
+        state.makingOffer = true;
+        const offer = await pc.createOffer();
+        if (pc.signalingState !== "stable") return;
+        await pc.setLocalDescription(offer);
+        await sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "offer", payload: JSON.stringify(pc.localDescription) });
+      } catch {
+        // Another negotiation is already in flight; the browser re-fires this
+        // when it settles, so nothing is lost.
+      } finally {
+        state.makingOffer = false;
+      }
+    };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "connected") {
+        state.restarts = 0;
         attachRemote(remoteId, remote);
         setConnection("connected");
       } else if (pc.connectionState === "failed") {
         // Only a REAL failure triggers recovery. `disconnected` is routinely
         // transient during ICE, and acting on it (recreating the peer) is what
         // made the video repeatedly flash video → black → video.
-        setConnection("lost");
-        try { pc.restartIce?.(); } catch { /* older browsers */ }
+        if (state.restarts < 3) {
+          state.restarts += 1;
+          try { pc.restartIce?.(); } catch { /* older browsers */ }
+        } else {
+          setConnection("lost");
+        }
       }
       // `disconnected` is deliberately ignored — a healthy connection recovers.
     };
-    if (initiator) {
-      pc.onnegotiationneeded = async () => {
-        if (pc.signalingState !== "stable") return;
-        try {
-          const offer = await pc.createOffer();
-          if (pc.signalingState !== "stable") return;
-          await pc.setLocalDescription(offer);
-          await sendSignal({ channelId, toUserId: remoteId as Id<"users">, kind: "offer", payload: JSON.stringify(pc.localDescription) });
-        } catch { /* retried on the next negotiationneeded */ }
-      };
-    }
-    if (initiator) initiatorsRef.current.add(remoteId);
-    // If we are already sharing, the new peer must receive the screen too.
+    // If we are already sharing, the new peer must receive the screen too (which
+    // renegotiates through `onnegotiationneeded` above).
     if (sharingRef.current) void pushScreenToPeer(remoteId);
     return pc;
   }
@@ -388,7 +427,7 @@ export default function VoicePanel({
     if (!details || !mediaReady) return;
     for (const p of participants) {
       if (p.userId === myUserId) continue;
-      if (!peers.current.has(p.userId)) createPeer(p.userId, myUserId < p.userId);
+      if (!peers.current.has(p.userId)) createPeer(p.userId);
     }
     // Drop peer connections for people who left (no ghost streams/tiles).
     const present = new Set(participants.map((p) => p.userId as string));
@@ -403,7 +442,7 @@ export default function VoicePanel({
         remoteScreenIds.current.delete(id);
         remoteScreenActive.current.delete(id);
         screenSendersRef.current.delete(id);
-        initiatorsRef.current.delete(id);
+        negotiationRef.current.delete(id);
         setRemoteStreams((prev) => { if (!prev[id]) return prev; const next = { ...prev }; delete next[id]; return next; });
         setRemoteScreens((prev) => { if (!prev[id]) return prev; const next = { ...prev }; delete next[id]; return next; });
       }
@@ -420,17 +459,48 @@ export default function VoicePanel({
     (async () => {
       for (const s of signals) {
         try {
-          const pc = createPeer(s.fromUserId, myUserId < s.fromUserId);
+          const pc = createPeer(s.fromUserId);
+          const state = negotiationFor(s.fromUserId);
+          // The lower user id is the impolite side: on a collision it keeps its
+          // own offer and the polite side rolls back and answers. Deterministic
+          // and identical on both ends.
+          const polite = myUserId > s.fromUserId;
           const data = JSON.parse(s.payload);
           if (s.kind === "offer") {
+            // Perfect negotiation: on a collision the impolite side keeps its own
+            // offer (and drops this one), the polite side rolls back and answers.
+            const collision = state.makingOffer || pc.signalingState !== "stable";
+            state.ignoreOffer = !polite && collision;
+            if (state.ignoreOffer) { await clearSignal({ signalId: s._id }); continue; }
+            // The polite side yields: roll its own offer back first, so the
+            // remote offer applies cleanly (older browsers need this explicit).
+            if (polite && pc.signalingState === "have-local-offer") {
+              try { await pc.setLocalDescription({ type: "rollback" }); } catch { /* implicit rollback below */ }
+            }
             await pc.setRemoteDescription(new RTCSessionDescription(data));
+            state.remoteDescSet = true;
+            for (const c of state.pending.splice(0)) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* stale candidate */ }
+            }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             await sendSignal({ channelId, toUserId: s.fromUserId as Id<"users">, kind: "answer", payload: JSON.stringify(pc.localDescription) });
           } else if (s.kind === "answer") {
-            if (pc.signalingState !== "stable") await pc.setRemoteDescription(new RTCSessionDescription(data));
+            if (pc.signalingState === "have-local-offer") {
+              await pc.setRemoteDescription(new RTCSessionDescription(data));
+              state.remoteDescSet = true;
+              for (const c of state.pending.splice(0)) {
+                try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* stale candidate */ }
+              }
+            }
           } else if (s.kind === "candidate") {
-            await pc.addIceCandidate(new RTCIceCandidate(data));
+            // Candidates that arrive before the description are buffered instead
+            // of thrown away — discarding them is what left a call half-formed.
+            if (state.remoteDescSet) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(data)); } catch { /* stale candidate */ }
+            } else {
+              state.pending.push(data);
+            }
           } else if (s.kind === "screen") {
             const meta = data as { on?: boolean; streamId?: string };
             if (meta.streamId) {

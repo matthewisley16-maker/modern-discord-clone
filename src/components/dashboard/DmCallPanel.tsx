@@ -11,9 +11,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { PRESENCE_META } from "./ui";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "@/components/voice/screenShare";
+import { RELAY_CONFIGURED, RTC_CONFIGURATION, connectionFailureMessage } from "@/lib/ice";
 import "@/components/voice/screenShare.css";
 
-const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
 /** Dev-only diagnostics for the DM video path; never runs in production. */
 const VIDEO_DEBUG = (() => {
@@ -286,6 +286,29 @@ export default function DmCallPanel({
     return () => clearInterval(t);
   }, [connection]);
 
+  // ---- Connection watchdog -------------------------------------------------
+  // A call can stall in ICE when the two networks have no reachable path (hard
+  // NATs) — that used to be an endless "Connecting…". Retry ICE a couple of
+  // times, then say what actually happened instead of pretending to connect.
+  useEffect(() => {
+    if (connection !== "connecting") return;
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      const pc = pcRef.current;
+      if (!pc || disposedRef.current) return;
+      const elapsed = Date.now() - started;
+      if (elapsed > 8_000 && restartCount.current < 2) {
+        restartCount.current += 1;
+        try { pc.restartIce?.(); } catch { /* older browsers */ }
+      }
+      if (elapsed > 25_000) {
+        setConnection("lost");
+        toast.error(connectionFailureMessage(RELAY_CONFIGURED));
+      }
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [connection]);
+
   // ---- Watchdog: keep re-checking for a late remote camera ----
   // Bounded and self-cancelling: it stops the moment a live remote frame shows,
   // so it cannot mask a genuine "camera off" state or run for the whole call.
@@ -403,18 +426,21 @@ export default function DmCallPanel({
       }
       if (disposedRef.current) { stream?.getTracks().forEach((t) => t.stop()); return; }
       if (!stream) {
-        setConnection("lost");
+        // No microphone AND no camera. The call is still built: without a peer
+        // connection neither side could ever negotiate, so one unavailable
+        // device used to leave BOTH people silent on "Connecting…". We now build
+        // a receive-only connection, so the other person is still heard.
         setCameraError(permissionDenied ? "Microphone permission was denied." : "Could not access your microphone or camera.");
-        toast.error(permissionDenied ? "Microphone permission was denied — allow access to talk." : "Could not access your device.");
-        return;
+        toast.error(permissionDenied ? "Microphone permission was denied — you can still hear the call." : "Could not access your device — you can still hear the call.");
+      } else {
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+        const hasVideo = stream.getVideoTracks().length > 0;
+        setCameraOn(hasVideo);
+        if (wantVideo && !hasVideo) setCameraError("Camera unavailable — you can retry from the camera button.");
       }
-      localStreamRef.current = stream;
-      setLocalStream(stream);
-      const hasVideo = stream.getVideoTracks().length > 0;
-      setCameraOn(hasVideo);
-      if (wantVideo && !hasVideo) setCameraError("Camera unavailable — you can retry from the camera button.");
 
-      const pc = new RTCPeerConnection(ICE);
+      const pc = new RTCPeerConnection(RTC_CONFIGURATION);
       pcRef.current = pc;
 
       // Registered exactly once per connection.
@@ -469,9 +495,20 @@ export default function DmCallPanel({
 
       // Adding the tracks triggers onnegotiationneeded → exactly one offer. The
       // camera sender is captured so screen share can never get hold of it.
-      for (const t of stream.getTracks()) {
-        const sender = pc.addTrack(t, stream);
+      for (const t of stream?.getTracks() ?? []) {
+        const sender = pc.addTrack(t, stream!);
         if (t.kind === "video") cameraSenderRef.current = sender;
+      }
+      // Audio and video must always be NEGOTIATED, even the parts we cannot send
+      // (no microphone, no camera, or a voice call that has not turned video on
+      // yet): a receive-only section is what asks the other side to send. Without
+      // it, `onnegotiationneeded` never fires for a media-less peer and the call
+      // deadlocks on "Connecting…".
+      if (!(stream?.getAudioTracks().length)) {
+        try { pc.addTransceiver("audio", { direction: "recvonly" }); } catch { /* older browsers */ }
+      }
+      if (wantVideo && !(stream?.getVideoTracks().length)) {
+        try { pc.addTransceiver("video", { direction: "recvonly" }); } catch { /* older browsers */ }
       }
       // If sharing was somehow started before the connection existed, send it.
       if (sharingRef.current && screenStreamRef.current) {
@@ -531,6 +568,11 @@ export default function DmCallPanel({
             const offerCollision = makingOfferRef.current || pc.signalingState !== "stable";
             ignoreOfferRef.current = !politeRef.current && offerCollision;
             if (ignoreOfferRef.current) { await clearSignal({ signalId: s._id }); continue; }
+            // The polite side yields: roll its own offer back first, so the
+            // remote offer applies cleanly (older browsers need this explicit).
+            if (politeRef.current && pc.signalingState === "have-local-offer") {
+              try { await pc.setLocalDescription({ type: "rollback" }); } catch { /* implicit rollback below */ }
+            }
             await pc.setRemoteDescription(new RTCSessionDescription(data));
             remoteDescSet.current = true;
             for (const c of pendingCandidates.current.splice(0)) {

@@ -91,6 +91,41 @@ export function pendingSiteFactors(flags: SiteLockFlags, verified: { pin?: boole
  * The reason a PIN is not usable, or `null` when it is. Returned as a message so
  * the UI and the server refuse with identical wording.
  */
+/**
+ * One stored proof that a site-lock credential was entered for ONE auth
+ * session.
+ *
+ * Verification is per SESSION on purpose: every signed-in device keeps its own
+ * row, so unlocking on a new phone never re-locks the laptop that was already
+ * open — and signing out, expiring or revoking a session takes its row with it.
+ */
+export type SiteLockGrant = { sessionId: string; factor: SiteLockFactor };
+
+/**
+ * Does this session already hold a proof for `factor`? Grants never leak across
+ * sessions, and a session-less caller (or an empty list) is never verified.
+ */
+export function grantCoversSession(
+  grants: readonly SiteLockGrant[],
+  sessionId: string | null | undefined,
+  factor: SiteLockFactor,
+): boolean {
+  if (!sessionId) return false;
+  return grants.some((grant) => grant.sessionId === sessionId && grant.factor === factor);
+}
+
+/**
+ * The grants that belong to sessions which no longer exist (signed out, revoked
+ * or expired), so they can be dropped instead of piling up forever.
+ */
+export function staleSiteLockGrants<T extends SiteLockGrant>(
+  grants: readonly T[],
+  liveSessionIds: readonly string[],
+): T[] {
+  const live = new Set(liveSessionIds);
+  return grants.filter((grant) => !live.has(grant.sessionId));
+}
+
 export function sitePinProblem(pin: unknown): string | null {
   if (typeof pin !== "string" || pin.length === 0) return "Enter your PIN.";
   if (!/^\d+$/.test(pin)) return "A PIN can only contain digits 0–9.";

@@ -946,7 +946,13 @@ export const pollSignals = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const rows = await ctx.db.query("voiceSignals").withIndex("by_to", (q) => q.eq("toUserId", userId)).collect();
-    return rows.filter((r) => r.channelId === channelId).slice(0, 40).map((r) => ({ _id: r._id, fromUserId: r.fromUserId, kind: r.kind, payload: r.payload }));
+    // Oldest first, so an offer is always applied before the candidates that
+    // belong to it — out-of-order application is what stalls a negotiation.
+    return rows
+      .filter((r) => r.channelId === channelId)
+      .sort((a, b) => a._creationTime - b._creationTime)
+      .slice(0, 40)
+      .map((r) => ({ _id: r._id, fromUserId: r.fromUserId, kind: r.kind, payload: r.payload }));
   },
 });
 

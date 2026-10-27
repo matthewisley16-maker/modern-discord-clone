@@ -401,8 +401,13 @@ const schema = defineSchema(
       /**
        * Per-SESSION verification, not a timed grant: the auth session that proved
        * a credential stays verified for the whole session, so browsing around
-       * never re-asks — while signing out, expiring the session or opening
-       * another device locks the site again immediately.
+       * never re-asks — while signing out or expiring that session locks the site
+       * again immediately.
+       *
+       * Superseded by `siteLockGrants` (one row per session): these two fields can
+       * only ever name ONE session, so writing a second device's id here used to
+       * lock an already-unlocked first device. They are still read as a fallback
+       * for a session that was verified before that table existed.
        */
       verifiedPinSessionId: v.optional(v.string()),
       verifiedPasswordSessionId: v.optional(v.string()),
@@ -416,6 +421,25 @@ const schema = defineSchema(
       recoveryAttempts: v.optional(v.number()),
       updatedAt: v.number(),
     }).index("by_user", ["userId"]),
+
+    /**
+     * One row per (auth session, factor) proving that an optional site lock's
+     * credential was entered on THAT session.
+     *
+     * This is what makes the site lock per DEVICE instead of per account: every
+     * device holds its own rows, so unlocking on a second device cannot re-lock
+     * the first one, and "Lock now" on one device only clears that device's own
+     * rows. Rows are pruned once their auth session is gone or expired.
+     */
+    siteLockGrants: defineTable({
+      userId: v.id("users"),
+      /** The auth session this proof belongs to (a string, like the legacy field). */
+      sessionId: v.string(),
+      factor: v.union(v.literal("pin"), v.literal("password")),
+      verifiedAt: v.number(),
+    })
+      .index("by_user", ["userId"])
+      .index("by_user_session", ["userId", "sessionId", "factor"]),
 
     /**
      * Short-lived unlock grants. `conversationId` is absent for a grant that

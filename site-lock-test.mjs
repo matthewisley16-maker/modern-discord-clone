@@ -24,8 +24,10 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "./src/convex/_generated/api.js";
 import {
   generateRecoveryCode,
+  grantCoversSession,
   maskRecoveryEmail,
   pendingSiteFactors,
+  staleSiteLockGrants,
   readableSiteLockError,
   requiredSiteFactors,
   sanitizeRecoveryCodeInput,
@@ -184,6 +186,33 @@ is("an unknown failure falls back", readableSiteLockError(undefined, "Try again.
 check("only one short line is ever shown", readableSiteLockError({ data: "Line one\nLine two" }, "x") === "Line one");
 
 // ---------------------------------------------------------------------------
+// 1g. Verification is per DEVICE, so a second device can never re-lock this one
+// ---------------------------------------------------------------------------
+is("a session with no grant is not verified", grantCoversSession([], "s1", "pin"), false);
+is("a session-less caller is never verified", grantCoversSession([{ sessionId: "s1", factor: "pin" }], null, "pin"), false);
+is("a session's own grant verifies it", grantCoversSession([{ sessionId: "s1", factor: "pin" }], "s1", "pin"), true);
+is("another device's grant does NOT verify this session", grantCoversSession([{ sessionId: "s2", factor: "pin" }], "s1", "pin"), false);
+is("a PIN grant never satisfies the password lock", grantCoversSession([{ sessionId: "s1", factor: "pin" }], "s1", "password"), false);
+is("several devices can each hold their own grant", grantCoversSession([
+  { sessionId: "laptop", factor: "pin" },
+  { sessionId: "phone", factor: "pin" },
+], "phone", "pin"), true);
+is("both factors can be held by one device", grantCoversSession([
+  { sessionId: "laptop", factor: "pin" },
+  { sessionId: "laptop", factor: "password" },
+], "laptop", "password"), true);
+{
+  const grants = [
+    { _id: "g1", sessionId: "laptop", factor: "pin" },
+    { _id: "g2", sessionId: "phone", factor: "pin" },
+    { _id: "g3", sessionId: "tablet", factor: "password" },
+  ];
+  check("grants for live sessions are kept", staleSiteLockGrants(grants, ["laptop", "phone", "tablet"]).length === 0, "a live grant was treated as stale");
+  check("grants of expired/revoked sessions are dropped", staleSiteLockGrants(grants, ["laptop"]).map((g) => g._id).join(",") === "g2,g3", "a dead session's grant would linger forever");
+  check("with no live sessions everything is stale", staleSiteLockGrants(grants, []).length === 3);
+}
+
+// ---------------------------------------------------------------------------
 // 2a. Server: hashed storage, server-side verification, no plain-text anywhere
 // ---------------------------------------------------------------------------
 const server = read("src", "convex", "siteLock.ts");
@@ -205,6 +234,17 @@ check("nothing logs a credential", !/console\.(log|debug|info|warn|error)/.test(
   check("the schema stores only hashes for the extra password", siteLocks.includes("passwordHash") && !/\bpassword:\s*v\./.test(siteLocks), "the schema has a plain-text password column");
   check("the row is indexed by user", siteLocks.includes('.index("by_user", ["userId"])'), "the lock row has no user index");
   check("verification is stored per auth session", siteLocks.includes("verifiedPinSessionId") && siteLocks.includes("verifiedPasswordSessionId"), "verification is not session-scoped");
+  check(
+    "every device keeps its OWN grant row (unlocking one never locks another)",
+    schema.includes("siteLockGrants: defineTable({") && siteLocks.includes("verifiedPinSessionId"),
+    "verification is still a single account-wide value",
+  );
+  {
+    const grantsTable = handlerOf(schema, "siteLockGrants: defineTable({");
+    check("a grant names the session it belongs to", grantsTable.includes("sessionId: v.string()"), "a grant is not session-scoped");
+    check("a grant names the factor it proves", grantsTable.includes('factor: v.union(v.literal("pin"), v.literal("password"))'), "a grant is not factor-scoped");
+    check("grants are looked up per user + session + factor", grantsTable.includes('.index("by_user_session", ["userId", "sessionId", "factor"])'), "the per-session lookup is not indexed");
+  }
   check("failure tracking is stored", siteLocks.includes("failedAttempts") && siteLocks.includes("lockedUntil"), "there is no failure/lockout state");
 }
 
@@ -252,7 +292,20 @@ check("recovery emails are rate limited", server.includes('scope: "recovery", li
 check("guessing escalates through the shared ladder", server.includes("const delayMs = siteLockoutFor(failed);") && server.includes("siteLockoutSeconds(rec.lockedUntil, Date.now())"), "guessing is not slowed down");
 check("a correct entry resets the failure streak", /if \(success\) \{[\s\S]*failedAttempts: 0/.test(server), "the streak is never reset");
 check("a stale streak decays", server.includes("SITE_LOCKOUT_DECAY_MS"), "old failures never decay");
-check("verification success is recorded for THIS session only", /markVerified = internalMutation\(\{[\s\S]*verifiedPinSessionId: sessionId/.test(server), "verification is not scoped to the session");
+check("verification success is recorded for THIS session only", /markVerified = internalMutation\(\{[\s\S]*grantFactor\(ctx, userId, key, "pin", now\)/.test(server), "verification is not scoped to the session");
+{
+  const lockNow = handlerOf(server, "export const lockNow = mutation({");
+  const markVerified = handlerOf(server, "export const markVerified = internalMutation({");
+  check("verification reads the session's own grant", server.includes('sessionProved(sessionId, row?.verifiedPinSessionId, grants, "pin")'), "verification is not per session");
+  check("a session-less caller is never verified", /function sessionProved\([\s\S]*if \(sessionId === null\) return false;/.test(server), "a session-less caller could be treated as verified");
+  check("one device's unlock cannot lock another device", lockNow.length > 0 && lockNow.includes("grant.sessionId === key"), "locking now would revoke every device");
+  check("the legacy single-session fields are only cleared for THIS session", lockNow.includes("row.verifiedPinSessionId === key") && lockNow.includes("row.verifiedPasswordSessionId === key"), "a legacy field could still lock another device");
+  check("no account-wide verification reset exists anywhere", !/verifiedPinSessionId: undefined,\s*\n\s*verifiedPasswordSessionId: undefined,\s*\n\s*updatedAt/.test(lockNow), "locking still clears both fields for every session");
+  check("marking verified writes a per-session grant", markVerified.includes("grantFactor(") && markVerified.includes("pruneDeadGrants("), "no grant is recorded, or dead grants are never pruned");
+  check("a new or removed credential revokes every device's proof of it", count(server, "await revokeFactorGrants(ctx, userId,") >= 4, "an old proof could outlive the credential it proved");
+  check("grants of dead sessions are pruned", server.includes("staleSiteLockGrants(grants, live)") && server.includes('withIndex("userId", (q) => q.eq("userId", userId))'), "dead grants would accumulate forever");
+  check("a credential is never granted by a client on its own", server.includes("export const markVerified = internalMutation({") && !server.includes("export const markVerified = mutation({"), "markVerified is publicly callable");
+}
 check("a correct verification clears the failure state", /markVerified = internalMutation\(\{[\s\S]*failedAttempts: 0/.test(server), "the lockout would outlive a correct entry");
 {
   const recover = handlerOf(server, "export const recoverWithCode = action({");

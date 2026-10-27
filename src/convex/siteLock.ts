@@ -10,8 +10,10 @@ import { enforceRateLimit } from "./authHelpers";
 import { sendCodeEmail } from "./mailer";
 import {
   generateRecoveryCode,
+  grantCoversSession,
   maskRecoveryEmail,
   pendingSiteFactors,
+  staleSiteLockGrants,
   SITE_LOCKOUT_DECAY_MS,
   SITE_PASSWORD_MIN_LENGTH,
   SITE_PIN_MAX_DIGITS,
@@ -47,13 +49,19 @@ import {
  *     member's data: every read/write in the app still goes through its own
  *     server-side authorization.
  *
- * Verification is remembered per AUTH SESSION (`verifiedPinSessionId` /
- * `verifiedPasswordSessionId`), not with a timer: the credential is asked for
- * once when a session starts, stays satisfied for the whole session (so
- * refreshing, navigating between routes or reconnecting a socket never re-asks),
- * and is required again after signing out, after the session expires, or on any
- * other device — because a new session is a new session id. A page refresh cannot
- * bypass anything either, since the gate's decision comes from this table.
+ * Verification is remembered per AUTH SESSION, not with a timer: the credential
+ * is asked for once when a session starts, stays satisfied for the whole session
+ * (so refreshing, navigating between routes or reconnecting a socket never
+ * re-asks), and is required again after signing out or after that session
+ * expires. A page refresh cannot bypass anything either, since the gate's
+ * decision comes from this table.
+ *
+ * Each session keeps its OWN row in `siteLockGrants`, so devices are completely
+ * independent: signing in — and unlocking — on a second device never re-locks a
+ * device that is already open, and "Lock now" only locks the device it was
+ * pressed on. (The two legacy `verified*SessionId` fields can only ever name one
+ * session, so they are read as a fallback for a session that was verified before
+ * that table existed, and never written again.)
  *
  * Security: credentials are only ever stored as one-way Scrypt hashes with a
  * random per-credential salt, are never returned to a client, never logged and
@@ -94,17 +102,37 @@ type LockRecord = {
   name: string;
 };
 
-/** Is this specific auth session already satisfied for `factor`? */
-function sessionVerified(sessionId: string | null, stored: string | undefined): boolean {
-  if (sessionId === null || stored === undefined) return false;
-  return stored === sessionId;
-}
-
 async function lockRow(ctx: Ctx, userId: Id<"users">): Promise<Doc<"siteLocks"> | null> {
   return await ctx.db
     .query("siteLocks")
     .withIndex("by_user", (q) => q.eq("userId", userId))
     .unique();
+}
+
+/** Every per-session proof this account holds (one or two rows per device). */
+async function grantsOf(ctx: Ctx, userId: Id<"users">) {
+  return await ctx.db
+    .query("siteLockGrants")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+}
+
+/**
+ * Is `factor` already proved for THIS auth session?
+ *
+ * `remembered` is the legacy single-session field: honouring it keeps a session
+ * that was verified before `siteLockGrants` existed from ever being asked again
+ * mid-session, without ever scoping verification to one device again.
+ */
+function sessionProved(
+  sessionId: string | null,
+  remembered: string | undefined,
+  grants: readonly { sessionId: string; factor: SiteLockFactor }[],
+  factor: SiteLockFactor,
+): boolean {
+  if (sessionId === null) return false;
+  if (remembered === sessionId) return true;
+  return grantCoversSession(grants, sessionId, factor);
 }
 
 // ---------------------------------------------------------------------------
@@ -130,10 +158,11 @@ export const lockRecord = internalQuery({
       .withIndex("userIdAndProvider", (q) => q.eq("userId", userId).eq("provider", "password"))
       .unique();
 
+    const grants = await grantsOf(ctx, userId);
     const pinEnabled = Boolean(row?.pinEnabled && row.pinHash);
     const passwordEnabled = Boolean(row?.passwordEnabled && row.passwordHash);
-    const pinVerified = pinEnabled && sessionVerified(sessionId, row?.verifiedPinSessionId);
-    const passwordVerified = passwordEnabled && sessionVerified(sessionId, row?.verifiedPasswordSessionId);
+    const pinVerified = pinEnabled && sessionProved(sessionId, row?.verifiedPinSessionId, grants, "pin");
+    const passwordVerified = passwordEnabled && sessionProved(sessionId, row?.verifiedPasswordSessionId, grants, "password");
 
     return {
       pinEnabled,
@@ -239,9 +268,62 @@ export const registerAttempt = internalMutation({
 });
 
 /**
+ * Remember one factor as proved for ONE auth session. Idempotent: entering the
+ * PIN twice on the same device refreshes its own row instead of adding another.
+ */
+async function grantFactor(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  sessionId: string,
+  factor: SiteLockFactor,
+  now: number,
+) {
+  const existing = await ctx.db
+    .query("siteLockGrants")
+    .withIndex("by_user_session", (q) =>
+      q.eq("userId", userId).eq("sessionId", sessionId).eq("factor", factor),
+    )
+    .unique();
+  if (existing) await ctx.db.patch(existing._id, { verifiedAt: now });
+  else await ctx.db.insert("siteLockGrants", { userId, sessionId, factor, verifiedAt: now });
+}
+
+/**
+ * Forget every proof of ONE factor, for every device.
+ *
+ * Used when a credential is created, replaced or turned off: the old proof no
+ * longer means anything, so no session may keep relying on it. (The session that
+ * just performed the change re-grants itself immediately afterwards through
+ * `markVerified`.)
+ */
+async function revokeFactorGrants(ctx: MutationCtx, userId: Id<"users">, factor: SiteLockFactor) {
+  for (const grant of await grantsOf(ctx, userId)) {
+    if (grant.factor === factor) await ctx.db.delete(grant._id);
+  }
+}
+
+/**
+ * Drop proofs whose auth session is gone or expired: they can never be used
+ * again, so they must not accumulate. Bounded by the account's own devices.
+ */
+async function pruneDeadGrants(ctx: MutationCtx, userId: Id<"users">, now: number) {
+  const grants = await grantsOf(ctx, userId);
+  if (grants.length === 0) return;
+  const sessions = await ctx.db
+    .query("authSessions")
+    .withIndex("userId", (q) => q.eq("userId", userId))
+    .collect();
+  const live = sessions.filter((s) => s.expirationTime > now).map((s) => s._id as string);
+  for (const grant of staleSiteLockGrants(grants, live)) await ctx.db.delete(grant._id);
+}
+
+/**
  * Mark the CURRENT auth session as verified for the given factors. Called only
  * after a credential was checked (or just created by its owner), so it can never
  * be granted by a client on its own.
+ *
+ * Only THIS session is recorded, which is exactly what keeps a second device from
+ * disturbing an already-unlocked one.
  */
 export const markVerified = internalMutation({
   args: { pin: v.boolean(), password: v.boolean() },
@@ -252,13 +334,16 @@ export const markVerified = internalMutation({
     const sessionId = await getAuthSessionId(ctx);
     const now = Date.now();
     await ctx.db.patch(row._id, {
-      ...(pin && sessionId ? { verifiedPinSessionId: sessionId } : {}),
-      ...(password && sessionId ? { verifiedPasswordSessionId: sessionId } : {}),
       failedAttempts: 0,
       lockedUntil: undefined,
       lastFailedAt: undefined,
       updatedAt: now,
     });
+    if (!sessionId) return;
+    const key = sessionId as string;
+    if (pin) await grantFactor(ctx, userId, key, "pin", now);
+    if (password) await grantFactor(ctx, userId, key, "password", now);
+    await pruneDeadGrants(ctx, userId, now);
   },
 });
 
@@ -278,6 +363,8 @@ export const storePin = internalMutation({
     };
     if (row) await ctx.db.patch(row._id, patch);
     else await ctx.db.insert("siteLocks", { userId, passwordEnabled: false, ...patch });
+    // A new PIN invalidates every device's proof of the OLD one.
+    await revokeFactorGrants(ctx, userId, "pin");
     await audit(
       ctx,
       changing ? "site_lock.pin.change" : "site_lock.pin.enable",
@@ -306,6 +393,8 @@ export const clearPin = internalMutation({
         updatedAt: Date.now(),
       });
     }
+    // No PIN means no proof of one is worth keeping, on any device.
+    await revokeFactorGrants(ctx, userId, "pin");
     await audit(
       ctx,
       "site_lock.pin.disable",
@@ -333,6 +422,8 @@ export const storePassword = internalMutation({
     };
     if (row) await ctx.db.patch(row._id, patch);
     else await ctx.db.insert("siteLocks", { userId, pinEnabled: false, ...patch });
+    // A new password invalidates every device's proof of the OLD one.
+    await revokeFactorGrants(ctx, userId, "password");
     await audit(
       ctx,
       changing ? "site_lock.password.change" : "site_lock.password.enable",
@@ -361,6 +452,8 @@ export const clearPassword = internalMutation({
         updatedAt: Date.now(),
       });
     }
+    // The lock is off: its proofs are meaningless now.
+    await revokeFactorGrants(ctx, userId, "password");
     await audit(
       ctx,
       "site_lock.password.disable",
@@ -474,11 +567,12 @@ export const status = query({
       .withIndex("userIdAndProvider", (q) => q.eq("userId", userId).eq("provider", "password"))
       .unique();
 
+    const grants = await grantsOf(ctx, userId);
     const pinEnabled = Boolean(row?.pinEnabled && row.pinHash);
     const passwordEnabled = Boolean(row?.passwordEnabled && row.passwordHash);
     const enabled = siteLockEnabled({ pinEnabled, passwordEnabled });
-    const pinVerified = pinEnabled && sessionVerified(sessionId, row?.verifiedPinSessionId);
-    const passwordVerified = passwordEnabled && sessionVerified(sessionId, row?.verifiedPasswordSessionId);
+    const pinVerified = pinEnabled && sessionProved(sessionId, row?.verifiedPinSessionId, grants, "pin");
+    const passwordVerified = passwordEnabled && sessionProved(sessionId, row?.verifiedPasswordSessionId, grants, "password");
     const pending = pendingSiteFactors({ pinEnabled, passwordEnabled }, { pin: pinVerified, password: passwordVerified });
 
     return {
@@ -865,20 +959,32 @@ export const recoverWithCode = action({
 });
 
 /**
- * Lock Freecord again right now: revoke this session's verification so the gate
+ * Lock Freecord again right now: revoke THIS device's verification so the gate
  * asks for the enabled credentials on the next render. Safe direction, so no
  * credential is required — unlike turning a lock off, which always needs one.
+ *
+ * Only the caller's own session is revoked: locking your laptop must never lock
+ * the phone you are also signed in on. The legacy single-session fields are
+ * cleared only when they describe THIS session, for the same reason.
  */
 export const lockNow = mutation({
   args: {},
   handler: async (ctx) => {
     const userId = await currentUserId(ctx);
+    const sessionId = await getAuthSessionId(ctx);
+    const key = sessionId ? (sessionId as string) : null;
+    const now = Date.now();
+    if (key) {
+      for (const grant of await grantsOf(ctx, userId)) {
+        if (grant.sessionId === key) await ctx.db.delete(grant._id);
+      }
+    }
     const row = await lockRow(ctx, userId);
     if (row) {
       await ctx.db.patch(row._id, {
-        verifiedPinSessionId: undefined,
-        verifiedPasswordSessionId: undefined,
-        updatedAt: Date.now(),
+        ...(key && row.verifiedPinSessionId === key ? { verifiedPinSessionId: undefined } : {}),
+        ...(key && row.verifiedPasswordSessionId === key ? { verifiedPasswordSessionId: undefined } : {}),
+        updatedAt: now,
       });
     }
     return { locked: true };
