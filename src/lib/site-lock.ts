@@ -35,17 +35,23 @@
  * — symbols, spaces, upper case, unicode — is explicitly ALLOWED and stored
  * exactly as typed; nothing here strips or normalises a password.
  *
- * AUTO-LOCK
- * ---------
- * A verified session is not left open forever: the member chooses how long a
- * device may sit UNUSED before Freecord asks for the enabled credentials again
- * (Settings → Account → Login & Security). The window is stored on their own lock
- * row, applied to that device's own proofs, and a device that is being used keeps
- * pushing its deadline forward — so it is an INACTIVITY timer, not a hard session
- * limit. `SITE_AUTO_LOCK_NEVER` is a real choice and keeps the original behaviour
- * (satisfied until sign-out). The rules below are shared by the server, which
- * refuses a proof whose window has closed, and by the screen that decides when to
- * lock again, so both agree to the millisecond.
+ * AUTO-LOCK — WHEN THE LOCK ASKS AGAIN
+ * ------------------------------------
+ * The member chooses, in Settings → Account → Login & Security:
+ *
+ *   - **Every page load** (the default) — the proof belongs to one page load, so
+ *     refreshing the whole page, closing and reopening Freecord, opening a new
+ *     tab or signing in asks again. This is what a PIN in front of an app
+ *     normally means, so it is what an account with no saved preference gets.
+ *   - **After N idle minutes** — no re-asking while the device is being used;
+ *     asked again once it has sat unused that long.
+ *   - **Never until sign-out** — the original behaviour, kept as a choice.
+ *
+ * The preference lives on the member's own lock row and is applied to their own
+ * proofs by the server, which refuses a proof that does not qualify — for "every
+ * page load" that means a proof that was claimed by a DIFFERENT page load, for a
+ * timer it means one whose deadline passed. Nothing is stored in the browser, and
+ * the rules below are shared by the server and the gate so both agree exactly.
  */
 
 /** Shortest accepted PIN (one digit is allowed — it is the member's choice). */
@@ -76,27 +82,58 @@ export const SITE_LOCKOUT_MAX_MS = 15 * 60 * 1000;
 export const SITE_LOCKOUT_DECAY_MS = 60 * 60 * 1000;
 
 /**
- * AUTO-LOCK — how long a device may sit unused before a lock asks again.
+ * AUTO-LOCK — WHEN a device is asked for its credentials again.
  *
- * `SITE_AUTO_LOCK_NEVER` (0) means "stay satisfied until this session ends",
- * which is what the feature did before the delay was configurable, and it stays
- * available so nobody is forced into a shorter window than they want.
+ * One stored number (`autoLockMinutes` on the member's lock row) carries all
+ * three behaviours, and `siteAutoLockMode()` is the ONLY thing that interprets
+ * it, so the server, the screen and the settings picker can never disagree:
+ *
+ *   - `SITE_AUTO_LOCK_EVERY_VISIT` (0) — THE DEFAULT. The proof belongs to one
+ *     page load, so refreshing the whole page, closing and reopening Freecord,
+ *     opening another tab or signing in asks again. Nothing is remembered between
+ *     visits.
+ *   - `1 … SITE_AUTO_LOCK_MAX_MINUTES` — an inactivity window on that device: no
+ *     re-asking while it is being used, asked again after that long with no
+ *     activity.
+ *   - `SITE_AUTO_LOCK_NEVER` (-1) — satisfied until the session ends (sign-out or
+ *     expiry). The least strict choice, kept because it was the original
+ *     behaviour and nobody should be forced into a shorter window than they want.
  */
-export const SITE_AUTO_LOCK_NEVER = 0;
-/** The window a row without a saved preference uses. */
-export const SITE_AUTO_LOCK_DEFAULT_MINUTES = 15;
-/** Shortest configurable window. */
+export const SITE_AUTO_LOCK_EVERY_VISIT = 0;
+export const SITE_AUTO_LOCK_NEVER = -1;
+/** The behaviour a row without a saved preference uses. */
+export const SITE_AUTO_LOCK_DEFAULT_MINUTES = SITE_AUTO_LOCK_EVERY_VISIT;
+/** Shortest configurable inactivity window. */
 export const SITE_AUTO_LOCK_MIN_MINUTES = 1;
-/** Longest configurable window (8 hours). */
+/** Longest configurable inactivity window (8 hours). */
 export const SITE_AUTO_LOCK_MAX_MINUTES = 8 * 60;
-/** The choices Settings offers, in order. 0 = never (until sign-out). */
-export const SITE_AUTO_LOCK_CHOICES: readonly number[] = [1, 5, 15, 30, 60, 240, SITE_AUTO_LOCK_NEVER];
+/** The choices Settings offers, first (the default) one first. */
+export const SITE_AUTO_LOCK_CHOICES: readonly number[] = [
+  SITE_AUTO_LOCK_EVERY_VISIT,
+  1,
+  5,
+  15,
+  30,
+  60,
+  240,
+  SITE_AUTO_LOCK_NEVER,
+];
+
+/** The three behaviours above, as a union. */
+export type SiteAutoLockMode = "visit" | "idle" | "never";
 /**
  * The shortest gap between two writes of the SAME proof. Activity arrives in
  * bursts (every keystroke is an event), and the deadline only needs to move once
  * per window — this keeps `refreshAutoLock` from writing on every mouse move.
  */
 export const SITE_AUTO_LOCK_TOUCH_MS = 5_000;
+/**
+ * How long a proof row is kept at most. An "every page load" proof never expires
+ * by time (its page load simply ends), so the rows are dropped once they are a day
+ * old on the next verification — no page load needs to stay unlocked longer than
+ * that, and a tap on a forgotten tab must not accumulate rows forever.
+ */
+export const SITE_AUTO_LOCK_STALE_PROOF_MS = 24 * 60 * 60 * 1000;
 
 /** The two independent locks, as a union used across the API and the UI. */
 export type SiteLockFactor = "pin" | "password";
@@ -162,41 +199,57 @@ export function staleSiteLockGrants<T extends SiteLockGrant>(
 }
 
 /**
- * A saved window, normalised: a missing or unusable value becomes the default, 0
- * and anything below stay "never", and everything else is rounded and clamped
- * into the allowed range. Used when READING a row, so old or hand-edited data can
- * never produce a window the rest of the feature cannot reason about.
+ * A saved preference, normalised: a missing or unusable value becomes the
+ * default, the two special values stay themselves, and everything else is
+ * rounded and clamped into the allowed range. Used when READING a row, so old or
+ * hand-edited data can never produce a value the rest of the feature cannot
+ * reason about.
  */
 export function siteAutoLockMinutes(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return SITE_AUTO_LOCK_DEFAULT_MINUTES;
   if (value <= SITE_AUTO_LOCK_NEVER) return SITE_AUTO_LOCK_NEVER;
-  return Math.min(Math.max(Math.round(value), SITE_AUTO_LOCK_MIN_MINUTES), SITE_AUTO_LOCK_MAX_MINUTES);
+  if (value < 0) return SITE_AUTO_LOCK_DEFAULT_MINUTES;
+  const rounded = Math.round(value);
+  if (rounded === SITE_AUTO_LOCK_EVERY_VISIT) return SITE_AUTO_LOCK_EVERY_VISIT;
+  return Math.min(Math.max(rounded, SITE_AUTO_LOCK_MIN_MINUTES), SITE_AUTO_LOCK_MAX_MINUTES);
 }
 
-/** Is a real countdown configured (rather than "never until sign-out")? */
+/** Which of the three behaviours a stored value means — the only interpreter. */
+export function siteAutoLockMode(value: unknown): SiteAutoLockMode {
+  const minutes = siteAutoLockMinutes(value);
+  if (minutes === SITE_AUTO_LOCK_NEVER) return "never";
+  return minutes === SITE_AUTO_LOCK_EVERY_VISIT ? "visit" : "idle";
+}
+
+/** Does the site ever ask again on its own (anything except "never")? */
 export function siteAutoLockEnabled(value: unknown): boolean {
-  return siteAutoLockMinutes(value) !== SITE_AUTO_LOCK_NEVER;
+  return siteAutoLockMode(value) !== "never";
 }
 
 /**
- * The reason a submitted window is not usable, or `null` when it is. Returned as
- * a message so the settings screen and the server refuse with identical wording.
+ * The reason a submitted preference is not usable, or `null` when it is. Returned
+ * as a message so the settings screen and the server refuse with identical
+ * wording.
  */
 export function siteAutoLockProblem(minutes: unknown): string | null {
   if (typeof minutes !== "number" || !Number.isFinite(minutes)) {
-    return "Choose how long Freecord stays unlocked.";
+    return "Choose when Freecord locks again.";
   }
-  if (minutes === SITE_AUTO_LOCK_NEVER) return null;
+  if (minutes === SITE_AUTO_LOCK_EVERY_VISIT || minutes === SITE_AUTO_LOCK_NEVER) return null;
   if (minutes < SITE_AUTO_LOCK_MIN_MINUTES || minutes > SITE_AUTO_LOCK_MAX_MINUTES) {
-    return `Auto-lock must be between ${SITE_AUTO_LOCK_MIN_MINUTES} minute and ${SITE_AUTO_LOCK_MAX_MINUTES / 60} hours — or Never.`;
+    return `Auto-lock must be every page load, between ${SITE_AUTO_LOCK_MIN_MINUTES} minute and ${SITE_AUTO_LOCK_MAX_MINUTES / 60} hours, or never.`;
   }
   return null;
 }
 
-/** The window in milliseconds, or 0 when there is no countdown at all. */
+/**
+ * The inactivity window in milliseconds, or 0 when there is no countdown (every
+ * page load and never both need none: the proof either does not outlive the page
+ * or does not expire at all).
+ */
 export function siteAutoLockWindowMs(minutes: unknown): number {
   const value = siteAutoLockMinutes(minutes);
-  return value === SITE_AUTO_LOCK_NEVER ? 0 : value * 60_000;
+  return siteAutoLockMode(value) === "idle" ? value * 60_000 : 0;
 }
 
 /**
@@ -235,10 +288,12 @@ export function siteAutoLockReportIntervalMs(minutes: unknown): number {
   return Math.max(SITE_AUTO_LOCK_TOUCH_MS, Math.min(60_000, Math.floor(window / 4)));
 }
 
-/** A window as a short label, for the settings picker and its messages. */
+/** A preference as a short label, for the settings picker and its messages. */
 export function siteAutoLockLabel(minutes: unknown): string {
   const value = siteAutoLockMinutes(minutes);
-  if (value === SITE_AUTO_LOCK_NEVER) return "Never (until you sign out)";
+  const mode = siteAutoLockMode(value);
+  if (mode === "visit") return "Every page load (refresh or reopen)";
+  if (mode === "never") return "Never (until you sign out)";
   if (value === 1) return "1 minute";
   if (value < 60) return `${value} minutes`;
   if (value === 60) return "1 hour";

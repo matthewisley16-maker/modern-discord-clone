@@ -13,6 +13,7 @@ import {
   SITE_PIN_MAX_DIGITS,
 } from "@/lib/site-lock";
 import useSiteAutoLock from "@/hooks/use-site-auto-lock";
+import { PAGE_ID } from "@/lib/page-session";
 import { useAction, useQuery } from "convex/react";
 import { AudioLines, ArrowLeft, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, Unlock } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -31,8 +32,11 @@ import { useState, type ReactNode } from "react";
  *     invite),
  *   - PIN only → the PIN field, password only → the password field, both → both
  *     fields are required in one submit,
- *   - a factor already verified for this session is not asked again, so
- *     refreshing, navigating, or reconnecting a socket never re-prompts.
+ *   - a factor already verified for this session is not asked again until the
+ *     member's auto-lock says so; the DEFAULT is "every page load", so a full
+ *     refresh, closing and reopening Freecord, a new tab or a new sign-in asks
+ *     again, while navigating between views inside the app does not. The proof is
+ *     scoped to this page load (`PAGE_ID`), not kept in browser storage.
  *
  * The decision is read from the server (`api.siteLock.status`) on every render,
  * so it survives a full page reload and cannot be skipped by deep-linking into a
@@ -49,7 +53,9 @@ import { useState, type ReactNode } from "react";
  * or turn that lock off — so a forgotten PIN or password is never a dead end.
  */
 export default function SiteLockGate({ children }: { children: ReactNode }) {
-  const status = useQuery(api.siteLock.status, {});
+  // The page-load id is what makes the default mode ask again after a refresh:
+  // a proof claimed by a previous page load does not count for this one.
+  const status = useQuery(api.siteLock.status, { pageId: PAGE_ID });
   // Locks the site again after the member's chosen window without activity
   // (Settings → Account → Login & Security). Inert while locked or when the
   // window is set to Never.
@@ -141,6 +147,7 @@ function LockScreen({
       await verify({
         ...(needsPin ? { pin } : {}),
         ...(needsPassword ? { password } : {}),
+        pageId: PAGE_ID,
       });
       // The reactive status query flips the gate; nothing to navigate to.
     } catch (err) {
@@ -180,6 +187,7 @@ function LockScreen({
         code,
         target,
         disable: turnOff,
+        pageId: PAGE_ID,
         ...(target === "pin" && !turnOff ? { newPin, confirmPin } : {}),
         ...(target === "password" && !turnOff ? { newPassword, confirmPassword } : {}),
       });

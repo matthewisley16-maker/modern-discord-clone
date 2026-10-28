@@ -451,7 +451,7 @@ account sign-in and behaves **exactly as it did before this feature existed**.
 | Rules (PIN length, password rule, configurations, lockout maths, recovery codes, auto-lock window) | `src/lib/site-lock.ts` (`bun site-lock-test.mjs`) |
 | Backend: status / verify / setPin / setPassword / disablePin / disablePassword / recovery / lockNow / setAutoLock / refreshAutoLock | `src/convex/siteLock.ts` |
 | Storage | `siteLocks` + `siteLockGrants` in `src/convex/schema.ts` (`by_user`, one row per member who opts in; one proof row per device) |
-| Idle auto-lock monitor and the “a call is on screen” flag | `src/hooks/use-site-auto-lock.ts`, `src/lib/call-activity.ts` |
+| Auto-lock monitor, per-page-load marker and the “a call is on screen” flag | `src/hooks/use-site-auto-lock.ts`, `src/lib/page-session.ts`, `src/lib/call-activity.ts` |
 | Settings card | `src/components/dashboard/SiteLockSettings.tsx` (rendered in the Account tab) |
 | Lock screen | `src/components/SiteLockGate.tsx`, applied in `src/main.tsx` (`/`, `/dashboard`, `/admin`) |
 
@@ -496,27 +496,36 @@ turned a lock on, and the settings section never auto-opens a form.
 
 ### Sessions and auto-lock
 
-Verification is remembered **per auth session**, one proof row per device (`siteLockGrants`), never
-with a client flag: a credential is asked for once when a session starts, stays satisfied while that
-device is being used (navigating, refreshing, reconnecting a socket or a Convex websocket never
-re-asks), and is required again after signing out, after the session expires, or on any other device
-— because a new session is a new session id. “Lock Freecord now” in settings revokes the current
-session's verification immediately, which also makes the feature trivial to try out.
+Verification is remembered **per auth session and per page load**, in proof rows
+(`siteLockGrants`), never with a client flag: a credential is asked for once, and then again
+according to the member's auto-lock choice. “Lock Freecord now” in settings revokes the current
+device's verification immediately, which also makes the feature trivial to try out.
 
-**How long it stays open is the member's choice** — Settings → Account → Login & Security →
-**Auto-lock**: 1, 5, 15 (the default), 30 minutes, 1 hour, 4 hours, or **Never (until you sign
-out)**, which keeps exactly the old behaviour. It is an *inactivity* window, not a hard session
-limit:
+**When it asks again is the member's choice** — Settings → Account → Login & Security →
+**Auto-lock**:
 
-- **Server-enforced.** The window lives on the member's own `siteLocks` row and is applied to their
-  proof rows by `freshGrants(...)` in both `status` and `lockRecord`, so a proof whose window has
-  closed is *not a proof* — the gate, the settings screen and the actions all agree, and reloading
-  the page cannot stretch the window the member chose.
-- **Per device, in the member's own hands.** `refreshAutoLock` pushes only the caller's own rows
-  forward, so being active on the laptop never affects the phone, and a device can never extend
-  another device's window (the same rule that stopped one device locking another).
-- **Activity, not just the clock.** Real input (`pointerdown`, `keydown`, `wheel`, `touchstart`,
-  `scroll`, returning to the tab) is reported at most once per
+| Choice | What happens |
+| --- | --- |
+| **Every page load** (default) | The proof belongs to one page load: **refreshing the whole page, closing and reopening Freecord, opening a new tab or signing in asks again**. Moving between views inside the app never re-prompts. |
+| 1 / 5 / 15 / 30 minutes, 1 or 4 hours | An *inactivity* window on that device: no re-asking while it is being used, asked again once it has sat idle that long. |
+| **Never (until you sign out)** | Satisfied until the session ends — the original behaviour, kept as a choice. |
+
+- **Server-enforced, not a client flag.** The choice lives on the member's own `siteLocks` row and
+  is applied to their proof rows by `liveProofs(...)` in both `status` and `lockRecord`: in the
+  default mode a proof must have been claimed by the **same page load**, in timer mode it must be
+  inside its window. A proof that does not qualify is *not a proof* — the gate, the settings screen
+  and the actions all agree, and no client can stretch it.
+- **The page-load id is what makes a refresh re-ask.** `src/lib/page-session.ts` exports `PAGE_ID`, a
+  random module-level value: a full reload (F5, reopening, a new tab) evaluates it again, while
+  routing inside the app does not. It is never written to `localStorage`, `sessionStorage` or a
+  cookie, which is exactly why it cannot survive a refresh. It is a UI marker, not a credential.
+- **One row per page load, per device.** Two tabs share an auth session, so each keeps its own proof
+  row — unlocking in one tab cannot bounce the other back to the lock screen — and rows are pruned
+  when their session ends or after a day. `refreshAutoLock` only ever extends the caller's own rows,
+  so a device can never affect another device's unlock (the rule that stopped one device locking
+  another).
+- **Activity, not just the clock (timer mode).** Real input (`pointerdown`, `keydown`, `wheel`,
+  `touchstart`, `scroll`, returning to the tab) is reported at most once per
   `siteAutoLockReportIntervalMs` — a quarter of the window, capped at a minute — so an hour of use is
   a handful of small writes rather than thousands. A report never verifies anything, never creates a
   proof that does not exist and **never revives a lapsed one**.
@@ -524,9 +533,11 @@ limit:
   themselves through `src/lib/call-activity.ts` while they are mounted, and an open call suspends the
   countdown (it restarts when the call ends) — locking Freecord mid-call would otherwise unmount the
   panel and drop the connection.
-- **Nothing is cached in the browser.** The countdown comes from the server's own
+- **Nothing is cached in the browser.** Timer deadlines come from the server's own
   `autoLockExpiresAt`, so a tampered or stalled client cannot make a session outlive its window, and
   nothing is written to `localStorage`, `sessionStorage` or any other browser storage.
+- **A caller that cannot name its page load** (a stale cached bundle, a script) is treated as the
+  session-level proof rather than being locked out of its own account.
 
 ### Recovery
 
@@ -539,16 +550,16 @@ member (`a••a@example.com`).
 
 ### Verification
 
-`bun site-lock-test.mjs` (295 assertions) covers four layers: the pure rules (PIN format and leading
+`bun site-lock-test.mjs` (322 assertions) covers four layers: the pure rules (PIN format and leading
 zeros, the password rule with symbols allowed, all four configurations, the progressive delay, the
-recovery-code rules, the auto-lock window and its expiry maths); the server source (only hashes in
-the schema, Scrypt hashing and verification, session-scoped verification with the member's idle
-window applied on the server, rate limits, identity checks, the auto-lock being powerless — it can
-grant nothing — and the audit trail); the UI wiring (which fields appear for which configuration,
-both-required submit, Clear/Forgot/loading/error controls, the auto-lock picker, the idle monitor,
-the call exemption, protected-route wrapping, no browser storage); and live read-only calls with no
-session — a signed-out visitor is never asked for a lock and can never verify, create, disable,
-recover or reschedule one.
+recovery-code rules, the three auto-lock modes and their expiry/label rules); the server source
+(only hashes in the schema, Scrypt hashing and verification, session- and page-scoped verification
+with the member's mode applied on the server, rate limits, identity checks, the auto-lock being
+powerless — it can grant nothing — and the audit trail); the UI wiring (which fields appear for which
+configuration, both-required submit, Clear/Forgot/loading/error controls, the auto-lock picker, the
+page-load marker and its lack of storage, the idle monitor, the call exemption, protected-route
+wrapping, no browser storage); and live read-only calls with no session — a signed-out visitor is
+never asked for a lock and can never verify, create, disable, recover or reschedule one.
 
 The end-to-end click-through of a signed-in session is **not** automated here: the suite guard
 (`test-support/guard.mjs`) refuses to create synthetic accounts on the shared production deployment,

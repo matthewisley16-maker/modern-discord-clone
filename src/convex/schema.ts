@@ -413,11 +413,18 @@ const schema = defineSchema(
       verifiedPinSessionId: v.optional(v.string()),
       verifiedPasswordSessionId: v.optional(v.string()),
       /**
-       * How long a device may sit UNUSED before the enabled credentials are asked
-       * for again (`SITE_AUTO_LOCK_DEFAULT_MINUTES` when absent, 0 = never until
-       * sign-out). The window is measured from the last activity on that device,
-       * so it is an inactivity timer and not a hard session limit; a proof whose
-       * window has closed stops counting everywhere, on the server too.
+       * WHEN the enabled credentials are asked for again, interpreted only by
+       * `siteAutoLockMode()` in `src/lib/site-lock.ts`:
+       *
+       *   - absent / 0 — every page load (the default): a proof belongs to one
+       *     page load, so a refresh, closing and reopening, a new tab or a new
+       *     sign-in asks again,
+       *   - 1–480 — an inactivity window on that device (asked again once it has
+       *     sat unused that long),
+       *   - -1 — never until sign-out (`SITE_AUTO_LOCK_NEVER`).
+       *
+       * A proof that does not qualify stops counting everywhere, on the server
+       * too, so no client can stretch it.
        */
       autoLockMinutes: v.optional(v.number()),
       /** Progressive delay after consecutive wrong entries (shared ladder). */
@@ -432,17 +439,24 @@ const schema = defineSchema(
     }).index("by_user", ["userId"]),
 
     /**
-     * One row per (auth session, factor) proving that an optional site lock's
-     * credential was entered on THAT session.
+     * One row per (auth session, factor, page load) proving that an optional site
+     * lock's credential was entered on THAT session (and, in the default mode, by
+     * that page load — a second tab keeps its own row instead of evicting the
+     * first one's proof).
      *
      * This is what makes the site lock per DEVICE instead of per account: every
      * device holds its own rows, so unlocking on a second device cannot re-lock
      * the first one, and "Lock now" on one device only clears that device's own
-     * rows. Rows are pruned once their auth session is gone or expired.
+     * rows. Rows are pruned once their auth session is gone or expired, and any
+     * row older than a day is dropped (`SITE_AUTO_LOCK_STALE_PROOF_MS`).
      *
-     * `verifiedAt` is both the moment of the proof and the anchor of the
-     * auto-lock: it is moved forward while the device is used, and a row whose
-     * idle window has closed is ignored (the credential is asked for again).
+     * `verifiedAt` is both the moment of the proof and the anchor of the timer
+     * mode: it is moved forward while the device is used, and a row whose idle
+     * window has closed is ignored (the credential is asked for again).
+     *
+     * `pageId` is the auto-lock's other half: in the default "every page load"
+     * mode only a proof claimed by the CURRENT page load counts, so a refresh (a
+     * new id) is asked again. It is a per-page-load marker, never a secret.
      */
     siteLockGrants: defineTable({
       userId: v.id("users"),
@@ -450,6 +464,8 @@ const schema = defineSchema(
       sessionId: v.string(),
       factor: v.union(v.literal("pin"), v.literal("password")),
       verifiedAt: v.number(),
+      /** The page load that claimed this proof (see `src/lib/page-session.ts`). */
+      pageId: v.optional(v.string()),
     })
       .index("by_user", ["userId"])
       .index("by_user_session", ["userId", "sessionId", "factor"]),

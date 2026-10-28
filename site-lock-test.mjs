@@ -46,11 +46,13 @@ import {
   siteAutoLockExpiresAt,
   siteAutoLockLabel,
   siteAutoLockMinutes,
+  siteAutoLockMode,
   siteAutoLockProblem,
   siteAutoLockReportIntervalMs,
   siteAutoLockWindowMs,
   SITE_AUTO_LOCK_CHOICES,
   SITE_AUTO_LOCK_DEFAULT_MINUTES,
+  SITE_AUTO_LOCK_EVERY_VISIT,
   SITE_AUTO_LOCK_MAX_MINUTES,
   SITE_AUTO_LOCK_MIN_MINUTES,
   SITE_AUTO_LOCK_NEVER,
@@ -77,6 +79,8 @@ const is = (name, got, expected) => {
 const check = (name, condition, detail) => (condition ? ok(name) : bad(name, detail));
 const read = (...parts) => readFileSync(join(process.cwd(), ...parts), "utf8");
 const count = (haystack, needle) => haystack.split(needle).length - 1;
+/** Source with comments removed, for "does it CALL this" checks (never "does it MENTION it"). */
+const code = (source) => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 /** The body of a declaration, up to its closing `});`. */
 function handlerOf(source, declaration) {
   const start = source.indexOf(declaration);
@@ -227,48 +231,58 @@ is("both factors can be held by one device", grantCoversSession([
 }
 
 // ---------------------------------------------------------------------------
-// 1h. Auto-lock: the window a device is left unlocked for without activity
+// 1h. Auto-lock: WHEN the lock asks again (every page load by default)
 // ---------------------------------------------------------------------------
-is("the default window is 15 minutes", SITE_AUTO_LOCK_DEFAULT_MINUTES, 15);
-is("one minute is the shortest choice", SITE_AUTO_LOCK_MIN_MINUTES, 1);
-is("the longest choice is 8 hours", SITE_AUTO_LOCK_MAX_MINUTES, 480);
-is("never is a real choice", SITE_AUTO_LOCK_NEVER, 0);
-is("the picker offers the documented windows", SITE_AUTO_LOCK_CHOICES.join(","), "1,5,15,30,60,240,0");
-is("a row without a preference uses the default", siteAutoLockMinutes(undefined), 15);
-is("an unusable stored value falls back to the default", siteAutoLockMinutes("soon"), 15);
-is("never stays never", siteAutoLockMinutes(0), 0);
+is("the default is every page load", SITE_AUTO_LOCK_DEFAULT_MINUTES, SITE_AUTO_LOCK_EVERY_VISIT);
+is("every page load has its own value", SITE_AUTO_LOCK_EVERY_VISIT, 0);
+is("never has its own value", SITE_AUTO_LOCK_NEVER, -1);
+is("one minute is the shortest timer", SITE_AUTO_LOCK_MIN_MINUTES, 1);
+is("the longest timer is 8 hours", SITE_AUTO_LOCK_MAX_MINUTES, 480);
+is("the picker offers every mode, the default first", SITE_AUTO_LOCK_CHOICES.join(","), "0,1,5,15,30,60,240,-1");
+is("a row without a preference asks every page load", siteAutoLockMode(undefined), "visit");
+is("an unusable stored value falls back to every page load", siteAutoLockMode("soon"), "visit");
+is("stored zero is every page load", siteAutoLockMode(0), "visit");
+is("stored never is never", siteAutoLockMode(SITE_AUTO_LOCK_NEVER), "never");
+is("a stored minute count is a timer", siteAutoLockMode(15), "idle");
 is("a stored value is rounded", siteAutoLockMinutes(14.6), 15);
-is("a tiny stored value becomes the shortest window", siteAutoLockMinutes(0.2), 1);
+is("a tiny stored value rounds to every page load", siteAutoLockMinutes(0.2), SITE_AUTO_LOCK_EVERY_VISIT);
 is("a stored value is capped", siteAutoLockMinutes(100_000), SITE_AUTO_LOCK_MAX_MINUTES);
-is("a negative stored value never counts", siteAutoLockMinutes(-30), 0);
-is("never is not a countdown", siteAutoLockEnabled(0), false);
-is("a real window is a countdown", siteAutoLockEnabled(15), true);
-is("an unusable choice explains itself", siteAutoLockProblem("tomorrow"), "Choose how long Freecord stays unlocked.");
-is("never is accepted", siteAutoLockProblem(0), null);
-is("the shortest window is accepted", siteAutoLockProblem(1), null);
-is("the longest window is accepted", siteAutoLockProblem(SITE_AUTO_LOCK_MAX_MINUTES), null);
-is("a window below the floor is refused", siteAutoLockProblem(-1), `Auto-lock must be between 1 minute and 8 hours — or Never.`);
-is("a window above the cap is refused", siteAutoLockProblem(SITE_AUTO_LOCK_MAX_MINUTES + 1), `Auto-lock must be between 1 minute and 8 hours — or Never.`);
-is("the window in milliseconds", siteAutoLockWindowMs(15), 900_000);
-is("never has no window at all", siteAutoLockWindowMs(0), 0);
-is("a proof expires one window after it was taken", siteAutoLockExpiresAt(1_000, 1), 61_000);
-is("a proof never expires with the window off", siteAutoLockExpiresAt(1_000, 0), null);
+is("a large negative stored value means never", siteAutoLockMinutes(-30), SITE_AUTO_LOCK_NEVER);
+is("junk between the two special values falls back to the default", siteAutoLockMinutes(-0.5), SITE_AUTO_LOCK_EVERY_VISIT);
+is("never is not a mode that asks again", siteAutoLockEnabled(SITE_AUTO_LOCK_NEVER), false);
+is("every page load does ask again", siteAutoLockEnabled(SITE_AUTO_LOCK_EVERY_VISIT), true);
+is("a timer does ask again", siteAutoLockEnabled(15), true);
+is("an unusable choice explains itself", siteAutoLockProblem("tomorrow"), "Choose when Freecord locks again.");
+is("every page load is accepted", siteAutoLockProblem(SITE_AUTO_LOCK_EVERY_VISIT), null);
+is("never is accepted", siteAutoLockProblem(SITE_AUTO_LOCK_NEVER), null);
+is("the shortest timer is accepted", siteAutoLockProblem(1), null);
+is("the longest timer is accepted", siteAutoLockProblem(SITE_AUTO_LOCK_MAX_MINUTES), null);
+is("a timer below the floor is refused", siteAutoLockProblem(-5), `Auto-lock must be every page load, between 1 minute and 8 hours, or never.`);
+is("a timer above the cap is refused", siteAutoLockProblem(SITE_AUTO_LOCK_MAX_MINUTES + 1), `Auto-lock must be every page load, between 1 minute and 8 hours, or never.`);
+is("the timer window in milliseconds", siteAutoLockWindowMs(15), 900_000);
+is("every page load has no timer to run", siteAutoLockWindowMs(SITE_AUTO_LOCK_EVERY_VISIT), 0);
+is("never has no timer to run", siteAutoLockWindowMs(SITE_AUTO_LOCK_NEVER), 0);
+is("a timer's proof expires one window after it was taken", siteAutoLockExpiresAt(1_000, 1), 61_000);
+is("an every-page-load proof has no timed expiry", siteAutoLockExpiresAt(1_000, SITE_AUTO_LOCK_EVERY_VISIT), null);
+is("a never proof has no expiry", siteAutoLockExpiresAt(1_000, SITE_AUTO_LOCK_NEVER), null);
 is("a proof without a timestamp has no expiry", siteAutoLockExpiresAt(null, 15), null);
-is("a proof inside its window is not expired", siteAutoLockExpiredAt(1_000, 1, 60_000), false);
-is("the instant the window ends counts as expired", siteAutoLockExpiredAt(1_000, 1, 61_000), true);
-is("a proof past its window is expired", siteAutoLockExpiredAt(1_000, 1, 61_001), true);
-is("with the window off nothing ever expires", siteAutoLockExpiredAt(1_000, 0, 10 ** 12), false);
-is("activity is reported well before a one minute window lapses", siteAutoLockReportIntervalMs(1), 15_000);
-is("a long window costs at most one report a minute", siteAutoLockReportIntervalMs(240), 60_000);
-is("no window means nothing to report", siteAutoLockReportIntervalMs(0), 0);
+is("a timer proof inside its window is not expired", siteAutoLockExpiredAt(1_000, 1, 60_000), false);
+is("the instant a timer window ends counts as expired", siteAutoLockExpiredAt(1_000, 1, 61_000), true);
+is("a timer proof past its window is expired", siteAutoLockExpiredAt(1_000, 1, 61_001), true);
+is("with no timer nothing expires by time", siteAutoLockExpiredAt(1_000, SITE_AUTO_LOCK_NEVER, 10 ** 12), false);
+is("activity is reported well before a one minute timer lapses", siteAutoLockReportIntervalMs(1), 15_000);
+is("a long timer costs at most one report a minute", siteAutoLockReportIntervalMs(240), 60_000);
+is("every page load has nothing to report", siteAutoLockReportIntervalMs(SITE_AUTO_LOCK_EVERY_VISIT), 0);
+is("never has nothing to report", siteAutoLockReportIntervalMs(SITE_AUTO_LOCK_NEVER), 0);
 check("a report never happens more often than the write interval",
   siteAutoLockReportIntervalMs(1) >= SITE_AUTO_LOCK_TOUCH_MS, siteAutoLockReportIntervalMs(1));
-is("a window is labelled with its length", siteAutoLockLabel(15), "15 minutes");
+is("a timer is labelled with its length", siteAutoLockLabel(15), "15 minutes");
 is("one minute is singular", siteAutoLockLabel(1), "1 minute");
 is("an hour is an hour", siteAutoLockLabel(60), "1 hour");
 is("hours are plural", siteAutoLockLabel(240), "4 hours");
-is("never says what it means", siteAutoLockLabel(0), "Never (until you sign out)");
-is("a junk window is labelled with the default", siteAutoLockLabel(null), "15 minutes");
+is("every page load says what it does", siteAutoLockLabel(SITE_AUTO_LOCK_EVERY_VISIT), "Every page load (refresh or reopen)");
+is("never says what it means", siteAutoLockLabel(SITE_AUTO_LOCK_NEVER), "Never (until you sign out)");
+is("a junk value is labelled with the default", siteAutoLockLabel(null), "Every page load (refresh or reopen)");
 
 // ---------------------------------------------------------------------------
 // 2a. Server: hashed storage, server-side verification, no plain-text anywhere
@@ -281,6 +295,7 @@ const main = read("src", "main.tsx");
 const panel = read("src", "components", "dashboard", "SettingsPanel.tsx");
 const monitor = read("src", "hooks", "use-site-auto-lock.ts");
 const callActivity = read("src", "lib", "call-activity.ts");
+const pageSession = read("src", "lib", "page-session.ts");
 const dmCallPanel = read("src", "components", "dashboard", "DmCallPanel.tsx");
 const voicePanel = read("src", "components", "voice", "VoicePanel.tsx");
 
@@ -306,6 +321,7 @@ check("nothing logs a credential", !/console\.(log|debug|info|warn|error)/.test(
     check("a grant names the session it belongs to", grantsTable.includes("sessionId: v.string()"), "a grant is not session-scoped");
     check("a grant names the factor it proves", grantsTable.includes('factor: v.union(v.literal("pin"), v.literal("password"))'), "a grant is not factor-scoped");
     check("grants are looked up per user + session + factor", grantsTable.includes('.index("by_user_session", ["userId", "sessionId", "factor"])'), "the per-session lookup is not indexed");
+    check("a grant records the page load that claimed it", grantsTable.includes("pageId: v.optional(v.string())"), "a proof is not scoped to a page load");
   }
   check("failure tracking is stored", siteLocks.includes("failedAttempts") && siteLocks.includes("lockedUntil"), "there is no failure/lockout state");
 }
@@ -354,11 +370,11 @@ check("recovery emails are rate limited", server.includes('scope: "recovery", li
 check("guessing escalates through the shared ladder", server.includes("const delayMs = siteLockoutFor(failed);") && server.includes("siteLockoutSeconds(rec.lockedUntil, Date.now())"), "guessing is not slowed down");
 check("a correct entry resets the failure streak", /if \(success\) \{[\s\S]*failedAttempts: 0/.test(server), "the streak is never reset");
 check("a stale streak decays", server.includes("SITE_LOCKOUT_DECAY_MS"), "old failures never decay");
-check("verification success is recorded for THIS session only", /markVerified = internalMutation\(\{[\s\S]*grantFactor\(ctx, userId, key, "pin", now\)/.test(server), "verification is not scoped to the session");
+check("verification success is recorded for THIS session only", /markVerified = internalMutation\(\{[\s\S]*grantFactor\(ctx, userId, key, "pin", now, pageId\)/.test(server), "verification is not scoped to the session");
 {
   const lockNow = handlerOf(server, "export const lockNow = mutation({");
   const markVerified = handlerOf(server, "export const markVerified = internalMutation({");
-  check("verification reads the session's own grant", server.includes('sessionProved(sessionId, row?.verifiedPinSessionId, grants, "pin")'), "verification is not per session");
+  check("verification reads the session's own grant", server.includes('sessionProved(sessionId, legacyProof(mode, row?.verifiedPinSessionId), grants, "pin")'), "verification is not per session");
   check("a session-less caller is never verified", /function sessionProved\([\s\S]*if \(sessionId === null\) return false;/.test(server), "a session-less caller could be treated as verified");
   check("one device's unlock cannot lock another device", lockNow.length > 0 && lockNow.includes("grant.sessionId === key"), "locking now would revoke every device");
   check("the legacy single-session fields are only cleared for THIS session", lockNow.includes("row.verifiedPinSessionId === key") && lockNow.includes("row.verifiedPasswordSessionId === key"), "a legacy field could still lock another device");
@@ -392,7 +408,7 @@ check("locking again is a safe, unauthenticated-direction action", /export const
   const status = handlerOf(server, "export const status = query({");
   const siteLocks = handlerOf(schema, "siteLocks: defineTable({");
   check("the window is stored on the member's own lock row", siteLocks.includes("autoLockMinutes: v.optional(v.number())"), "the delay is not persisted");
-  check("the stored window is documented as an inactivity timer", siteLocks.includes("UNUSED"), "the stored window is undocumented");
+  check("the stored preference documents all three modes", siteLocks.includes("every page load (the default)") && siteLocks.includes("never until sign-out"), "the stored preference is undocumented");
   check("the delay has its own mutation", setAutoLock.length > 0, "the delay cannot be saved");
   check("a saved delay is validated before it is stored", setAutoLock.includes("siteAutoLockProblem(minutes)"), "an unusable window could be stored");
   check("only a signed-in member can change it", setAutoLock.includes("await currentUserId(ctx)"), "the delay is not user-scoped");
@@ -401,8 +417,8 @@ check("locking again is a safe, unauthenticated-direction action", /export const
   check("the change is audited", server.includes('"site_lock.autolock.change"'), "the change is not audited");
   check("changing the delay cannot erase a proof", !setAutoLock.includes("verifiedAt: undefined"), "the delay could unlock a device");
   check("the caller's own device is re-stamped, so a shorter window cannot lock the screen it was set from", setAutoLock.includes("if (grant.sessionId === key) await ctx.db.patch(grant._id, { verifiedAt: now });"), "the settings screen could be locked out by its own change");
-  check("a proof past its window is ignored server-side", /freshGrants\(await grantsOf\(ctx, userId\), autoLockMinutes, now\)/.test(server), "the window would only exist in the browser");
-  is("both the gate's query and the actions apply the window", count(server, "freshGrants(await grantsOf(ctx, userId), autoLockMinutes, now)"), 2);
+  check("a proof that does not qualify is ignored server-side", /liveProofs\(await grantsOf\(ctx, userId\), mode, autoLockMinutes, pageId \?\? null, now\)/.test(server), "the mode would only exist in the browser");
+  is("both the gate's query and the actions apply the mode", count(server, "liveProofs(await grantsOf(ctx, userId), mode, autoLockMinutes, pageId ?? null, now)"), 2);
   check("the status query reports the window", status.includes("autoLockMinutes,") && status.includes("siteAutoLockMinutes(row?.autoLockMinutes)"), "the screen cannot show the current window");
   check("the status query reports when the device locks itself", status.includes("autoLockExpiresAt: relocksAtOf("), "the countdown has no server deadline");
   check("the deadline is the earliest proof the device holds", server.includes("?? Number.POSITIVE_INFINITY"), "the deadline ignores one of the factors");
@@ -413,13 +429,13 @@ check("locking again is a safe, unauthenticated-direction action", /export const
   check("a device can only extend its own rows", refresh.includes("if (grant.sessionId !== key) continue;"), "one device could extend another");
   check("reports are throttled by the write interval", refresh.includes("SITE_AUTO_LOCK_TOUCH_MS"), "every keystroke would be a write");
   check("the report is rate limited too", server.includes("sitelock:touch:"), "reports are unlimited");
-  check("with the window off a report does nothing", refresh.includes("SITE_AUTO_LOCK_NEVER"), "never still reports");
+  check("only the timer mode has a deadline to extend", refresh.includes('siteAutoLockMode(autoLockMinutes) !== "idle"'), "every page load or never still reports activity");
 }
 
 // ---------------------------------------------------------------------------
 // 3a. The gate: which fields appear for which configuration
 // ---------------------------------------------------------------------------
-check("the gate reads the server's decision reactively", gate.includes("useQuery(api.siteLock.status, {})"), "the gate does not ask the server");
+check("the gate reads the server's decision reactively", gate.includes("useQuery(api.siteLock.status, { pageId: PAGE_ID })"), "the gate does not ask the server");
 check("with no lock enabled the app renders unchanged", gate.includes("if (!status.enabled || status.unlocked) return <>{children}</>;"), "the site would be gated with no lock set");
 check("a loading state exists (never a blank screen)", gate.includes("return <BrandSplash label="), "the gate can render nothing while loading");
 check("the PIN field appears only when the PIN lock is on", gate.includes('const needsPin = status.pending.includes("pin");') && gate.includes("{needsPin && ("), "the PIN field is not conditional");
@@ -495,9 +511,28 @@ check("the deadline locks THIS device through the server", monitor.includes("loc
 check("a live call is never locked out from under the member", monitor.includes("callActive()") && monitor.includes("onCallActiveChange"), "a call would be dropped by the lock");
 check("both call surfaces announce themselves", dmCallPanel.includes("beginCall()") && voicePanel.includes("beginCall()"), "a call is invisible to the monitor");
 check("the announcement is released on unmount", dmCallPanel.includes("useEffect(() => beginCall(), []);") && voicePanel.includes("useEffect(() => beginCall(), []);"), "a closed call would block the lock forever");
-check("the call flag never leaves the browser", !/localStorage|sessionStorage|fetch\(|ConvexHttpClient/.test(callActivity), "the call flag is stored or sent somewhere");
-check("no countdown is scheduled when the window is off", monitor.includes("autoLockMinutes !== SITE_AUTO_LOCK_NEVER"), "never still schedules a lock");
+check("the call flag never leaves the browser", !/localStorage|sessionStorage|fetch\(|ConvexHttpClient/.test(callActivity), "the call flag is stored or sent somewhere");  check("the monitor only runs the timer mode", monitor.includes('siteAutoLockMode(autoLockMinutes) === "idle"'), "every page load or never still schedules a countdown");
+  check("the default mode is the one that asks on a refresh", settings.includes("Every page load</strong> (the default)"), "the default is not explained in Settings");
 check("nothing in the monitor touches browser storage", !/localStorage|sessionStorage|indexedDB/.test(monitor), "the monitor caches state in the browser");
+
+// ---------------------------------------------------------------------------
+// 3e. The default mode is real: a proof belongs to ONE page load
+// ---------------------------------------------------------------------------
+check("the app has a per-page-load id", pageSession.includes("export const PAGE_ID"), "there is no page-load marker");
+check("the page id is generated per module evaluation (so a reload makes a new one)", /export const PAGE_ID = newPageId\(\)/.test(pageSession), "the page id is not per page load");
+check("the page id is never stored in the browser", !/localStorage|sessionStorage|document\.cookie|indexedDB/.test(code(pageSession)), "the page id would survive a reload");
+check("it is a marker, not a credential", /not a security boundary/.test(pageSession), "the page id is treated as a secret");
+check("the gate asks the server about THIS page load", gate.includes("useQuery(api.siteLock.status, { pageId: PAGE_ID })"), "the gate does not tell the server which page load it is");
+check("unlocking claims the proof for this page load", count(gate, "pageId: PAGE_ID,") === 2, "the unlock is not scoped to the page");
+check("settings asks about and claims the same page load", settings.includes("useQuery(api.siteLock.status, { pageId: PAGE_ID })") && count(settings, "pageId: PAGE_ID,") === 2, "settings and the gate disagree about the page load");
+check("the server only accepts a proof from the same page load", server.includes("return pageId === null || grant.pageId === pageId;"), "a stale page load's proof would still count");
+check("a proof remembers which page load claimed it", server.includes("{ userId, sessionId, factor, verifiedAt: now, pageId }"), "the page load is not recorded with the proof");
+check("each page load keeps its OWN proof row", server.includes("const existing = rows.find((row) => row.pageId === pageId);"), "a second tab would evict the first tab's proof");
+check("unlocking in one tab cannot re-lock another", /grantFactor\([\s\S]{0,600}?\.collect\(\);/.test(server) && !/grantFactor\([\s\S]{0,600}?\.unique\(\);/.test(server), "the proof lookup still assumes a single row");
+check("proof rows are dropped once they are a day old", server.includes("SITE_AUTO_LOCK_STALE_PROOF_MS"), "forgotten tabs would accumulate rows forever");
+check("\"never\" mode keeps its proof for the whole session", server.includes('mode === "never" ? Number.POSITIVE_INFINITY'), 'a day-old "never" proof would be dropped');
+check("a caller that cannot name its page load is not locked out forever", server.includes("pageId === null || grant.pageId === pageId"), "such a caller could never get back in");
+check("the legacy session marker cannot bypass the page scope", server.includes("return mode === \"visit\" ? undefined : remembered;"), "an old session flag would skip the re-prompt");
 
 // ---------------------------------------------------------------------------
 // 4. Live: a signed-out visitor is never asked for a lock, and cannot verify one

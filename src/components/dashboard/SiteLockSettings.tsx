@@ -8,11 +8,13 @@ import {
   SITE_AUTO_LOCK_NEVER,
   siteAutoLockLabel,
   siteAutoLockMinutes,
+  siteAutoLockMode,
   sitePasswordProblem,
   sitePinProblem,
   SITE_PASSWORD_MIN_LENGTH,
   SITE_PIN_MAX_DIGITS,
 } from "@/lib/site-lock";
+import { PAGE_ID } from "@/lib/page-session";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -41,7 +43,7 @@ import { Clock, Eye, EyeOff, KeyRound, Loader2, Lock, ShieldCheck } from "lucide
  * "Never" keeps the original behaviour of staying satisfied until sign-out.
  */
 export default function SiteLockSettings() {
-  const status = useQuery(api.siteLock.status, {});
+  const status = useQuery(api.siteLock.status, { pageId: PAGE_ID });
   const setPin = useAction(api.siteLock.setPin);
   const setPassword = useAction(api.siteLock.setPassword);
   const disablePin = useAction(api.siteLock.disablePin);
@@ -79,6 +81,7 @@ export default function SiteLockSettings() {
   const guardLabel =
     status.pinEnabled && status.passwordEnabled ? "PIN or password" : status.pinEnabled ? "PIN" : "password";
   const autoLockMinutes = siteAutoLockMinutes(status.autoLockMinutes);
+  const autoLockMode = siteAutoLockMode(autoLockMinutes);
 
   function resetPinForm() {
     setPinCurrent("");
@@ -128,6 +131,7 @@ export default function SiteLockSettings() {
         await setPin({
           pin: pinNew,
           confirmPin: pinConfirm,
+          pageId: PAGE_ID,
           ...(pinMode === "change" ? { currentPin: pinCurrent } : {}),
         });
         toast.success(pinMode === "change" ? "PIN updated." : "PIN lock is on.");
@@ -164,6 +168,7 @@ export default function SiteLockSettings() {
         await setPassword({
           password: pwNew,
           confirmPassword: pwConfirm,
+          pageId: PAGE_ID,
           ...(pwMode === "change" ? { currentPassword: pwCurrent } : {}),
         });
         toast.success(pwMode === "change" ? "Lock password updated." : "Password lock is on.");
@@ -199,8 +204,8 @@ export default function SiteLockSettings() {
               <span className={`fc-badge ${status.pinEnabled ? "pin" : ""}`}>{status.pinEnabled ? "ON" : "OFF"}</span>
             </p>
             <p className="fc-muted">
-              A numeric PIN of 1–{SITE_PIN_MAX_DIGITS} digits, asked when a new session starts.
-              Leading zeros are kept, so 0042 stays 0042.
+              A numeric PIN of 1–{SITE_PIN_MAX_DIGITS} digits, asked whenever your auto-lock says — on
+              every page load by default. Leading zeros are kept, so 0042 stays 0042.
             </p>
           </div>
         </div>
@@ -477,12 +482,14 @@ export default function SiteLockSettings() {
           <div className="fc-lock-head">
             <div>
               <p className="fc-lock-title">
-                <Clock size={15} aria-hidden="true" /> Auto-lock
+                <Clock size={15} aria-hidden="true" /> Auto-lock — when to ask again
               </p>
               <p className="fc-muted">
-                How long this device may sit unused before Freecord asks for your {guardLabel} again.
-                The countdown restarts with every click, keypress, tap or call, and each device counts
-                on its own — locking one never locks another.
+                <strong>Every page load</strong> (the default) asks for your {guardLabel} again whenever
+                you refresh the page, close and reopen Freecord, open a new tab or sign in — while
+                switching views inside the app never re-prompts. A minute option instead counts
+                inactivity on that device: no asking while you use it, asked again once it has sat idle
+                that long. Each device counts on its own, and a call is never interrupted.
               </p>
             </div>
           </div>
@@ -500,7 +507,9 @@ export default function SiteLockSettings() {
                   toast.success(
                     next === SITE_AUTO_LOCK_NEVER
                       ? "Auto-lock is off — Freecord stays unlocked until you sign out."
-                      : `Freecord will ask for your ${guardLabel} again after ${siteAutoLockLabel(next)} without activity.`,
+                      : siteAutoLockMode(next) === "visit"
+                        ? `Freecord will ask for your ${guardLabel} again on every page load.`
+                        : `Freecord will ask for your ${guardLabel} again after ${siteAutoLockLabel(next)} without activity.`,
                   );
                 } catch (err) {
                   fail(err, "Could not save the auto-lock delay.");
@@ -515,9 +524,11 @@ export default function SiteLockSettings() {
             </select>
           </label>
           <p className="fc-muted">
-            {autoLockMinutes === SITE_AUTO_LOCK_NEVER
+            {autoLockMode === "never"
               ? "Turned off — an unlocked device stays open until you sign out, until that session ends, or until you press Lock Freecord now."
-              : `This device currently locks itself after ${siteAutoLockLabel(autoLockMinutes)} without activity. Lock Freecord now still locks it immediately.`}
+              : autoLockMode === "visit"
+                ? `Right now a refresh, a reopened Freecord, a new tab or a new sign-in asks for your ${guardLabel} again; moving around inside the app does not.`
+                : `Right now a device that sits unused for ${siteAutoLockLabel(autoLockMinutes)} asks for your ${guardLabel} again. Lock Freecord now still locks it immediately.`}
           </p>
         </div>
       )}
@@ -532,12 +543,14 @@ export default function SiteLockSettings() {
             own account.
           </p>
           <p className="fc-muted">
-            Sessions: a lock is asked once when a session starts and stays satisfied while that device
-            is being used{autoLockMinutes === SITE_AUTO_LOCK_NEVER
-              ? ", right up until you sign out (auto-lock is off)"
-              : `, until ${siteAutoLockLabel(autoLockMinutes)} pass without activity`}. Refreshing the
-            page never re-prompts on its own, and a device past its window is asked again — the server
-            checks that, not the browser.
+            Sessions: a lock is asked once when a session starts, and then{" "}
+            {autoLockMode === "visit"
+              ? "again on every page load — so refreshing or reopening Freecord re-prompts"
+              : autoLockMode === "never"
+                ? "stays satisfied until you sign out (auto-lock is off)"
+                : `again after ${siteAutoLockLabel(autoLockMinutes)} without activity`}
+            . Moving between views inside the app never re-prompts, and the server — not the browser —
+            decides what still counts as verified.
           </p>
         </div>
       )}

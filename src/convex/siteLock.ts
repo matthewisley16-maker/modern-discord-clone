@@ -16,10 +16,13 @@ import {
   staleSiteLockGrants,
   siteAutoLockExpiredAt,
   siteAutoLockExpiresAt,
+  siteAutoLockLabel,
   siteAutoLockMinutes,
+  siteAutoLockMode,
   siteAutoLockProblem,
   SITE_AUTO_LOCK_DEFAULT_MINUTES,
   SITE_AUTO_LOCK_NEVER,
+  SITE_AUTO_LOCK_STALE_PROOF_MS,
   SITE_AUTO_LOCK_TOUCH_MS,
   SITE_LOCKOUT_DECAY_MS,
   SITE_PASSWORD_MIN_LENGTH,
@@ -35,6 +38,7 @@ import {
   sitePinProblem,
   sitePinsMatch,
   siteRecoveryCodeProblem,
+  type SiteAutoLockMode,
   type SiteLockFactor,
 } from "../lib/site-lock";
 
@@ -146,17 +150,42 @@ function sessionProved(
 }
 
 /**
- * The proofs that still count: one whose idle window has closed is dropped here,
- * so an unused session is treated as unverified EVERYWHERE — the gate, the
- * settings screen and the actions all read this same filtered list — instead of
- * only being counted down in the browser.
+ * The proofs that still count for THIS caller, under the member's chosen mode:
+ *
+ *   - "visit" (the default): only a proof claimed by the SAME page load — a
+ *     refresh has a new id, so the credential is asked for again,
+ *   - "idle": only a proof still inside its inactivity window,
+ *   - "never": any proof of this session, until the session itself ends.
+ *
+ * The gate's status query and the actions' lock record both read this same
+ * filtered list, so the auto-lock is a server decision and not a countdown kept
+ * by the browser.
+ *
+ * A caller that cannot say which page load it is (no page id at all — a stale
+ * cached bundle, a script) falls back to the session-level proof rather than being
+ * locked out of its own account forever.
  */
-function freshGrants<T extends { verifiedAt: number }>(
-  grants: readonly T[],
+function liveProofs(
+  grants: readonly Doc<"siteLockGrants">[],
+  mode: SiteAutoLockMode,
   autoLockMinutes: number,
+  pageId: string | null,
   now: number,
-): T[] {
-  return grants.filter((grant) => !siteAutoLockExpiredAt(grant.verifiedAt, autoLockMinutes, now));
+): Doc<"siteLockGrants">[] {
+  return grants.filter((grant) => {
+    if (mode === "never") return true;
+    if (mode === "visit") return pageId === null || grant.pageId === pageId;
+    return !siteAutoLockExpiredAt(grant.verifiedAt, autoLockMinutes, now);
+  });
+}
+
+/**
+ * The legacy single-session marker, honoured only when the proof does not have to
+ * be page-scoped: in "every page load" mode it would otherwise keep a session
+ * unlocked across reloads, which is exactly what that mode forbids.
+ */
+function legacyProof(mode: SiteAutoLockMode, remembered: string | undefined): string | undefined {
+  return mode === "visit" ? undefined : remembered;
 }
 
 /**
@@ -170,7 +199,7 @@ function relocksAtOf(
   flags: { pin: boolean; password: boolean },
   autoLockMinutes: number,
 ): number | null {
-  if (sessionId === null || autoLockMinutes === SITE_AUTO_LOCK_NEVER) return null;
+  if (sessionId === null || siteAutoLockMode(autoLockMinutes) !== "idle") return null;
   const mine = grants.filter(
     (grant) => grant.sessionId === sessionId && (grant.factor === "pin" ? flags.pin : flags.password),
   );
@@ -193,8 +222,9 @@ function relocksAtOf(
  * exposes them.
  */
 export const lockRecord = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<LockRecord | null> => {
+  /** The page load asking, so an "every page load" proof is not reused. */
+  args: { pageId: v.optional(v.string()) },
+  handler: async (ctx, { pageId }): Promise<LockRecord | null> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     const row = await lockRow(ctx, userId);
@@ -209,11 +239,15 @@ export const lockRecord = internalQuery({
     const now = Date.now();
     // Proofs past their idle window are ignored here too, so an expired session
     // is asked for the credential again on the next action.
-    const grants = freshGrants(await grantsOf(ctx, userId), autoLockMinutes, now);
+    const mode = siteAutoLockMode(autoLockMinutes);
+    const grants = liveProofs(await grantsOf(ctx, userId), mode, autoLockMinutes, pageId ?? null, now);
     const pinEnabled = Boolean(row?.pinEnabled && row.pinHash);
     const passwordEnabled = Boolean(row?.passwordEnabled && row.passwordHash);
-    const pinVerified = pinEnabled && sessionProved(sessionId, row?.verifiedPinSessionId, grants, "pin");
-    const passwordVerified = passwordEnabled && sessionProved(sessionId, row?.verifiedPasswordSessionId, grants, "password");
+    const pinVerified =
+      pinEnabled && sessionProved(sessionId, legacyProof(mode, row?.verifiedPinSessionId), grants, "pin");
+    const passwordVerified =
+      passwordEnabled &&
+      sessionProved(sessionId, legacyProof(mode, row?.verifiedPasswordSessionId), grants, "password");
 
     return {
       pinEnabled,
@@ -319,8 +353,14 @@ export const registerAttempt = internalMutation({
 });
 
 /**
- * Remember one factor as proved for ONE auth session. Idempotent: entering the
- * PIN twice on the same device refreshes its own row instead of adding another.
+ * Remember one factor as proved for ONE auth session and (in the default mode)
+ * ONE page load. Idempotent for that pair: entering the PIN twice on the same page
+ * refreshes its own row instead of adding another.
+ *
+ * One row per PAGE LOAD, not per session: two tabs share an auth session, so a
+ * single row would let the second tab's unlock evict the first tab's proof and
+ * bounce it back to the lock screen. Each page keeps its own row instead, and old
+ * rows are dropped by age in `pruneDeadGrants`.
  */
 async function grantFactor(
   ctx: MutationCtx,
@@ -328,15 +368,17 @@ async function grantFactor(
   sessionId: string,
   factor: SiteLockFactor,
   now: number,
+  pageId: string | undefined,
 ) {
-  const existing = await ctx.db
+  const rows = await ctx.db
     .query("siteLockGrants")
     .withIndex("by_user_session", (q) =>
       q.eq("userId", userId).eq("sessionId", sessionId).eq("factor", factor),
     )
-    .unique();
+    .collect();
+  const existing = rows.find((row) => row.pageId === pageId);
   if (existing) await ctx.db.patch(existing._id, { verifiedAt: now });
-  else await ctx.db.insert("siteLockGrants", { userId, sessionId, factor, verifiedAt: now });
+  else await ctx.db.insert("siteLockGrants", { userId, sessionId, factor, verifiedAt: now, pageId });
 }
 
 /**
@@ -357,7 +399,12 @@ async function revokeFactorGrants(ctx: MutationCtx, userId: Id<"users">, factor:
  * Drop proofs whose auth session is gone or expired: they can never be used
  * again, so they must not accumulate. Bounded by the account's own devices.
  */
-async function pruneDeadGrants(ctx: MutationCtx, userId: Id<"users">, now: number) {
+async function pruneDeadGrants(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  now: number,
+  mode: SiteAutoLockMode,
+) {
   const grants = await grantsOf(ctx, userId);
   if (grants.length === 0) return;
   const sessions = await ctx.db
@@ -365,7 +412,16 @@ async function pruneDeadGrants(ctx: MutationCtx, userId: Id<"users">, now: numbe
     .withIndex("userId", (q) => q.eq("userId", userId))
     .collect();
   const live = sessions.filter((s) => s.expirationTime > now).map((s) => s._id as string);
-  for (const grant of staleSiteLockGrants(grants, live)) await ctx.db.delete(grant._id);
+  const deadSessions = new Set(staleSiteLockGrants(grants, live).map((grant) => grant._id));
+  // In "never" mode a proof legitimately lasts the whole session, so age alone is
+  // never a reason to drop it; every other mode re-asks long before a day passes.
+  const maxAge = mode === "never" ? Number.POSITIVE_INFINITY : SITE_AUTO_LOCK_STALE_PROOF_MS;
+  for (const grant of grants) {
+    // The proof of a session that is gone, or one nobody could still be using.
+    if (deadSessions.has(grant._id) || now - grant.verifiedAt > maxAge) {
+      await ctx.db.delete(grant._id);
+    }
+  }
 }
 
 /**
@@ -377,8 +433,8 @@ async function pruneDeadGrants(ctx: MutationCtx, userId: Id<"users">, now: numbe
  * disturbing an already-unlocked one.
  */
 export const markVerified = internalMutation({
-  args: { pin: v.boolean(), password: v.boolean() },
-  handler: async (ctx, { pin, password }) => {
+  args: { pin: v.boolean(), password: v.boolean(), pageId: v.optional(v.string()) },
+  handler: async (ctx, { pin, password, pageId }) => {
     const userId = await currentUserId(ctx);
     const row = await lockRow(ctx, userId);
     if (!row) return;
@@ -392,9 +448,9 @@ export const markVerified = internalMutation({
     });
     if (!sessionId) return;
     const key = sessionId as string;
-    if (pin) await grantFactor(ctx, userId, key, "pin", now);
-    if (password) await grantFactor(ctx, userId, key, "password", now);
-    await pruneDeadGrants(ctx, userId, now);
+    if (pin) await grantFactor(ctx, userId, key, "pin", now, pageId);
+    if (password) await grantFactor(ctx, userId, key, "password", now, pageId);
+    await pruneDeadGrants(ctx, userId, now, siteAutoLockMode(row.autoLockMinutes));
   },
 });
 
@@ -581,8 +637,9 @@ export const recordAudit = internalMutation({
  * row; there is no way to query another account's locks.
  */
 export const status = query({
-  args: {},
-  handler: async (ctx) => {
+  /** The page load asking (see `src/lib/page-session.ts`). */
+  args: { pageId: v.optional(v.string()) },
+  handler: async (ctx, { pageId }) => {
     const base = {
       signedIn: false,
       enabled: false,
@@ -623,15 +680,19 @@ export const status = query({
       .unique();
 
     const autoLockMinutes = siteAutoLockMinutes(row?.autoLockMinutes);
+    const mode = siteAutoLockMode(autoLockMinutes);
     const now = Date.now();
-    // A proof whose idle window has closed is not a proof: dropping it here is
-    // what makes the auto-lock a server decision rather than a browser countdown.
-    const grants = freshGrants(await grantsOf(ctx, userId), autoLockMinutes, now);
+    // A proof that does not qualify is not a proof: dropping it here is what makes
+    // the auto-lock a server decision rather than a browser countdown.
+    const grants = liveProofs(await grantsOf(ctx, userId), mode, autoLockMinutes, pageId ?? null, now);
     const pinEnabled = Boolean(row?.pinEnabled && row.pinHash);
     const passwordEnabled = Boolean(row?.passwordEnabled && row.passwordHash);
     const enabled = siteLockEnabled({ pinEnabled, passwordEnabled });
-    const pinVerified = pinEnabled && sessionProved(sessionId, row?.verifiedPinSessionId, grants, "pin");
-    const passwordVerified = passwordEnabled && sessionProved(sessionId, row?.verifiedPasswordSessionId, grants, "password");
+    const pinVerified =
+      pinEnabled && sessionProved(sessionId, legacyProof(mode, row?.verifiedPinSessionId), grants, "pin");
+    const passwordVerified =
+      passwordEnabled &&
+      sessionProved(sessionId, legacyProof(mode, row?.verifiedPasswordSessionId), grants, "password");
     const pending = pendingSiteFactors({ pinEnabled, passwordEnabled }, { pin: pinVerified, password: passwordVerified });
 
     return {
@@ -708,9 +769,14 @@ async function verifyFactorOrThrow(
  * escalates through the progressive delay.
  */
 export const verify = action({
-  args: { pin: v.optional(v.string()), password: v.optional(v.string()) },
-  handler: async (ctx, { pin, password }): Promise<{ ok: true; enabled: boolean; unlocked: boolean }> => {
-    const rec = (await ctx.runQuery(internal.siteLock.lockRecord, {})) as LockRecord | null;
+  args: {
+    pin: v.optional(v.string()),
+    password: v.optional(v.string()),
+    /** Which page load is unlocking; an "every page load" proof is scoped to it. */
+    pageId: v.optional(v.string()),
+  },
+  handler: async (ctx, { pin, password, pageId }): Promise<{ ok: true; enabled: boolean; unlocked: boolean }> => {
+    const rec = (await ctx.runQuery(internal.siteLock.lockRecord, { pageId })) as LockRecord | null;
     if (!rec) throw new ConvexError("Please sign in to continue.");
     if (!rec.enabled) return { ok: true, enabled: false, unlocked: true };
 
@@ -752,6 +818,7 @@ export const verify = action({
     await ctx.runMutation(internal.siteLock.markVerified, {
       pin: rec.pinEnabled && !rec.pinVerified,
       password: rec.passwordEnabled && !rec.passwordVerified,
+      pageId,
     });
     await ctx.runMutation(internal.siteLock.recordAudit, {
       action: "site_lock.unlock",
@@ -768,9 +835,14 @@ export const verify = action({
  * Scrypt hash and this session is marked verified, since the owner just typed it.
  */
 export const setPin = action({
-  args: { pin: v.string(), confirmPin: v.string(), currentPin: v.optional(v.string()) },
-  handler: async (ctx, { pin, confirmPin, currentPin }): Promise<{ ok: true; changing: boolean }> => {
-    const rec = (await ctx.runQuery(internal.siteLock.lockRecord, {})) as LockRecord | null;
+  args: {
+    pin: v.string(),
+    confirmPin: v.string(),
+    currentPin: v.optional(v.string()),
+    pageId: v.optional(v.string()),
+  },
+  handler: async (ctx, { pin, confirmPin, currentPin, pageId }): Promise<{ ok: true; changing: boolean }> => {
+    const rec = (await ctx.runQuery(internal.siteLock.lockRecord, { pageId })) as LockRecord | null;
     if (!rec) throw new ConvexError("Please sign in to continue.");
     const problem = sitePinProblem(pin);
     if (problem) throw new ConvexError(problem);
@@ -785,7 +857,7 @@ export const setPin = action({
 
     const pinHash = await new Scrypt().hash(pin);
     await ctx.runMutation(internal.siteLock.storePin, { pinHash, changing });
-    await ctx.runMutation(internal.siteLock.markVerified, { pin: true, password: false });
+    await ctx.runMutation(internal.siteLock.markVerified, { pin: true, password: false, pageId });
     return { ok: true, changing };
   },
 });
@@ -797,9 +869,14 @@ export const setPin = action({
  * rule apply, matching account passwords).
  */
 export const setPassword = action({
-  args: { password: v.string(), confirmPassword: v.string(), currentPassword: v.optional(v.string()) },
-  handler: async (ctx, { password, confirmPassword, currentPassword }): Promise<{ ok: true; changing: boolean }> => {
-    const rec = (await ctx.runQuery(internal.siteLock.lockRecord, {})) as LockRecord | null;
+  args: {
+    password: v.string(),
+    confirmPassword: v.string(),
+    currentPassword: v.optional(v.string()),
+    pageId: v.optional(v.string()),
+  },
+  handler: async (ctx, { password, confirmPassword, currentPassword, pageId }): Promise<{ ok: true; changing: boolean }> => {
+    const rec = (await ctx.runQuery(internal.siteLock.lockRecord, { pageId })) as LockRecord | null;
     if (!rec) throw new ConvexError("Please sign in to continue.");
     const problem = sitePasswordProblem(password);
     if (problem) throw new ConvexError(problem);
@@ -814,7 +891,7 @@ export const setPassword = action({
 
     const passwordHash = await new Scrypt().hash(password);
     await ctx.runMutation(internal.siteLock.storePassword, { passwordHash, changing });
-    await ctx.runMutation(internal.siteLock.markVerified, { pin: false, password: true });
+    await ctx.runMutation(internal.siteLock.markVerified, { pin: false, password: true, pageId });
     return { ok: true, changing };
   },
 });
@@ -949,6 +1026,7 @@ export const recoverWithCode = action({
     confirmPin: v.optional(v.string()),
     newPassword: v.optional(v.string()),
     confirmPassword: v.optional(v.string()),
+    pageId: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ ok: true; disabled: boolean }> => {
     const rec = (await ctx.runQuery(internal.siteLock.lockRecord, {})) as LockRecord | null;
@@ -1004,14 +1082,14 @@ export const recoverWithCode = action({
       } else {
         const pinHash = await new Scrypt().hash(args.newPin!);
         await ctx.runMutation(internal.siteLock.storePin, { pinHash, changing: rec.hasPin });
-        await ctx.runMutation(internal.siteLock.markVerified, { pin: true, password: false });
+        await ctx.runMutation(internal.siteLock.markVerified, { pin: true, password: false, pageId: args.pageId });
       }
     } else if (args.disable) {
       await ctx.runMutation(internal.siteLock.clearPassword, { reason: "recovered with an emailed code" });
     } else {
       const passwordHash = await new Scrypt().hash(args.newPassword!);
       await ctx.runMutation(internal.siteLock.storePassword, { passwordHash, changing: rec.hasPassword });
-      await ctx.runMutation(internal.siteLock.markVerified, { pin: false, password: true });
+      await ctx.runMutation(internal.siteLock.markVerified, { pin: false, password: true, pageId: args.pageId });
     }
 
     await ctx.runMutation(internal.siteLock.recordAudit, {
@@ -1100,7 +1178,7 @@ export const setAutoLock = mutation({
       "site_lock.autolock.change",
       userId,
       `${name} set the optional Freecord auto-lock to ${
-        value === SITE_AUTO_LOCK_NEVER ? "never (unlocked until sign-out)" : `${value} minutes of inactivity`
+        value === SITE_AUTO_LOCK_NEVER ? "never (unlocked until sign-out)" : siteAutoLockLabel(value).toLowerCase()
       }`,
       "user",
       userId,
@@ -1131,7 +1209,9 @@ export const refreshAutoLock = mutation({
       return { extended: false, autoLockExpiresAt: null as number | null };
     }
     const autoLockMinutes = siteAutoLockMinutes(row.autoLockMinutes);
-    if (autoLockMinutes === SITE_AUTO_LOCK_NEVER) return { extended: false, autoLockExpiresAt: null };
+    // Only the timer mode has a deadline to extend: "every page load" needs no
+    // reporting at all (a proof cannot outlive its page), and "never" has none.
+    if (siteAutoLockMode(autoLockMinutes) !== "idle") return { extended: false, autoLockExpiresAt: null };
     await enforceRateLimit(ctx, `sitelock:touch:${userId}`, 20, 60_000);
     const key = sessionId as string;
     const now = Date.now();

@@ -3,8 +3,9 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { callActive, onCallActiveChange } from "@/lib/call-activity";
 import {
-  SITE_AUTO_LOCK_NEVER,
+  SITE_AUTO_LOCK_DEFAULT_MINUTES,
   siteAutoLockMinutes,
+  siteAutoLockMode,
   siteAutoLockReportIntervalMs,
   siteAutoLockWindowMs,
 } from "@/lib/site-lock";
@@ -14,10 +15,14 @@ import {
  *
  * WHAT IT DOES
  * ------------
- * While a lock is ON and this device is unlocked, this monitor watches real user
- * activity and, once the member's chosen window passes without any of it, locks
- * Freecord again (the same `lockNow` the settings screen offers, which revokes
- * THIS device's proofs only).
+ * While a lock is ON, this device is unlocked and the member chose a TIMER, this
+ * monitor watches real user activity and, once that window passes without any of
+ * it, locks Freecord again (the same `lockNow` the settings screen offers, which
+ * revokes THIS device's proofs only).
+ *
+ * The other two modes need nothing here: "every page load" (the default) is
+ * enforced by the proof being scoped to the page load, and "never until sign-out"
+ * has nothing to count down.
  *
  * The countdown is the SERVER's own deadline, not a client invention:
  * `status.autoLockExpiresAt` is computed from this account's proof rows, so a
@@ -49,9 +54,9 @@ export default function useSiteAutoLock(status: SiteAutoLockStatus | undefined |
   const refresh = useMutation(api.siteLock.refreshAutoLock);
   const lockNow = useMutation(api.siteLock.lockNow);
 
-  // Only an unlocked, enabled session on THIS device has a countdown to run.
+  // Only an unlocked, enabled session on THIS device has anything to run.
   const armed = Boolean(status?.enabled) && Boolean(status?.unlocked);
-  const autoLockMinutes = armed ? siteAutoLockMinutes(status?.autoLockMinutes) : SITE_AUTO_LOCK_NEVER;
+  const autoLockMinutes = armed ? siteAutoLockMinutes(status?.autoLockMinutes) : SITE_AUTO_LOCK_DEFAULT_MINUTES;
   const serverDeadline =
     armed && typeof status?.autoLockExpiresAt === "number" ? status.autoLockExpiresAt : null;
 
@@ -61,7 +66,7 @@ export default function useSiteAutoLock(status: SiteAutoLockStatus | undefined |
 
   // Starts at 0 and is stamped by the effects below (never during render).
   const live = useRef({ lastActivity: 0, reportedAt: 0 });
-  const watching = armed && autoLockMinutes !== SITE_AUTO_LOCK_NEVER;
+  const watching = armed && siteAutoLockMode(autoLockMinutes) === "idle";
 
   // ---------------------------------------------------------------------------
   // Report activity: keeps the window open while the member is actually here.
