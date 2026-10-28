@@ -14,6 +14,13 @@ import {
   maskRecoveryEmail,
   pendingSiteFactors,
   staleSiteLockGrants,
+  siteAutoLockExpiredAt,
+  siteAutoLockExpiresAt,
+  siteAutoLockMinutes,
+  siteAutoLockProblem,
+  SITE_AUTO_LOCK_DEFAULT_MINUTES,
+  SITE_AUTO_LOCK_NEVER,
+  SITE_AUTO_LOCK_TOUCH_MS,
   SITE_LOCKOUT_DECAY_MS,
   SITE_PASSWORD_MIN_LENGTH,
   SITE_PIN_MAX_DIGITS,
@@ -49,12 +56,15 @@ import {
  *     member's data: every read/write in the app still goes through its own
  *     server-side authorization.
  *
- * Verification is remembered per AUTH SESSION, not with a timer: the credential
- * is asked for once when a session starts, stays satisfied for the whole session
- * (so refreshing, navigating between routes or reconnecting a socket never
- * re-asks), and is required again after signing out or after that session
- * expires. A page refresh cannot bypass anything either, since the gate's
- * decision comes from this table.
+ * Verification is remembered per AUTH SESSION, and for that session it lasts
+ * only as long as the device is being used: a credential is asked for once when a
+ * session starts and is not asked again while the member is active — so
+ * refreshing, navigating between routes or reconnecting a socket never re-asks —
+ * but a device left alone asks again after the member's own auto-lock window
+ * (`autoLockMinutes`; 0 keeps the old "until I sign out" behaviour), and signing
+ * out or expiring that session locks it again immediately. A page refresh cannot
+ * bypass anything either, since the gate's decision comes from this table and a
+ * proof whose window has closed stops counting here, on the server.
  *
  * Each session keeps its OWN row in `siteLockGrants`, so devices are completely
  * independent: signing in — and unlocking — on a second device never re-locks a
@@ -135,6 +145,43 @@ function sessionProved(
   return grantCoversSession(grants, sessionId, factor);
 }
 
+/**
+ * The proofs that still count: one whose idle window has closed is dropped here,
+ * so an unused session is treated as unverified EVERYWHERE — the gate, the
+ * settings screen and the actions all read this same filtered list — instead of
+ * only being counted down in the browser.
+ */
+function freshGrants<T extends { verifiedAt: number }>(
+  grants: readonly T[],
+  autoLockMinutes: number,
+  now: number,
+): T[] {
+  return grants.filter((grant) => !siteAutoLockExpiredAt(grant.verifiedAt, autoLockMinutes, now));
+}
+
+/**
+ * When THIS session's proofs stop counting — the earliest deadline among the
+ * factors it has proved (with both locks on, the first one to lapse asks for
+ * both again), or `null` when nothing is proved or no countdown is configured.
+ */
+function relocksAtOf(
+  grants: readonly { sessionId: string; factor: SiteLockFactor; verifiedAt: number }[],
+  sessionId: string | null,
+  flags: { pin: boolean; password: boolean },
+  autoLockMinutes: number,
+): number | null {
+  if (sessionId === null || autoLockMinutes === SITE_AUTO_LOCK_NEVER) return null;
+  const mine = grants.filter(
+    (grant) => grant.sessionId === sessionId && (grant.factor === "pin" ? flags.pin : flags.password),
+  );
+  if (mine.length === 0) return null;
+  return Math.min(
+    ...mine.map(
+      (grant) => siteAutoLockExpiresAt(grant.verifiedAt, autoLockMinutes) ?? Number.POSITIVE_INFINITY,
+    ),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Internal reads
 // ---------------------------------------------------------------------------
@@ -158,7 +205,11 @@ export const lockRecord = internalQuery({
       .withIndex("userIdAndProvider", (q) => q.eq("userId", userId).eq("provider", "password"))
       .unique();
 
-    const grants = await grantsOf(ctx, userId);
+    const autoLockMinutes = siteAutoLockMinutes(row?.autoLockMinutes);
+    const now = Date.now();
+    // Proofs past their idle window are ignored here too, so an expired session
+    // is asked for the credential again on the next action.
+    const grants = freshGrants(await grantsOf(ctx, userId), autoLockMinutes, now);
     const pinEnabled = Boolean(row?.pinEnabled && row.pinHash);
     const passwordEnabled = Boolean(row?.passwordEnabled && row.passwordHash);
     const pinVerified = pinEnabled && sessionProved(sessionId, row?.verifiedPinSessionId, grants, "pin");
@@ -553,6 +604,10 @@ export const status = query({
       failedAttempts: 0,
       maxDigits: SITE_PIN_MAX_DIGITS,
       minPasswordLength: SITE_PASSWORD_MIN_LENGTH,
+      /** The member's chosen idle window (0 = never until sign-out). */
+      autoLockMinutes: SITE_AUTO_LOCK_DEFAULT_MINUTES,
+      /** When this device's proofs lapse, so the screen can count down honestly. */
+      autoLockExpiresAt: null as number | null,
       displayName: "",
     };
 
@@ -567,7 +622,11 @@ export const status = query({
       .withIndex("userIdAndProvider", (q) => q.eq("userId", userId).eq("provider", "password"))
       .unique();
 
-    const grants = await grantsOf(ctx, userId);
+    const autoLockMinutes = siteAutoLockMinutes(row?.autoLockMinutes);
+    const now = Date.now();
+    // A proof whose idle window has closed is not a proof: dropping it here is
+    // what makes the auto-lock a server decision rather than a browser countdown.
+    const grants = freshGrants(await grantsOf(ctx, userId), autoLockMinutes, now);
     const pinEnabled = Boolean(row?.pinEnabled && row.pinHash);
     const passwordEnabled = Boolean(row?.passwordEnabled && row.passwordHash);
     const enabled = siteLockEnabled({ pinEnabled, passwordEnabled });
@@ -592,10 +651,17 @@ export const status = query({
       emailVerified: Boolean(user?.emailVerificationTime),
       hasPendingRecoveryCode: Boolean(row?.recoveryCodeHash),
       lockedUntil: row?.lockedUntil ?? null,
-      lockoutSeconds: siteLockoutSeconds(row?.lockedUntil, Date.now()),
+      lockoutSeconds: siteLockoutSeconds(row?.lockedUntil, now),
       failedAttempts: row?.failedAttempts ?? 0,
       maxDigits: SITE_PIN_MAX_DIGITS,
       minPasswordLength: SITE_PASSWORD_MIN_LENGTH,
+      autoLockMinutes,
+      autoLockExpiresAt: relocksAtOf(
+        grants,
+        sessionId,
+        { pin: pinEnabled, password: passwordEnabled },
+        autoLockMinutes,
+      ),
       displayName: await displayNameOf(ctx, userId),
     };
   },
@@ -988,5 +1054,96 @@ export const lockNow = mutation({
       });
     }
     return { locked: true };
+  },
+});
+
+/**
+ * How long a device may sit UNUSED before the enabled credentials are asked for
+ * again — the delay the member picks in Settings → Account → Login & Security
+ * (`0` = never, satisfied until sign-out).
+ *
+ * SAFE DIRECTION ONLY: this can never turn a lock off, never verify a credential
+ * and never grant access. It only decides when a device that already unlocked
+ * itself asks again, which is why no credential is required to change it — like
+ * `lockNow`, it is a preference of the signed-in member, not a proof of anything.
+ *
+ * The caller's OWN device has its proofs re-stamped, so a shorter window never
+ * locks the settings screen out from under the hand that just changed it; other
+ * devices keep their own timestamps and simply follow the new window from their
+ * next activity (a device already idle for longer than the new window asks for
+ * the credential at its next interaction, which is the point of shortening it).
+ */
+export const setAutoLock = mutation({
+  args: { minutes: v.number() },
+  handler: async (ctx, { minutes }) => {
+    const userId = await currentUserId(ctx);
+    const problem = siteAutoLockProblem(minutes);
+    if (problem) throw new ConvexError(problem);
+    const row = await lockRow(ctx, userId);
+    if (!row || !siteLockEnabled({ pinEnabled: row.pinEnabled, passwordEnabled: row.passwordEnabled })) {
+      throw new ConvexError("Turn on a PIN or password lock first.");
+    }
+    await enforceRateLimit(ctx, `sitelock:autolock:${userId}`, 30, 60_000);
+    const value = siteAutoLockMinutes(minutes);
+    const now = Date.now();
+    await ctx.db.patch(row._id, { autoLockMinutes: value, updatedAt: now });
+    const sessionId = await getAuthSessionId(ctx);
+    if (sessionId) {
+      const key = sessionId as string;
+      for (const grant of await grantsOf(ctx, userId)) {
+        if (grant.sessionId === key) await ctx.db.patch(grant._id, { verifiedAt: now });
+      }
+    }
+    const name = await displayNameOf(ctx, userId);
+    await audit(
+      ctx,
+      "site_lock.autolock.change",
+      userId,
+      `${name} set the optional Freecord auto-lock to ${
+        value === SITE_AUTO_LOCK_NEVER ? "never (unlocked until sign-out)" : `${value} minutes of inactivity`
+      }`,
+      "user",
+      userId,
+    );
+    return { autoLockMinutes: value };
+  },
+});
+
+/**
+ * "I am still here": push THIS device's proof deadline forward while it is being
+ * used, which is what makes the window an inactivity timer rather than a hard
+ * session limit.
+ *
+ * Deliberately powerless: it never verifies a credential (no `grantFactor` here),
+ * never creates a proof that does not already exist, and never revives one whose
+ * window has already closed — so a lapsed session cannot talk its way back open,
+ * and a device can only ever extend its own rows. Callers report at most once per
+ * `siteAutoLockReportIntervalMs`, so an hour of activity is a few small writes, not
+ * thousands; a report that is rate limited changes nothing at all.
+ */
+export const refreshAutoLock = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await currentUserId(ctx);
+    const row = await lockRow(ctx, userId);
+    const sessionId = await getAuthSessionId(ctx);
+    if (!row || !sessionId || !siteLockEnabled({ pinEnabled: row.pinEnabled, passwordEnabled: row.passwordEnabled })) {
+      return { extended: false, autoLockExpiresAt: null as number | null };
+    }
+    const autoLockMinutes = siteAutoLockMinutes(row.autoLockMinutes);
+    if (autoLockMinutes === SITE_AUTO_LOCK_NEVER) return { extended: false, autoLockExpiresAt: null };
+    await enforceRateLimit(ctx, `sitelock:touch:${userId}`, 20, 60_000);
+    const key = sessionId as string;
+    const now = Date.now();
+    let extended = false;
+    for (const grant of await grantsOf(ctx, userId)) {
+      if (grant.sessionId !== key) continue;
+      // Already lapsed, or still fresh enough that a write would be noise.
+      if (siteAutoLockExpiredAt(grant.verifiedAt, autoLockMinutes, now)) continue;
+      if (now - grant.verifiedAt < SITE_AUTO_LOCK_TOUCH_MS) continue;
+      await ctx.db.patch(grant._id, { verifiedAt: now });
+      extended = true;
+    }
+    return { extended, autoLockExpiresAt: now + autoLockMinutes * 60_000 };
   },
 });

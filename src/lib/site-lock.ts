@@ -34,6 +34,18 @@
  * Freecord already applies to account passwords), and up to 200. Everything else
  * — symbols, spaces, upper case, unicode — is explicitly ALLOWED and stored
  * exactly as typed; nothing here strips or normalises a password.
+ *
+ * AUTO-LOCK
+ * ---------
+ * A verified session is not left open forever: the member chooses how long a
+ * device may sit UNUSED before Freecord asks for the enabled credentials again
+ * (Settings → Account → Login & Security). The window is stored on their own lock
+ * row, applied to that device's own proofs, and a device that is being used keeps
+ * pushing its deadline forward — so it is an INACTIVITY timer, not a hard session
+ * limit. `SITE_AUTO_LOCK_NEVER` is a real choice and keeps the original behaviour
+ * (satisfied until sign-out). The rules below are shared by the server, which
+ * refuses a proof whose window has closed, and by the screen that decides when to
+ * lock again, so both agree to the millisecond.
  */
 
 /** Shortest accepted PIN (one digit is allowed — it is the member's choice). */
@@ -62,6 +74,29 @@ export const SITE_LOCKOUT_AFTER = 3;
 export const SITE_LOCKOUT_BASE_MS = 5_000;
 export const SITE_LOCKOUT_MAX_MS = 15 * 60 * 1000;
 export const SITE_LOCKOUT_DECAY_MS = 60 * 60 * 1000;
+
+/**
+ * AUTO-LOCK — how long a device may sit unused before a lock asks again.
+ *
+ * `SITE_AUTO_LOCK_NEVER` (0) means "stay satisfied until this session ends",
+ * which is what the feature did before the delay was configurable, and it stays
+ * available so nobody is forced into a shorter window than they want.
+ */
+export const SITE_AUTO_LOCK_NEVER = 0;
+/** The window a row without a saved preference uses. */
+export const SITE_AUTO_LOCK_DEFAULT_MINUTES = 15;
+/** Shortest configurable window. */
+export const SITE_AUTO_LOCK_MIN_MINUTES = 1;
+/** Longest configurable window (8 hours). */
+export const SITE_AUTO_LOCK_MAX_MINUTES = 8 * 60;
+/** The choices Settings offers, in order. 0 = never (until sign-out). */
+export const SITE_AUTO_LOCK_CHOICES: readonly number[] = [1, 5, 15, 30, 60, 240, SITE_AUTO_LOCK_NEVER];
+/**
+ * The shortest gap between two writes of the SAME proof. Activity arrives in
+ * bursts (every keystroke is an event), and the deadline only needs to move once
+ * per window — this keeps `refreshAutoLock` from writing on every mouse move.
+ */
+export const SITE_AUTO_LOCK_TOUCH_MS = 5_000;
 
 /** The two independent locks, as a union used across the API and the UI. */
 export type SiteLockFactor = "pin" | "password";
@@ -124,6 +159,91 @@ export function staleSiteLockGrants<T extends SiteLockGrant>(
 ): T[] {
   const live = new Set(liveSessionIds);
   return grants.filter((grant) => !live.has(grant.sessionId));
+}
+
+/**
+ * A saved window, normalised: a missing or unusable value becomes the default, 0
+ * and anything below stay "never", and everything else is rounded and clamped
+ * into the allowed range. Used when READING a row, so old or hand-edited data can
+ * never produce a window the rest of the feature cannot reason about.
+ */
+export function siteAutoLockMinutes(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return SITE_AUTO_LOCK_DEFAULT_MINUTES;
+  if (value <= SITE_AUTO_LOCK_NEVER) return SITE_AUTO_LOCK_NEVER;
+  return Math.min(Math.max(Math.round(value), SITE_AUTO_LOCK_MIN_MINUTES), SITE_AUTO_LOCK_MAX_MINUTES);
+}
+
+/** Is a real countdown configured (rather than "never until sign-out")? */
+export function siteAutoLockEnabled(value: unknown): boolean {
+  return siteAutoLockMinutes(value) !== SITE_AUTO_LOCK_NEVER;
+}
+
+/**
+ * The reason a submitted window is not usable, or `null` when it is. Returned as
+ * a message so the settings screen and the server refuse with identical wording.
+ */
+export function siteAutoLockProblem(minutes: unknown): string | null {
+  if (typeof minutes !== "number" || !Number.isFinite(minutes)) {
+    return "Choose how long Freecord stays unlocked.";
+  }
+  if (minutes === SITE_AUTO_LOCK_NEVER) return null;
+  if (minutes < SITE_AUTO_LOCK_MIN_MINUTES || minutes > SITE_AUTO_LOCK_MAX_MINUTES) {
+    return `Auto-lock must be between ${SITE_AUTO_LOCK_MIN_MINUTES} minute and ${SITE_AUTO_LOCK_MAX_MINUTES / 60} hours — or Never.`;
+  }
+  return null;
+}
+
+/** The window in milliseconds, or 0 when there is no countdown at all. */
+export function siteAutoLockWindowMs(minutes: unknown): number {
+  const value = siteAutoLockMinutes(minutes);
+  return value === SITE_AUTO_LOCK_NEVER ? 0 : value * 60_000;
+}
+
+/**
+ * The instant a proof taken at `verifiedAt` stops counting, or `null` when it
+ * does not expire at all (no countdown configured, or no timestamp to measure).
+ */
+export function siteAutoLockExpiresAt(verifiedAt: number | null | undefined, minutes: unknown): number | null {
+  const window = siteAutoLockWindowMs(minutes);
+  if (window === 0 || typeof verifiedAt !== "number" || !Number.isFinite(verifiedAt)) return null;
+  return verifiedAt + window;
+}
+
+/**
+ * Has an unused proof at `verifiedAt` closed its window by `now`? The instant the
+ * window ends counts as expired, so the two sides of the feature agree exactly.
+ */
+export function siteAutoLockExpiredAt(
+  verifiedAt: number | null | undefined,
+  minutes: unknown,
+  now: number,
+): boolean {
+  const expiresAt = siteAutoLockExpiresAt(verifiedAt, minutes);
+  return expiresAt !== null && now >= expiresAt;
+}
+
+/**
+ * How often an ACTIVE device may report activity. A quarter of the window, so the
+ * deadline is pushed forward several times before it can lapse even on the
+ * shortest window; floored at the write interval and capped at a minute, so a
+ * long window never costs more than one small mutation per minute. 0 = never,
+ * where nothing has to be reported at all.
+ */
+export function siteAutoLockReportIntervalMs(minutes: unknown): number {
+  const window = siteAutoLockWindowMs(minutes);
+  if (window === 0) return 0;
+  return Math.max(SITE_AUTO_LOCK_TOUCH_MS, Math.min(60_000, Math.floor(window / 4)));
+}
+
+/** A window as a short label, for the settings picker and its messages. */
+export function siteAutoLockLabel(minutes: unknown): string {
+  const value = siteAutoLockMinutes(minutes);
+  if (value === SITE_AUTO_LOCK_NEVER) return "Never (until you sign out)";
+  if (value === 1) return "1 minute";
+  if (value < 60) return `${value} minutes`;
+  if (value === 60) return "1 hour";
+  const hours = value / 60;
+  return Number.isInteger(hours) ? `${hours} hours` : `${value} minutes`;
 }
 
 export function sitePinProblem(pin: unknown): string | null {

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { PRESENCE_META } from "./ui";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "@/components/voice/screenShare";
 import { RELAY_CONFIGURED, RTC_CONFIGURATION, connectionFailureMessage } from "@/lib/ice";
+import { beginCall } from "@/lib/call-activity";
 import {
   enterFullscreen,
   exitFullscreen,
@@ -161,6 +162,10 @@ export default function DmCallPanel({
   const myUserIdRef = useRef(myUserId);
   const mediaRef = useRef(media);
   const sendSignalRef = useRef(sendSignal);
+  // A live call is use: the site's idle auto-lock must never lock Freecord out
+  // from under a conversation (that would drop it). Released on unmount.
+  useEffect(() => beginCall(), []);
+
   useEffect(() => { peerIdRef.current = peerId; }, [peerId]);
   useEffect(() => { myUserIdRef.current = myUserId; }, [myUserId]);
   useEffect(() => { mediaRef.current = media; }, [media]);

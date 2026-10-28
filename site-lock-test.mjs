@@ -41,6 +41,20 @@ import {
   sitePinProblem,
   sitePinsMatch,
   siteRecoveryCodeProblem,
+  siteAutoLockEnabled,
+  siteAutoLockExpiredAt,
+  siteAutoLockExpiresAt,
+  siteAutoLockLabel,
+  siteAutoLockMinutes,
+  siteAutoLockProblem,
+  siteAutoLockReportIntervalMs,
+  siteAutoLockWindowMs,
+  SITE_AUTO_LOCK_CHOICES,
+  SITE_AUTO_LOCK_DEFAULT_MINUTES,
+  SITE_AUTO_LOCK_MAX_MINUTES,
+  SITE_AUTO_LOCK_MIN_MINUTES,
+  SITE_AUTO_LOCK_NEVER,
+  SITE_AUTO_LOCK_TOUCH_MS,
   SITE_LOCKOUT_AFTER,
   SITE_LOCKOUT_BASE_MS,
   SITE_LOCKOUT_MAX_MS,
@@ -213,6 +227,50 @@ is("both factors can be held by one device", grantCoversSession([
 }
 
 // ---------------------------------------------------------------------------
+// 1h. Auto-lock: the window a device is left unlocked for without activity
+// ---------------------------------------------------------------------------
+is("the default window is 15 minutes", SITE_AUTO_LOCK_DEFAULT_MINUTES, 15);
+is("one minute is the shortest choice", SITE_AUTO_LOCK_MIN_MINUTES, 1);
+is("the longest choice is 8 hours", SITE_AUTO_LOCK_MAX_MINUTES, 480);
+is("never is a real choice", SITE_AUTO_LOCK_NEVER, 0);
+is("the picker offers the documented windows", SITE_AUTO_LOCK_CHOICES.join(","), "1,5,15,30,60,240,0");
+is("a row without a preference uses the default", siteAutoLockMinutes(undefined), 15);
+is("an unusable stored value falls back to the default", siteAutoLockMinutes("soon"), 15);
+is("never stays never", siteAutoLockMinutes(0), 0);
+is("a stored value is rounded", siteAutoLockMinutes(14.6), 15);
+is("a tiny stored value becomes the shortest window", siteAutoLockMinutes(0.2), 1);
+is("a stored value is capped", siteAutoLockMinutes(100_000), SITE_AUTO_LOCK_MAX_MINUTES);
+is("a negative stored value never counts", siteAutoLockMinutes(-30), 0);
+is("never is not a countdown", siteAutoLockEnabled(0), false);
+is("a real window is a countdown", siteAutoLockEnabled(15), true);
+is("an unusable choice explains itself", siteAutoLockProblem("tomorrow"), "Choose how long Freecord stays unlocked.");
+is("never is accepted", siteAutoLockProblem(0), null);
+is("the shortest window is accepted", siteAutoLockProblem(1), null);
+is("the longest window is accepted", siteAutoLockProblem(SITE_AUTO_LOCK_MAX_MINUTES), null);
+is("a window below the floor is refused", siteAutoLockProblem(-1), `Auto-lock must be between 1 minute and 8 hours — or Never.`);
+is("a window above the cap is refused", siteAutoLockProblem(SITE_AUTO_LOCK_MAX_MINUTES + 1), `Auto-lock must be between 1 minute and 8 hours — or Never.`);
+is("the window in milliseconds", siteAutoLockWindowMs(15), 900_000);
+is("never has no window at all", siteAutoLockWindowMs(0), 0);
+is("a proof expires one window after it was taken", siteAutoLockExpiresAt(1_000, 1), 61_000);
+is("a proof never expires with the window off", siteAutoLockExpiresAt(1_000, 0), null);
+is("a proof without a timestamp has no expiry", siteAutoLockExpiresAt(null, 15), null);
+is("a proof inside its window is not expired", siteAutoLockExpiredAt(1_000, 1, 60_000), false);
+is("the instant the window ends counts as expired", siteAutoLockExpiredAt(1_000, 1, 61_000), true);
+is("a proof past its window is expired", siteAutoLockExpiredAt(1_000, 1, 61_001), true);
+is("with the window off nothing ever expires", siteAutoLockExpiredAt(1_000, 0, 10 ** 12), false);
+is("activity is reported well before a one minute window lapses", siteAutoLockReportIntervalMs(1), 15_000);
+is("a long window costs at most one report a minute", siteAutoLockReportIntervalMs(240), 60_000);
+is("no window means nothing to report", siteAutoLockReportIntervalMs(0), 0);
+check("a report never happens more often than the write interval",
+  siteAutoLockReportIntervalMs(1) >= SITE_AUTO_LOCK_TOUCH_MS, siteAutoLockReportIntervalMs(1));
+is("a window is labelled with its length", siteAutoLockLabel(15), "15 minutes");
+is("one minute is singular", siteAutoLockLabel(1), "1 minute");
+is("an hour is an hour", siteAutoLockLabel(60), "1 hour");
+is("hours are plural", siteAutoLockLabel(240), "4 hours");
+is("never says what it means", siteAutoLockLabel(0), "Never (until you sign out)");
+is("a junk window is labelled with the default", siteAutoLockLabel(null), "15 minutes");
+
+// ---------------------------------------------------------------------------
 // 2a. Server: hashed storage, server-side verification, no plain-text anywhere
 // ---------------------------------------------------------------------------
 const server = read("src", "convex", "siteLock.ts");
@@ -221,6 +279,10 @@ const gate = read("src", "components", "SiteLockGate.tsx");
 const settings = read("src", "components", "dashboard", "SiteLockSettings.tsx");
 const main = read("src", "main.tsx");
 const panel = read("src", "components", "dashboard", "SettingsPanel.tsx");
+const monitor = read("src", "hooks", "use-site-auto-lock.ts");
+const callActivity = read("src", "lib", "call-activity.ts");
+const dmCallPanel = read("src", "components", "dashboard", "DmCallPanel.tsx");
+const voicePanel = read("src", "components", "voice", "VoicePanel.tsx");
 
 check("the PIN is hashed, never stored", server.includes("const pinHash = await new Scrypt().hash(pin);"), "the PIN is not hashed before storage");
 check("the extra password is hashed, never stored", server.includes("const passwordHash = await new Scrypt().hash(newPassword)") || server.includes("const passwordHash = await new Scrypt().hash(password);"), "the password is not hashed before storage");
@@ -322,6 +384,39 @@ check("a correct verification clears the failure state", /markVerified = interna
 check("locking again is a safe, unauthenticated-direction action", /export const lockNow = mutation\(\{[\s\S]*verifiedPinSessionId: undefined[\s\S]*verifiedPasswordSessionId: undefined/.test(server), "the locks cannot be re-armed");
 
 // ---------------------------------------------------------------------------
+// 2d. Server: the auto-lock window is stored, enforced, and grants nothing
+// ---------------------------------------------------------------------------
+{
+  const setAutoLock = handlerOf(server, "export const setAutoLock = mutation({");
+  const refresh = handlerOf(server, "export const refreshAutoLock = mutation({");
+  const status = handlerOf(server, "export const status = query({");
+  const siteLocks = handlerOf(schema, "siteLocks: defineTable({");
+  check("the window is stored on the member's own lock row", siteLocks.includes("autoLockMinutes: v.optional(v.number())"), "the delay is not persisted");
+  check("the stored window is documented as an inactivity timer", siteLocks.includes("UNUSED"), "the stored window is undocumented");
+  check("the delay has its own mutation", setAutoLock.length > 0, "the delay cannot be saved");
+  check("a saved delay is validated before it is stored", setAutoLock.includes("siteAutoLockProblem(minutes)"), "an unusable window could be stored");
+  check("only a signed-in member can change it", setAutoLock.includes("await currentUserId(ctx)"), "the delay is not user-scoped");
+  check("it refuses to save with no lock on", setAutoLock.includes("Turn on a PIN or password lock first."), "a delay could exist with nothing to lock");
+  check("changing the delay is rate limited", server.includes("sitelock:autolock:"), "the delay can be hammered");
+  check("the change is audited", server.includes('"site_lock.autolock.change"'), "the change is not audited");
+  check("changing the delay cannot erase a proof", !setAutoLock.includes("verifiedAt: undefined"), "the delay could unlock a device");
+  check("the caller's own device is re-stamped, so a shorter window cannot lock the screen it was set from", setAutoLock.includes("if (grant.sessionId === key) await ctx.db.patch(grant._id, { verifiedAt: now });"), "the settings screen could be locked out by its own change");
+  check("a proof past its window is ignored server-side", /freshGrants\(await grantsOf\(ctx, userId\), autoLockMinutes, now\)/.test(server), "the window would only exist in the browser");
+  is("both the gate's query and the actions apply the window", count(server, "freshGrants(await grantsOf(ctx, userId), autoLockMinutes, now)"), 2);
+  check("the status query reports the window", status.includes("autoLockMinutes,") && status.includes("siteAutoLockMinutes(row?.autoLockMinutes)"), "the screen cannot show the current window");
+  check("the status query reports when the device locks itself", status.includes("autoLockExpiresAt: relocksAtOf("), "the countdown has no server deadline");
+  check("the deadline is the earliest proof the device holds", server.includes("?? Number.POSITIVE_INFINITY"), "the deadline ignores one of the factors");
+  check("activity can push the deadline forward", refresh.length > 0, "an active device would still be locked");
+  check("activity never verifies anything", !refresh.includes("grantFactor"), "activity could unlock the site");
+  check("activity never creates a proof where none exists", !refresh.includes("ctx.db.insert"), "activity could forge a proof");
+  check("a lapsed proof is never revived by activity", refresh.includes("siteAutoLockExpiredAt(grant.verifiedAt, autoLockMinutes, now)"), "an expired session could talk its way back open");
+  check("a device can only extend its own rows", refresh.includes("if (grant.sessionId !== key) continue;"), "one device could extend another");
+  check("reports are throttled by the write interval", refresh.includes("SITE_AUTO_LOCK_TOUCH_MS"), "every keystroke would be a write");
+  check("the report is rate limited too", server.includes("sitelock:touch:"), "reports are unlimited");
+  check("with the window off a report does nothing", refresh.includes("SITE_AUTO_LOCK_NEVER"), "never still reports");
+}
+
+// ---------------------------------------------------------------------------
 // 3a. The gate: which fields appear for which configuration
 // ---------------------------------------------------------------------------
 check("the gate reads the server's decision reactively", gate.includes("useQuery(api.siteLock.status, {})"), "the gate does not ask the server");
@@ -383,6 +478,28 @@ check("the member can lock Freecord immediately to test it", settings.includes("
 check("recovery is explained where the locks are configured", settings.includes("Forgot PIN/password") && settings.includes("account password"), "recovery is undocumented");
 
 // ---------------------------------------------------------------------------
+// 3d. Settings: the auto-lock delay is choosable, and the monitor enforces it
+// ---------------------------------------------------------------------------
+check("the delay is configurable from Settings", settings.includes("Lock after") && settings.includes("setAutoLock({ minutes:"), "the delay cannot be changed in the UI");
+check("the picker offers every documented window", settings.includes("SITE_AUTO_LOCK_CHOICES.map"), "the choices are hard-coded somewhere else");
+check("the picker shows the saved window", settings.includes("value={String(autoLockMinutes)}"), "the current delay is not shown");
+check("the auto-lock card appears only when a lock is on", /\(status\.pinEnabled \|\| status\.passwordEnabled\) && \(\s*<div className="fc-lock-card">/.test(settings), "an auto-lock is offered with no lock");
+check("'Never' is explained honestly", settings.includes("stays open until you sign out"), "never is not explained");
+check("the copy names the credentials that will be asked for", settings.includes("guardLabel"), "the copy is vague about what is asked");
+check("the monitor is mounted wherever the gate is", gate.includes("useSiteAutoLock(status)"), "the auto-lock never runs");
+check("the monitor only runs for an unlocked, enabled session", monitor.includes("Boolean(status?.enabled) && Boolean(status?.unlocked)"), "the monitor arms with no lock");
+check("the countdown is the server's own deadline", monitor.includes("status?.autoLockExpiresAt"), "the countdown is a client invention");
+check("real user activity is what counts", monitor.includes('"pointerdown"') && monitor.includes('"keydown"') && monitor.includes('"touchstart"'), "activity is not watched");
+check("reports are throttled, never per event", monitor.includes("siteAutoLockReportIntervalMs("), "every keystroke would hit the server");
+check("the deadline locks THIS device through the server", monitor.includes("lockNow({})"), "the countdown locks nothing");
+check("a live call is never locked out from under the member", monitor.includes("callActive()") && monitor.includes("onCallActiveChange"), "a call would be dropped by the lock");
+check("both call surfaces announce themselves", dmCallPanel.includes("beginCall()") && voicePanel.includes("beginCall()"), "a call is invisible to the monitor");
+check("the announcement is released on unmount", dmCallPanel.includes("useEffect(() => beginCall(), []);") && voicePanel.includes("useEffect(() => beginCall(), []);"), "a closed call would block the lock forever");
+check("the call flag never leaves the browser", !/localStorage|sessionStorage|fetch\(|ConvexHttpClient/.test(callActivity), "the call flag is stored or sent somewhere");
+check("no countdown is scheduled when the window is off", monitor.includes("autoLockMinutes !== SITE_AUTO_LOCK_NEVER"), "never still schedules a lock");
+check("nothing in the monitor touches browser storage", !/localStorage|sessionStorage|indexedDB/.test(monitor), "the monitor caches state in the browser");
+
+// ---------------------------------------------------------------------------
 // 4. Live: a signed-out visitor is never asked for a lock, and cannot verify one
 // ---------------------------------------------------------------------------
 const anonymous = new ConvexHttpClient(process.env.CONVEX_URL || "https://academic-porcupine-929.convex.cloud");
@@ -417,6 +534,12 @@ const anonymousRecover = await rejection(() => anonymous.action(api.siteLock.rec
 check("no lock can be recovered without a session", Boolean(anonymousRecover.error) && /sign in/i.test(anonymousRecover.error), anonymousRecover.error ?? "");
 const anonymousLockNow = await rejection(() => anonymous.mutation(api.siteLock.lockNow, {}));
 check("locking is refused without a session", Boolean(anonymousLockNow.error), anonymousLockNow.error ?? "");
+const anonymousSetAutoLock = await rejection(() => anonymous.mutation(api.siteLock.setAutoLock, { minutes: 1 }));
+check("the auto-lock delay cannot be changed without a session", Boolean(anonymousSetAutoLock.error) && /sign in/i.test(anonymousSetAutoLock.error), anonymousSetAutoLock.error ?? "");
+const anonymousRefresh = await rejection(() => anonymous.mutation(api.siteLock.refreshAutoLock, {}));
+check("activity cannot be reported without a session", Boolean(anonymousRefresh.error), anonymousRefresh.error ?? "");
+is("a signed-out visitor is told the default window", anonymousStatus.result?.autoLockMinutes, SITE_AUTO_LOCK_DEFAULT_MINUTES);
+is("a signed-out visitor has no countdown to run", anonymousStatus.result?.autoLockExpiresAt, null);
 check("a signed-out caller can still reach the public app", anonymousStatus.result?.signedIn === false, JSON.stringify(anonymousStatus.result));
 
 console.log(`\n${pass} passed, ${fail} failed`);

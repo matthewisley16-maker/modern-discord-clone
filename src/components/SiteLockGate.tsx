@@ -12,6 +12,7 @@ import {
   SITE_PASSWORD_MIN_LENGTH,
   SITE_PIN_MAX_DIGITS,
 } from "@/lib/site-lock";
+import useSiteAutoLock from "@/hooks/use-site-auto-lock";
 import { useAction, useQuery } from "convex/react";
 import { AudioLines, ArrowLeft, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, Unlock } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -38,12 +39,21 @@ import { useState, type ReactNode } from "react";
  * protected route: the dashboard is not even mounted until the response says the
  * session is satisfied, and verification itself only happens in a server action.
  *
+ * The other half of that decision is the member's own auto-lock window: a device
+ * left unused is locked again by `useSiteAutoLock`, and a proof past its window is
+ * treated as unverified by the server itself, so reloading the page cannot stretch
+ * the window the member chose.
+ *
  * Recovery is on this screen too (the one place a locked-out member can reach):
  * an emailed single-use code, or the account password, can set a new credential
  * or turn that lock off — so a forgotten PIN or password is never a dead end.
  */
 export default function SiteLockGate({ children }: { children: ReactNode }) {
   const status = useQuery(api.siteLock.status, {});
+  // Locks the site again after the member's chosen window without activity
+  // (Settings → Account → Login & Security). Inert while locked or when the
+  // window is set to Never.
+  useSiteAutoLock(status);
 
   // Still resolving: the branded splash, never a blank page.
   if (status === undefined) return <BrandSplash label="Checking your security locks…" />;

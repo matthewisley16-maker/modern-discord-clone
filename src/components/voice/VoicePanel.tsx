@@ -13,6 +13,7 @@ import { PRESENCE_META } from "@/components/dashboard/ui";
 import { applyScreenToPeer, captureDisplay, type ScreenSenders } from "./screenShare";
 import { useDraggableWindow } from "@/hooks/use-draggable";
 import { RTC_CONFIGURATION } from "@/lib/ice";
+import { beginCall } from "@/lib/call-activity";
 import { enterFullscreen, exitFullscreen, isFullscreenElement, onFullscreenChange } from "@/lib/fullscreen";
 import "./screenShare.css";
 
@@ -196,6 +197,10 @@ export default function VoicePanel({
       return null;
     }
   }
+
+  // A live call is use: the site's idle auto-lock must never lock Freecord out
+  // from under a conversation (that would drop it). Released on unmount.
+  useEffect(() => beginCall(), []);
 
   // ---- Real voice activity detection on the local microphone ----
   useEffect(() => {

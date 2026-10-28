@@ -399,10 +399,11 @@ const schema = defineSchema(
       pinHash: v.optional(v.string()),
       passwordHash: v.optional(v.string()),
       /**
-       * Per-SESSION verification, not a timed grant: the auth session that proved
-       * a credential stays verified for the whole session, so browsing around
-       * never re-asks — while signing out or expiring that session locks the site
-       * again immediately.
+       * Per-SESSION verification, with the member's own idle window on top: the
+       * auth session that proved a credential stays verified while that device is
+       * being used, and asks again after `autoLockMinutes` without activity —
+       * while signing out or expiring that session locks the site again
+       * immediately.
        *
        * Superseded by `siteLockGrants` (one row per session): these two fields can
        * only ever name ONE session, so writing a second device's id here used to
@@ -411,6 +412,14 @@ const schema = defineSchema(
        */
       verifiedPinSessionId: v.optional(v.string()),
       verifiedPasswordSessionId: v.optional(v.string()),
+      /**
+       * How long a device may sit UNUSED before the enabled credentials are asked
+       * for again (`SITE_AUTO_LOCK_DEFAULT_MINUTES` when absent, 0 = never until
+       * sign-out). The window is measured from the last activity on that device,
+       * so it is an inactivity timer and not a hard session limit; a proof whose
+       * window has closed stops counting everywhere, on the server too.
+       */
+      autoLockMinutes: v.optional(v.number()),
       /** Progressive delay after consecutive wrong entries (shared ladder). */
       failedAttempts: v.number(),
       lockedUntil: v.optional(v.number()),
@@ -430,6 +439,10 @@ const schema = defineSchema(
      * device holds its own rows, so unlocking on a second device cannot re-lock
      * the first one, and "Lock now" on one device only clears that device's own
      * rows. Rows are pruned once their auth session is gone or expired.
+     *
+     * `verifiedAt` is both the moment of the proof and the anchor of the
+     * auto-lock: it is moved forward while the device is used, and a row whose
+     * idle window has closed is ignored (the credential is asked for again).
      */
     siteLockGrants: defineTable({
       userId: v.id("users"),

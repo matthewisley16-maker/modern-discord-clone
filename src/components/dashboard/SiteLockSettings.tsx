@@ -4,6 +4,10 @@ import { Input } from "@/components/ui/input";
 import {
   readableSiteLockError,
   sanitizeSitePinInput,
+  SITE_AUTO_LOCK_CHOICES,
+  SITE_AUTO_LOCK_NEVER,
+  siteAutoLockLabel,
+  siteAutoLockMinutes,
   sitePasswordProblem,
   sitePinProblem,
   SITE_PASSWORD_MIN_LENGTH,
@@ -12,7 +16,7 @@ import {
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Eye, EyeOff, KeyRound, Loader2, Lock, ShieldCheck } from "lucide-react";
+import { Clock, Eye, EyeOff, KeyRound, Loader2, Lock, ShieldCheck } from "lucide-react";
 
 /**
  * Settings → Account → Login & Security.
@@ -30,6 +34,11 @@ import { Eye, EyeOff, KeyRound, Loader2, Lock, ShieldCheck } from "lucide-react"
  * Freecord password — so a forgotten PIN/password is not a lockout. A member who
  * cannot reach settings at all can recover from the lock screen with an emailed
  * code instead.
+ *
+ * The AUTO-LOCK card decides how long a device may sit unused before the enabled
+ * credentials are asked for again. It is a preference (it can never turn a lock
+ * off or unlock anything), the server stores it on the member's own lock row, and
+ * "Never" keeps the original behaviour of staying satisfied until sign-out.
  */
 export default function SiteLockSettings() {
   const status = useQuery(api.siteLock.status, {});
@@ -38,6 +47,8 @@ export default function SiteLockSettings() {
   const disablePin = useAction(api.siteLock.disablePin);
   const disablePassword = useAction(api.siteLock.disablePassword);
   const lockNow = useMutation(api.siteLock.lockNow);
+  const setAutoLock = useMutation(api.siteLock.setAutoLock);
+  const [autoLockBusy, setAutoLockBusy] = useState(false);
 
   const [pinMode, setPinMode] = useState<null | "set" | "change" | "disable">(null);
   const [pinCurrent, setPinCurrent] = useState("");
@@ -63,6 +74,11 @@ export default function SiteLockSettings() {
       </section>
     );
   }
+
+  // What the enabled credentials are called in the auto-lock copy.
+  const guardLabel =
+    status.pinEnabled && status.passwordEnabled ? "PIN or password" : status.pinEnabled ? "PIN" : "password";
+  const autoLockMinutes = siteAutoLockMinutes(status.autoLockMinutes);
 
   function resetPinForm() {
     setPinCurrent("");
@@ -455,6 +471,57 @@ export default function SiteLockSettings() {
         )}
       </div>
 
+      {/* ------------------------------ Auto-lock ------------------------------ */}
+      {(status.pinEnabled || status.passwordEnabled) && (
+        <div className="fc-lock-card">
+          <div className="fc-lock-head">
+            <div>
+              <p className="fc-lock-title">
+                <Clock size={15} aria-hidden="true" /> Auto-lock
+              </p>
+              <p className="fc-muted">
+                How long this device may sit unused before Freecord asks for your {guardLabel} again.
+                The countdown restarts with every click, keypress, tap or call, and each device counts
+                on its own — locking one never locks another.
+              </p>
+            </div>
+          </div>
+          <label className="fc-select-row">Lock after
+            <select
+              className="fc-select"
+              aria-label="Auto-lock delay"
+              value={String(autoLockMinutes)}
+              disabled={autoLockBusy}
+              onChange={async (e) => {
+                const next = Number(e.target.value);
+                setAutoLockBusy(true);
+                try {
+                  await setAutoLock({ minutes: next });
+                  toast.success(
+                    next === SITE_AUTO_LOCK_NEVER
+                      ? "Auto-lock is off — Freecord stays unlocked until you sign out."
+                      : `Freecord will ask for your ${guardLabel} again after ${siteAutoLockLabel(next)} without activity.`,
+                  );
+                } catch (err) {
+                  fail(err, "Could not save the auto-lock delay.");
+                } finally {
+                  setAutoLockBusy(false);
+                }
+              }}
+            >
+              {SITE_AUTO_LOCK_CHOICES.map((choice) => (
+                <option key={choice} value={choice}>{siteAutoLockLabel(choice)}</option>
+              ))}
+            </select>
+          </label>
+          <p className="fc-muted">
+            {autoLockMinutes === SITE_AUTO_LOCK_NEVER
+              ? "Turned off — an unlocked device stays open until you sign out, until that session ends, or until you press Lock Freecord now."
+              : `This device currently locks itself after ${siteAutoLockLabel(autoLockMinutes)} without activity. Lock Freecord now still locks it immediately.`}
+          </p>
+        </div>
+      )}
+
       {(status.pinEnabled || status.passwordEnabled) && (
         <div className="fc-note">
           <p>
@@ -465,8 +532,12 @@ export default function SiteLockSettings() {
             own account.
           </p>
           <p className="fc-muted">
-            Sessions: the locks are asked once when a session starts and stay satisfied until you sign
-            out, so refreshing the page never re-prompts and never bypasses them.
+            Sessions: a lock is asked once when a session starts and stays satisfied while that device
+            is being used{autoLockMinutes === SITE_AUTO_LOCK_NEVER
+              ? ", right up until you sign out (auto-lock is off)"
+              : `, until ${siteAutoLockLabel(autoLockMinutes)} pass without activity`}. Refreshing the
+            page never re-prompts on its own, and a device past its window is asked again — the server
+            checks that, not the browser.
           </p>
         </div>
       )}
